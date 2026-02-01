@@ -19,6 +19,7 @@ _None yet. This project is in initial development._
 | **List workstations** | List EC2 instances tagged/identified as workstations. Show instance ID, name, state, and connection info. |
 | **Connect** | Connect to a workstation by instance ID, name, or alias. Uses SSH over SSM—tunnels your SSH session through Session Manager, the only supported method (all workstations are in private subnets). |
 | **Start / Stop instances** | Start stopped workstations and stop running ones to control costs. |
+| **Key management** | Create, list, and delete keys via `desk key create/list/delete`. Keys stored in `~/.config/desk/keys/`. |
 
 ### Configuration
 
@@ -47,24 +48,54 @@ _None yet. This project is in initial development._
 
 ---
 
-## Usage (Planned)
+## Key management (Planned)
+
+Desk manages SSH keys in a dedicated folder (`~/.config/desk/keys/`). Keys created with `desk key create` are stored there and registered in AWS for use with workstations.
+
+| Command | Description |
+|---------|-------------|
+| `desk key create <name>` | Create a new key pair. Saves the private key to `~/.config/desk/keys/<name>.pem` and creates the EC2 key pair in AWS. |
+| `desk key list` | List keys. Shows local keys (in the desk keys folder) and remote keys (EC2 key pairs in AWS), with indicators for which exist where. |
+| `desk key delete <name>` | Delete a key. Removes the local `.pem` file and the EC2 key pair from AWS. Fails if any running workstation uses the key. |
+
+**Usage (planned):**
 
 ```bash
+# Create a key (stored in ~/.config/desk/keys/my-key.pem)
+desk key create my-key
+
+# List keys (shows local + remote status)
+desk key list
+
+# Delete a key
+desk key delete my-key
+```
+
+When using desk-managed keys, `desk create --key-name my-key` and `desk connect my-workstation -i <path>` can resolve the key path from the desk keys folder by name, so you can use `desk connect my-workstation --key my-key` instead of `-i ~/.config/desk/keys/my-key.pem`.
+
+---
+
+## Usage
+
+```bash
+# Key management
+desk key create my-key
+desk key list
+desk key delete my-key
+
 # List all workstations
 desk list
 
+# Create a workstation (include --key-name for SSH access)
+desk create --name my-workstation --key-name my-key
+
 # Connect (SSH over SSM—private subnets only)
-desk connect my-workstation
-desk connect i-0abc123def456
-desk connect --user ubuntu dev-box
+desk connect my-workstation -i ~/.config/desk/keys/my-key.pem
+desk connect my-workstation --key my-key   # when using desk-managed keys
 
 # Start and stop
 desk start my-workstation
 desk stop my-workstation
-
-# Wait for ready, then connect
-desk start my-workstation --wait
-desk connect my-workstation --wait
 ```
 
 ---
@@ -77,6 +108,71 @@ desk connect my-workstation --wait
 - SSH client (used for the SSH-over-SSM session)
 - Workstations in a VPC with SSM VPC endpoints (or NAT) so instances can reach the SSM service
 - IAM instance profile with `AmazonSSMManagedInstanceCore` on workstation instances
+
+### Session Manager plugin
+
+`desk connect` uses the Session Manager plugin to tunnel SSH through SSM. Install it once before connecting:
+
+**Linux (Debian/Ubuntu):**
+```bash
+curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o session-manager-plugin.deb
+sudo dpkg -i session-manager-plugin.deb
+```
+
+**Linux (Amazon Linux 2, RHEL):**
+```bash
+sudo yum install -y https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm
+```
+
+**macOS:**
+```bash
+curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/mac_arm64/session-manager-plugin.pkg" -o session-manager-plugin.pkg
+sudo installer -pkg session-manager-plugin.pkg -target /
+```
+(Use `mac_64bit` instead of `mac_arm64` for Intel Macs.)
+
+**Verify:** `session-manager-plugin --version`
+
+See the [AWS documentation](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) for Windows and other platforms.
+
+### SSH keys
+
+`desk connect` needs an SSH key to authenticate to the instance. Ubuntu AMIs expect the key associated when the instance was launched.
+
+**Desk-managed keys (recommended)**
+
+Keys created with `desk key create` are stored in `~/.config/desk/keys/` and kept in sync with EC2. See [Key management](#key-management-planned) above.
+
+```bash
+desk key create my-key
+desk create --name my-workstation --key-name my-key
+desk connect my-workstation --key my-key
+```
+
+**Manual setup (existing keys)**
+
+If you prefer to manage keys yourself or use an existing EC2 key pair:
+
+```bash
+# Create key pair in AWS, save private key
+aws ec2 create-key-pair --key-name desk-key --query 'KeyMaterial' --output text > ~/.ssh/desk-key.pem
+chmod 600 ~/.ssh/desk-key.pem
+
+# Create workstation and connect
+desk create --name my-workstation --key-name desk-key
+desk connect my-workstation -i ~/.ssh/desk-key.pem
+```
+
+**SSH config (optional)**
+
+To use `ssh` directly without `desk connect`, add to `~/.ssh/config`:
+
+```
+Host i-* mi-*
+  ProxyCommand sh -c "aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters 'portNumber=%p'"
+  User ubuntu
+  IdentityFile ~/.config/desk/keys/my-key.pem
+```
 
 ---
 

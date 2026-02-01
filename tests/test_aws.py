@@ -11,6 +11,7 @@ from desk.aws import (
     get_desk_vpc_outputs,
     get_latest_ubuntu_ami,
     list_workstations,
+    resolve_workstation,
     run_instance,
     stop_instance,
 )
@@ -113,6 +114,7 @@ def test_run_instance_success(mock_session: MagicMock) -> None:
         security_group_ids=["sg-456"],
         iam_instance_profile_name="desk-profile",
         name="my-workstation",
+        key_name=None,
     )
 
     assert result == "i-abc123"
@@ -121,6 +123,32 @@ def test_run_instance_success(mock_session: MagicMock) -> None:
     assert call_kw["ImageId"] == "ami-123"
     assert call_kw["InstanceType"] == "t3.medium"
     assert "workstation" in str(call_kw["TagSpecifications"])
+
+
+def test_resolve_workstation_by_id() -> None:
+    """resolve_workstation finds by instance ID."""
+    with patch("desk.aws.list_workstations") as mock_list:
+        mock_list.return_value = [
+            Workstation(instance_id="i-abc123", name="max", state="running"),
+        ]
+        assert resolve_workstation("i-abc123") == "i-abc123"
+
+
+def test_resolve_workstation_by_name() -> None:
+    """resolve_workstation finds by name."""
+    with patch("desk.aws.list_workstations") as mock_list:
+        mock_list.return_value = [
+            Workstation(instance_id="i-abc123", name="max", state="running"),
+        ]
+        assert resolve_workstation("max") == "i-abc123"
+
+
+def test_resolve_workstation_not_found() -> None:
+    """resolve_workstation raises when not found."""
+    with patch("desk.aws.list_workstations") as mock_list:
+        mock_list.return_value = []
+        with pytest.raises(ValueError, match="not found"):
+            resolve_workstation("unknown")
 
 
 def test_workstation_dataclass() -> None:
@@ -206,6 +234,31 @@ def test_list_workstations_missing_name_tag(mock_session: MagicMock) -> None:
 
     assert len(result) == 1
     assert result[0].name == ""
+
+
+@patch("desk.aws.boto3.Session")
+@patch("desk.aws.boto3.Session")
+def test_is_ssm_ready_online(mock_session: MagicMock) -> None:
+    """is_ssm_ready returns True when PingStatus is Online."""
+    mock_ssm = MagicMock()
+    mock_ssm.describe_instance_information.return_value = {
+        "InstanceInformationList": [
+            {"InstanceId": "i-abc123", "PingStatus": "Online"},
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_ssm
+
+    assert is_ssm_ready("i-abc123") is True
+
+
+@patch("desk.aws.boto3.Session")
+def test_is_ssm_ready_not_registered(mock_session: MagicMock) -> None:
+    """is_ssm_ready returns False when instance not in SSM."""
+    mock_ssm = MagicMock()
+    mock_ssm.describe_instance_information.return_value = {"InstanceInformationList": []}
+    mock_session.return_value.client.return_value = mock_ssm
+
+    assert is_ssm_ready("i-xyz789") is False
 
 
 @patch("desk.aws.boto3.Session")

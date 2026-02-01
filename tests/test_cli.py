@@ -41,6 +41,7 @@ def test_desk_help() -> None:
     assert "create" in output
     assert "list" in output
     assert "stop" in output
+    assert "connect" in output
 
 
 def test_desk_version() -> None:
@@ -69,6 +70,66 @@ def test_desk_list_empty(mock_list: object) -> None:
     assert "No workstations found" in result.output
 
 
+def test_desk_connect_help() -> None:
+    """desk connect --help succeeds."""
+    result = _run_desk("connect", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Connect to a workstation via SSH" in output
+    assert "WORKSTATION" in output
+
+
+@patch("desk.commands.connect.os.execvp")
+@patch("desk.commands.connect.is_ssm_ready")
+@patch("desk.commands.connect.resolve_workstation")
+def test_desk_connect_resolves_and_execs_ssh(
+    mock_resolve: object, mock_ssm: object, mock_execvp: object
+) -> None:
+    """desk connect resolves workstation and execs ssh with ProxyCommand."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True  # SSM ready, skip wait
+    # execvp replaces process - simulate it raising so we don't actually exec
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["connect", "max"])
+
+    mock_resolve.assert_called_once_with("max", region=None, profile=None)
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert args[0] == "ssh"
+    assert "ProxyCommand=" in " ".join(args)
+    assert "AWS-StartSSHSession" in " ".join(args)
+    assert "ubuntu@i-abc123" in args
+
+
+@patch("desk.commands.connect.is_ssm_ready")
+@patch("desk.commands.connect.os.execvp")
+@patch("desk.commands.connect.is_ssm_ready")
+@patch("desk.commands.connect.resolve_workstation")
+def test_desk_connect_waits_for_ssm_then_connects(
+    mock_resolve: object, mock_ssm: object, mock_execvp: object
+) -> None:
+    """desk connect waits when SSM not ready, then proceeds."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.side_effect = [False, False, True]  # Ready on 3rd check
+    mock_execvp.side_effect = OSError(2, "No such file")
+    runner = CliRunner()
+    result = runner.invoke(main, ["connect", "max", "--wait-timeout", "10"])
+    assert mock_ssm.call_count == 3
+    mock_execvp.assert_called_once()
+
+
+@patch("desk.commands.connect.resolve_workstation")
+def test_desk_connect_not_found(mock_resolve: object) -> None:
+    """desk connect with unknown workstation shows error."""
+    mock_resolve.side_effect = ValueError("Workstation 'x' not found")
+    runner = CliRunner()
+    result = runner.invoke(main, ["connect", "x"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
 def test_desk_stop_help() -> None:
     """desk stop --help succeeds."""
     result = _run_desk("stop", "--help")
@@ -79,44 +140,36 @@ def test_desk_stop_help() -> None:
 
 
 @patch("desk.commands.stop.stop_instance")
-@patch("desk.commands.stop.list_workstations")
-def test_desk_stop_by_name(mock_list: object, mock_stop: object) -> None:
+@patch("desk.commands.stop.resolve_workstation")
+def test_desk_stop_by_name(mock_resolve: object, mock_stop: object) -> None:
     """desk stop resolves name and stops instance."""
-    from desk.aws import Workstation
-
-    mock_list.return_value = [
-        Workstation(instance_id="i-abc123", name="max", state="running"),
-    ]
+    mock_resolve.return_value = "i-abc123"
     mock_stop.return_value = "i-abc123"
     runner = CliRunner()
     result = runner.invoke(main, ["stop", "max"])
     assert result.exit_code == 0
+    mock_resolve.assert_called_once_with("max", region=None, profile=None)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
     assert "Stopped" in result.output
 
 
 @patch("desk.commands.stop.stop_instance")
-@patch("desk.commands.stop.list_workstations")
-def test_desk_stop_by_instance_id(mock_list: object, mock_stop: object) -> None:
+@patch("desk.commands.stop.resolve_workstation")
+def test_desk_stop_by_instance_id(mock_resolve: object, mock_stop: object) -> None:
     """desk stop with instance ID stops the instance."""
-    from desk.aws import Workstation
-
-    mock_list.return_value = [
-        Workstation(instance_id="i-abc123", name="max", state="running"),
-    ]
+    mock_resolve.return_value = "i-abc123"
     mock_stop.return_value = "i-abc123"
     runner = CliRunner()
     result = runner.invoke(main, ["stop", "i-abc123"])
     assert result.exit_code == 0
+    mock_resolve.assert_called_once_with("i-abc123", region=None, profile=None)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
 
 
-@patch("desk.commands.stop.list_workstations")
-def test_desk_stop_not_found(mock_list: object) -> None:
+@patch("desk.commands.stop.resolve_workstation")
+def test_desk_stop_not_found(mock_resolve: object) -> None:
     """desk stop with unknown name shows error."""
-    mock_list.return_value = [
-        Workstation(instance_id="i-abc123", name="max", state="running"),
-    ]
+    mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
     runner = CliRunner()
     result = runner.invoke(main, ["stop", "unknown"])
     assert result.exit_code != 0

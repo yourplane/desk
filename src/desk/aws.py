@@ -120,6 +120,7 @@ def run_instance(
     security_group_ids: list[str],
     iam_instance_profile_name: str,
     name: str,
+    key_name: str | None = None,
     region: str | None = None,
     profile: str | None = None,
 ) -> str:
@@ -127,15 +128,15 @@ def run_instance(
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
-    response = ec2.run_instances(
-        ImageId=ami_id,
-        InstanceType=instance_type,
-        MinCount=1,
-        MaxCount=1,
-        SubnetId=subnet_id,
-        SecurityGroupIds=security_group_ids,
-        IamInstanceProfile={"Name": iam_instance_profile_name},
-        TagSpecifications=[
+    run_kw: dict = {
+        "ImageId": ami_id,
+        "InstanceType": instance_type,
+        "MinCount": 1,
+        "MaxCount": 1,
+        "SubnetId": subnet_id,
+        "SecurityGroupIds": security_group_ids,
+        "IamInstanceProfile": {"Name": iam_instance_profile_name},
+        "TagSpecifications": [
             {
                 "ResourceType": "instance",
                 "Tags": [
@@ -145,10 +146,14 @@ def run_instance(
                 ],
             },
         ],
-        MetadataOptions={
-            "HttpTokens": "optional",  # IMDSv2 optional for broader compatibility
+        "MetadataOptions": {
+            "HttpTokens": "optional",
         },
-    )
+    }
+    if key_name:
+        run_kw["KeyName"] = key_name
+
+    response = ec2.run_instances(**run_kw)
 
     instance_id = response["Instances"][0]["InstanceId"]
     return instance_id
@@ -194,6 +199,67 @@ def list_workstations(
                 )
 
     return workstations
+
+
+def resolve_workstation(
+    name_or_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Resolve workstation name or instance ID to instance ID. Raises ValueError if not found."""
+    workstations = list_workstations(region=region, profile=profile)
+
+    if name_or_id.startswith("i-"):
+        for w in workstations:
+            if w.instance_id == name_or_id:
+                return w.instance_id
+        raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
+
+    for w in workstations:
+        if w.name == name_or_id:
+            return w.instance_id
+
+    raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
+
+
+def is_ssm_ready(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> bool:
+    """Check if instance is registered with SSM and ready for Session Manager."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+    try:
+        resp = ssm.describe_instance_information(
+            Filters=[{"Key": "InstanceIds", "Values": [instance_id]}],
+        )
+    except Exception:
+        return False
+    for info in resp.get("InstanceInformationList", []):
+        if info.get("InstanceId") == instance_id and info.get("PingStatus") == "Online":
+            return True
+    return False
+
+
+def wait_for_ssm_ready(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+    timeout: int = 300,
+    poll_interval: float = 3.0,
+) -> bool:
+    """
+    Wait for instance to become ready for SSM. Returns True if ready, False if timeout.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if is_ssm_ready(instance_id, region=region, profile=profile):
+            return True
+        time.sleep(poll_interval)
+    return False
 
 
 def stop_instance(

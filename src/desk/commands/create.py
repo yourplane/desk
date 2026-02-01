@@ -45,6 +45,12 @@ def _get_profile() -> str | None:
     help="AMI ID. Default: latest Ubuntu 24.04 LTS.",
 )
 @click.option(
+    "--key-name",
+    "-k",
+    default=None,
+    help="EC2 key pair name for SSH access (required for desk connect).",
+)
+@click.option(
     "--stack",
     "-s",
     default="desk",
@@ -69,6 +75,7 @@ def create(
     name: str,
     instance_type: str,
     ami: str | None,
+    key_name: str | None,
     stack: str,
     region: str | None,
     profile: str | None,
@@ -108,6 +115,7 @@ def create(
         security_group_ids=[vpc_outputs.security_group_id],
         iam_instance_profile_name=vpc_outputs.instance_profile_name,
         name=name,
+        key_name=key_name,
         region=region,
         profile=profile,
     )
@@ -120,5 +128,6 @@ def create(
     click.echo(f"  State:       pending (initializing)")
     click.echo()
     click.echo("Connect once the instance is running:")
-    click.echo(f"  desk connect {name}")
-    click.echo(f"  desk connect {instance_id}")
+    key_hint = " -i <path-to-key.pem>" if key_name else ""
+    click.echo(f"  desk connect {name}{key_hint}")
+    click.echo(f"  desk connect {instance_id}{key_hint}")
