@@ -10,6 +10,9 @@ import click
 
 from desk.aws import is_ssm_ready, resolve_workstation
 from desk.keys import get_key_path
+from desk.log import get_logger
+
+log = get_logger("connect")
 
 
 def _get_region() -> str | None:
@@ -91,6 +94,8 @@ def connect(
     region = region or _get_region()
     profile = profile or _get_profile()
 
+    log.debug("connect workstation=%s region=%s profile=%s", workstation, region, profile)
+
     # Resolve identity: -i takes precedence over --key
     if identity_file:
         key_path = identity_file
@@ -106,17 +111,24 @@ def connect(
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        log.info("resolved %s -> %s", workstation, instance_id)
     except ValueError as e:
+        log.debug("resolve failed workstation=%s error=%s", workstation, e)
         raise click.UsageError(str(e)) from e
 
     # Wait for SSM agent if not yet ready
-    if wait and not is_ssm_ready(instance_id, region=region, profile=profile):
+    ssm_ready = is_ssm_ready(instance_id, region=region, profile=profile)
+    log.debug("initial is_ssm_ready=%s", ssm_ready)
+    if wait and not ssm_ready:
         spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         idx = 0
         deadline = time.monotonic() + wait_timeout
         err = sys.stderr
+        log.info("waiting for SSM ready instance_id=%s timeout=%ds", instance_id, wait_timeout)
         while time.monotonic() < deadline:
             if is_ssm_ready(instance_id, region=region, profile=profile):
+                elapsed = time.monotonic() - (deadline - wait_timeout)
+                log.info("SSM ready after %.1fs", elapsed)
                 err.write("\r" + " " * 50 + "\r")
                 err.flush()
                 break
@@ -124,10 +136,13 @@ def connect(
             err.write(f"\r{char} Waiting for instance to be ready... ")
             err.flush()
             idx += 1
+            if idx % 10 == 0:
+                log.debug("SSM wait poll %d elapsed=%.1fs", idx, time.monotonic() - (deadline - wait_timeout))
             time.sleep(0.5)
         else:
             err.write("\n")
             err.flush()
+            log.warning("SSM wait timed out instance_id=%s", instance_id)
             raise click.ClickException(
                 f"Instance {instance_id} did not become ready within {wait_timeout}s. "
                 "Check that the instance is running and has the SSM agent."
@@ -155,6 +170,7 @@ def connect(
     if key_path:
         ssh_args[1:1] = ["-i", key_path]
 
+    log.info("exec ssh user=%s instance_id=%s", user, instance_id)
     # Replace our process with ssh for proper terminal handling
     try:
         os.execvp("ssh", ssh_args)

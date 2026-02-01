@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import boto3
+
+from desk.log import get_logger
+
+log = get_logger("aws")
 from botocore.exceptions import ClientError
 
 
@@ -234,12 +238,20 @@ def is_ssm_ready(
         resp = ssm.describe_instance_information(
             Filters=[{"Key": "InstanceIds", "Values": [instance_id]}],
         )
-    except Exception:
+        infos = resp.get("InstanceInformationList", [])
+        log.debug("describe_instance_information instance_id=%s result_count=%d", instance_id, len(infos))
+        for info in infos:
+            pid = info.get("InstanceId")
+            status = info.get("PingStatus")
+            log.debug("instance %s PingStatus=%s", pid, status)
+            if pid == instance_id and status == "Online":
+                log.debug("instance %s is SSM ready", instance_id)
+                return True
+        log.debug("instance %s not in SSM or not Online", instance_id)
         return False
-    for info in resp.get("InstanceInformationList", []):
-        if info.get("InstanceId") == instance_id and info.get("PingStatus") == "Online":
-            return True
-    return False
+    except Exception as e:
+        log.debug("describe_instance_information failed instance_id=%s error=%s", instance_id, e)
+        return False
 
 
 def wait_for_ssm_ready(

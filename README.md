@@ -100,6 +100,24 @@ desk stop my-workstation
 
 ---
 
+## Logs
+
+Desk writes debug logs to help troubleshoot issues (e.g. `desk connect` stuck waiting):
+
+**Location:** `~/.config/desk/desk.log` (or `$XDG_CONFIG_HOME/desk/desk.log`)
+
+```bash
+# Watch logs while running
+tail -f ~/.config/desk/desk.log
+
+# Inspect after a run
+cat ~/.config/desk/desk.log
+```
+
+Logs include SSM ready checks, resolve steps, and timing.
+
+---
+
 ## Requirements
 
 - Python 3.x
