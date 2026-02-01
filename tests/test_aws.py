@@ -8,6 +8,7 @@ from botocore.exceptions import ClientError
 from desk.aws import (
     DeskVpcOutputs,
     Workstation,
+    create_key_pair,
     get_desk_vpc_outputs,
     get_latest_ubuntu_ami,
     list_workstations,
@@ -259,6 +260,21 @@ def test_is_ssm_ready_not_registered(mock_session: MagicMock) -> None:
     mock_session.return_value.client.return_value = mock_ssm
 
     assert is_ssm_ready("i-xyz789") is False
+
+
+@patch("desk.aws.boto3.Session")
+def test_create_key_pair_success(mock_session: MagicMock) -> None:
+    """create_key_pair returns key material from AWS."""
+    mock_ec2 = MagicMock()
+    mock_ec2.create_key_pair.return_value = {
+        "KeyMaterial": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----",
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = create_key_pair("my-key")
+
+    assert "BEGIN RSA PRIVATE KEY" in result
+    mock_ec2.create_key_pair.assert_called_once_with(KeyName="my-key")
 
 
 @patch("desk.aws.boto3.Session")

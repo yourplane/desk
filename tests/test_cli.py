@@ -42,6 +42,75 @@ def test_desk_help() -> None:
     assert "list" in output
     assert "stop" in output
     assert "connect" in output
+    assert "key" in output
+
+
+def test_desk_key_help() -> None:
+    """desk key --help and desk key create --help succeed."""
+    result = _run_desk("key", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Manage SSH keys" in output
+    assert "create" in output
+
+    result = _run_desk("key", "create", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Create a new key pair" in output
+
+
+@patch("desk.commands.key.get_desk_keys_dir")
+@patch("desk.commands.key.create_key_pair")
+def test_desk_key_create_success(mock_create: object, mock_keys_dir: object, tmp_path) -> None:
+    """desk key create creates key and saves to desk keys dir."""
+    keys_dir = str(tmp_path / "keys")
+    mock_keys_dir.return_value = keys_dir
+    mock_create.return_value = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n"
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["key", "create", "my-key"])
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(key_name="my-key", region=None, profile=None)
+    key_path = f"{keys_dir}/my-key.pem"
+    assert "Created key 'my-key'" in result.output
+    assert key_path in result.output
+    assert (tmp_path / "keys" / "my-key.pem").exists()
+
+
+@patch("desk.commands.key.get_key_path")
+@patch("desk.commands.key.create_key_pair")
+def test_desk_key_create_local_exists(mock_create: object, mock_key_path: object, tmp_path) -> None:
+    """desk key create fails when local key file already exists."""
+    existing = tmp_path / "my-key.pem"
+    existing.write_text("existing")
+    mock_key_path.return_value = str(existing)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["key", "create", "my-key"])
+
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    mock_create.assert_not_called()
+
+
+@patch("desk.commands.key.get_desk_keys_dir")
+@patch("desk.commands.key.create_key_pair")
+def test_desk_key_create_aws_duplicate(mock_create: object, mock_keys_dir: object, tmp_path) -> None:
+    """desk key create shows friendly error when key exists in AWS."""
+    from botocore.exceptions import ClientError
+
+    mock_keys_dir.return_value = str(tmp_path / "keys")
+    mock_create.side_effect = ClientError(
+        {"Error": {"Code": "InvalidKeyPair.Duplicate", "Message": "already exists"}},
+        "CreateKeyPair",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["key", "create", "my-key"])
+
+    assert result.exit_code != 0
+    assert "already exists in AWS" in result.output
 
 
 def test_desk_version() -> None:

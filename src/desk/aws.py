@@ -262,6 +262,21 @@ def wait_for_ssm_ready(
     return False
 
 
+def create_key_pair(
+    key_name: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """
+    Create an EC2 key pair. Returns the private key material (PEM).
+    Caller is responsible for saving it securely.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    resp = ec2.create_key_pair(KeyName=key_name)
+    return resp["KeyMaterial"]
+
+
 def stop_instance(
     instance_id: str,
     region: str | None = None,
