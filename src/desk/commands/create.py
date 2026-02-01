@@ -47,7 +47,7 @@ def _get_profile() -> str | None:
 @click.option(
     "--stack",
     "-s",
-    default="desk-vpc",
+    default="desk",
     show_default=True,
     help="CloudFormation stack name for desk VPC.",
 )
@@ -79,7 +79,7 @@ def create(
     SSH-over-Session-Manager connectivity. The instance is tagged for
     desk discovery (Type=workstation).
 
-    Requires the desk-vpc CloudFormation stack to be deployed first.
+    Requires the desk CloudFormation stack to be deployed first.
     """
     region = region or _get_region()
     profile = profile or _get_profile()

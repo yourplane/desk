@@ -19,22 +19,30 @@ class DeskVpcOutputs:
 
 
 def get_desk_vpc_outputs(
-    stack_name: str = "desk-vpc",
+    stack_name: str = "desk",
     region: str | None = None,
     profile: str | None = None,
 ) -> DeskVpcOutputs:
     """Fetch desk-vpc CloudFormation stack outputs."""
     session = boto3.Session(region_name=region, profile_name=profile)
     cf = session.client("cloudformation")
+    resolved_region = session.region_name
 
     try:
         response = cf.describe_stacks(StackName=stack_name)
     except ClientError as e:
         if e.response["Error"]["Code"] == "ValidationError":
+            region_hint = f" (region: {resolved_region})" if resolved_region else ""
+            profile_hint = f" (profile: {profile})" if profile else ""
             raise RuntimeError(
-                f"Stack '{stack_name}' not found. Deploy it first with:\n"
-                f"  aws cloudformation create-stack --stack-name {stack_name} "
-                f"--template-body file://infrastructure/desk-vpc.yaml"
+                f"Stack '{stack_name}' not found{region_hint}{profile_hint}.\n\n"
+                "Possible causes:\n"
+                "  • Wrong region  – try --region or set AWS_REGION\n"
+                "  • Wrong profile – try --profile or set AWS_PROFILE\n"
+                "  • Stack not deployed in this account\n\n"
+                f"Verify:  aws cloudformation describe-stacks --stack-name {stack_name} --region <region>\n"
+                f"Deploy:   aws cloudformation create-stack --stack-name {stack_name} "
+                "--template-body file://infrastructure/desk-vpc.yaml"
             ) from e
         raise
 

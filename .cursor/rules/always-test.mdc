@@ -1,0 +1,31 @@
+---
+description: Always run tests when making code changes
+alwaysApply: true
+---
+
+# Always Test When Making Changes
+
+**Important:** When you make changes to this codebase, always run the test suite afterward to catch regressions.
+
+## How to Test
+
+```bash
+tox run -e py
+```
+
+Or run both py and lint:
+
+```bash
+tox run
+```
+
+## When to Test
+
+- After editing Python source in `src/desk/`
+- After adding or changing tests
+- After modifying `pyproject.toml` (deps, scripts, tox config)
+- Before considering a change complete
+
+## Note to Self
+
+If you are an AI agent working on this project: run `tox run -e py` after every change and fix any failing tests before finishing.

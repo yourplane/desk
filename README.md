@@ -93,9 +93,10 @@ A CloudFormation template in `infrastructure/desk-vpc.yaml` creates the VPC and 
 **Deploy:**
 
 ```bash
-aws cloudformation create-stack \
-  --stack-name desk-vpc \
-  --template-body file://infrastructure/desk-vpc.yaml
+aws cloudformation deploy
+    --stack-name desk
+    --template-file infrastructure/desk-vpc.yaml
+    --capabilities CAPABILITY_NAMED_IAM
 ```
 
 Use the exported outputs (`VpcId`, `PrivateSubnetIds`, `WorkstationSecurityGroupId`, `WorkstationInstanceProfile`) when launching workstation instances.

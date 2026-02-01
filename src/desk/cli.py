@@ -14,3 +14,6 @@ def main() -> None:
 
 
 main.add_command(create.create, "create")
+
+if __name__ == "__main__":
+    main()
