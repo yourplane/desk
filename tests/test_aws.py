@@ -155,6 +155,27 @@ def test_resolve_workstation_not_found() -> None:
             resolve_workstation("unknown")
 
 
+def test_resolve_workstation_multiple_running_same_name() -> None:
+    """resolve_workstation errors when multiple running instances share the name."""
+    with patch("desk.aws.list_workstations") as mock_list:
+        mock_list.return_value = [
+            Workstation(instance_id="i-aaa", name="main", state="running"),
+            Workstation(instance_id="i-bbb", name="main", state="running"),
+        ]
+        with pytest.raises(ValueError, match="Multiple running workstations named 'main'.*i-aaa, i-bbb"):
+            resolve_workstation("main")
+
+
+def test_resolve_workstation_by_name_only_stopped() -> None:
+    """resolve_workstation by name finds only running; not found if only stopped."""
+    with patch("desk.aws.list_workstations") as mock_list:
+        mock_list.return_value = [
+            Workstation(instance_id="i-abc123", name="main", state="stopped"),
+        ]
+        with pytest.raises(ValueError, match="not found"):
+            resolve_workstation("main")
+
+
 def test_workstation_dataclass() -> None:
     """Workstation holds instance info."""
     w = Workstation(instance_id="i-123", name="my-box", state="running")

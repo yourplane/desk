@@ -175,19 +175,20 @@ class Workstation:
 def list_workstations(
     region: str | None = None,
     profile: str | None = None,
+    *,
+    states: list[str] | None = None,
 ) -> list[Workstation]:
-    """List EC2 instances tagged Type=workstation."""
+    """List EC2 instances tagged Type=workstation. Optionally filter by state(s)."""
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
     workstations: list[Workstation] = []
-    paginator = ec2.get_paginator("describe_instances")
+    filters = [{"Name": "tag:Type", "Values": ["workstation"]}]
+    if states:
+        filters.append({"Name": "instance-state-name", "Values": states})
 
-    for page in paginator.paginate(
-        Filters=[
-            {"Name": "tag:Type", "Values": ["workstation"]},
-        ],
-    ):
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
         for reservation in page.get("Reservations", []):
             for instance in reservation.get("Instances", []):
                 name = next(
@@ -210,18 +211,29 @@ def resolve_workstation(
     region: str | None = None,
     profile: str | None = None,
 ) -> str:
-    """Resolve workstation name or instance ID to instance ID. Raises ValueError if not found."""
-    workstations = list_workstations(region=region, profile=profile)
+    """Resolve workstation name or instance ID to instance ID. Raises ValueError if not found.
 
+    When resolving by name, only considers running instances. Errors if multiple
+    running instances share the same name.
+    """
     if name_or_id.startswith("i-"):
+        workstations = list_workstations(region=region, profile=profile)
         for w in workstations:
             if w.instance_id == name_or_id:
                 return w.instance_id
         raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
 
-    for w in workstations:
-        if w.name == name_or_id:
-            return w.instance_id
+    # Resolve by name: only running, error if multiple
+    running = list_workstations(region=region, profile=profile, states=["running"])
+    matches = [w for w in running if w.name == name_or_id]
+    if len(matches) > 1:
+        ids = ", ".join(m.instance_id for m in matches)
+        raise ValueError(
+            f"Multiple running workstations named '{name_or_id}': {ids}. "
+            "Use the instance ID to connect to a specific one."
+        )
+    if len(matches) == 1:
+        return matches[0].instance_id
 
     raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
 
