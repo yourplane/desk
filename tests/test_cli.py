@@ -23,6 +23,16 @@ def _output(result: subprocess.CompletedProcess[str]) -> str:
     return result.stdout + result.stderr
 
 
+def test_desk_up_help() -> None:
+    """desk up --help succeeds."""
+    result = _run_desk("up", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Create a workstation and connect to it" in output
+    assert "main" in output
+    assert "main-key" in output
+
+
 def test_desk_create_help() -> None:
     """desk create --help succeeds and shows usage."""
     result = _run_desk("create", "--help")
@@ -65,6 +75,7 @@ def test_desk_help() -> None:
     assert result.returncode == 0
     output = _output(result)
     assert "Manage EC2 instances" in output
+    assert "up" in output
     assert "create" in output
     assert "list" in output
     assert "stop" in output

@@ -213,8 +213,8 @@ def resolve_workstation(
 ) -> str:
     """Resolve workstation name or instance ID to instance ID. Raises ValueError if not found.
 
-    When resolving by name, only considers running instances. Errors if multiple
-    running instances share the same name.
+    When resolving by name, considers running and pending instances (pending =
+    just created, not yet booted). Errors if multiple instances share the same name.
     """
     if name_or_id.startswith("i-"):
         workstations = list_workstations(region=region, profile=profile)
@@ -223,13 +223,15 @@ def resolve_workstation(
                 return w.instance_id
         raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
 
-    # Resolve by name: only running, error if multiple
-    running = list_workstations(region=region, profile=profile, states=["running"])
+    # Resolve by name: running or pending (pending = just created, not yet running)
+    running = list_workstations(
+        region=region, profile=profile, states=["running", "pending"]
+    )
     matches = [w for w in running if w.name == name_or_id]
     if len(matches) > 1:
         ids = ", ".join(m.instance_id for m in matches)
         raise ValueError(
-            f"Multiple running workstations named '{name_or_id}': {ids}. "
+            f"Multiple workstations named '{name_or_id}': {ids}. "
             "Use the instance ID to connect to a specific one."
         )
     if len(matches) == 1:

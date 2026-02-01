@@ -78,6 +78,9 @@ When using desk-managed keys, `desk create --key my-key` and `desk connect my-wo
 ## Usage
 
 ```bash
+# Create and connect in one step (defaults: main, main-key)
+desk up
+
 # Key management
 desk key create my-key
 desk key list

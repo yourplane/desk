@@ -162,7 +162,7 @@ def test_resolve_workstation_multiple_running_same_name() -> None:
             Workstation(instance_id="i-aaa", name="main", state="running"),
             Workstation(instance_id="i-bbb", name="main", state="running"),
         ]
-        with pytest.raises(ValueError, match="Multiple running workstations named 'main'.*i-aaa, i-bbb"):
+        with pytest.raises(ValueError, match="Multiple workstations named 'main'.*i-aaa, i-bbb"):
             resolve_workstation("main")
 
 
