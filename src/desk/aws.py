@@ -273,6 +273,42 @@ def list_ec2_key_pairs(
     return {kp["KeyName"] for kp in resp.get("KeyPairs", [])}
 
 
+def get_running_workstations_using_key(
+    key_name: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[str]:
+    """Return instance IDs of running workstations that use this key pair."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    paginator = ec2.get_paginator("describe_instances")
+    instance_ids: list[str] = []
+
+    for page in paginator.paginate(
+        Filters=[
+            {"Name": "tag:Type", "Values": ["workstation"]},
+            {"Name": "key-name", "Values": [key_name]},
+            {"Name": "instance-state-name", "Values": ["running"]},
+        ],
+    ):
+        for reservation in page.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                instance_ids.append(instance["InstanceId"])
+
+    return instance_ids
+
+
+def delete_key_pair(
+    key_name: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """Delete an EC2 key pair."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.delete_key_pair(KeyName=key_name)
+
+
 def create_key_pair(
     key_name: str,
     region: str | None = None,

@@ -9,7 +9,9 @@ from desk.aws import (
     DeskVpcOutputs,
     Workstation,
     create_key_pair,
+    delete_key_pair,
     get_desk_vpc_outputs,
+    get_running_workstations_using_key,
     list_ec2_key_pairs,
     get_latest_ubuntu_ami,
     list_workstations,
@@ -278,6 +280,39 @@ def test_list_ec2_key_pairs(mock_session: MagicMock) -> None:
     result = list_ec2_key_pairs()
 
     assert result == {"my-key", "other-key"}
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_running_workstations_using_key(mock_session: MagicMock) -> None:
+    """get_running_workstations_using_key returns instance IDs."""
+    mock_ec2 = MagicMock()
+    mock_ec2.get_paginator.return_value.paginate.return_value = [
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {"InstanceId": "i-abc123"},
+                    ],
+                },
+            ],
+        },
+    ]
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_running_workstations_using_key("my-key")
+
+    assert result == ["i-abc123"]
+
+
+@patch("desk.aws.boto3.Session")
+def test_delete_key_pair(mock_session: MagicMock) -> None:
+    """delete_key_pair calls AWS API."""
+    mock_ec2 = MagicMock()
+    mock_session.return_value.client.return_value = mock_ec2
+
+    delete_key_pair("my-key")
+
+    mock_ec2.delete_key_pair.assert_called_once_with(KeyName="my-key")
 
 
 @patch("desk.aws.boto3.Session")

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from desk.cli import main
+from desk.cli import cli
 
 
 def _run_desk(*args: str) -> subprocess.CompletedProcess[str]:
@@ -68,7 +68,7 @@ def test_desk_key_create_success(mock_create: object, mock_keys_dir: object, tmp
     mock_create.return_value = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n"
 
     runner = CliRunner()
-    result = runner.invoke(main, ["key", "create", "my-key"])
+    result = runner.invoke(cli, ["key", "create", "my-key"])
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(key_name="my-key", region=None, profile=None)
@@ -87,7 +87,7 @@ def test_desk_key_create_local_exists(mock_create: object, mock_key_path: object
     mock_key_path.return_value = str(existing)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["key", "create", "my-key"])
+    result = runner.invoke(cli, ["key", "create", "my-key"])
 
     assert result.exit_code != 0
     assert "already exists" in result.output
@@ -109,7 +109,7 @@ def test_desk_key_create_aws_duplicate(
     )
 
     runner = CliRunner()
-    result = runner.invoke(main, ["key", "create", "my-key"])
+    result = runner.invoke(cli, ["key", "create", "my-key"])
 
     assert result.exit_code != 0
     assert "already exists in AWS" in result.output
@@ -122,7 +122,7 @@ def test_desk_key_list_empty(mock_local: object, mock_remote: object) -> None:
     mock_local.return_value = set()
     mock_remote.return_value = set()
     runner = CliRunner()
-    result = runner.invoke(main, ["key", "list"])
+    result = runner.invoke(cli, ["key", "list"])
     assert result.exit_code == 0
     assert "No keys found" in result.output
 
@@ -136,7 +136,7 @@ def test_desk_key_list_shows_local_and_remote(
     mock_local.return_value = {"my-key", "local-only"}
     mock_remote.return_value = {"my-key", "remote-only"}
     runner = CliRunner()
-    result = runner.invoke(main, ["key", "list"])
+    result = runner.invoke(cli, ["key", "list"])
     assert result.exit_code == 0
     assert "NAME" in result.output
     assert "LOCAL" in result.output
@@ -147,6 +147,140 @@ def test_desk_key_list_shows_local_and_remote(
     # my-key has both, local-only has local only, remote-only has remote only
     assert "yes" in result.output
     assert "-" in result.output
+
+
+def test_desk_key_delete_help() -> None:
+    """desk key delete --help succeeds."""
+    result = _run_desk("key", "delete", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Delete a key pair" in output
+    assert "--force" in output
+    assert "--yes" in output
+
+
+@patch("desk.commands.key.delete_key_pair")
+@patch("desk.commands.key.get_running_workstations_using_key")
+@patch("desk.commands.key.list_ec2_key_pairs")
+@patch("desk.commands.key.get_key_path")
+def test_desk_key_delete_success(
+    mock_key_path: object,
+    mock_remote_keys: object,
+    mock_running: object,
+    mock_delete: object,
+    tmp_path,
+) -> None:
+    """desk key delete removes local file and AWS key."""
+    key_path = tmp_path / "my-key.pem"
+    key_path.write_text("key material")
+    mock_key_path.return_value = str(key_path)
+    mock_remote_keys.return_value = {"my-key"}
+    mock_running.return_value = []
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["key", "delete", "my-key", "--yes"])
+
+    assert result.exit_code == 0
+    assert not key_path.exists()
+    mock_delete.assert_called_once_with(key_name="my-key", region=None, profile=None)
+
+
+@patch("desk.commands.key.list_ec2_key_pairs")
+@patch("desk.commands.key.get_key_path")
+def test_desk_key_delete_not_found(mock_key_path: object, mock_remote_keys: object, tmp_path) -> None:
+    """desk key delete fails when key does not exist."""
+    mock_key_path.return_value = str(tmp_path / "nonexistent.pem")
+    mock_remote_keys.return_value = set()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["key", "delete", "unknown"])
+
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+@patch("desk.commands.key.delete_key_pair")
+@patch("desk.commands.key.get_running_workstations_using_key")
+@patch("desk.commands.key.list_ec2_key_pairs")
+@patch("desk.commands.key.get_key_path")
+def test_desk_key_delete_aborts_when_not_confirmed(
+    mock_key_path: object, mock_remote_keys: object, mock_running: object, mock_delete: object
+) -> None:
+    """desk key delete aborts when user declines confirmation."""
+    mock_key_path.return_value = "/path/to/my-key.pem"
+    mock_remote_keys.return_value = {"my-key"}
+    mock_running.return_value = []
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["key", "delete", "my-key"], input="n\n")
+
+    assert result.exit_code != 0
+    mock_delete.assert_not_called()
+
+
+@patch("desk.commands.key.delete_key_pair")
+@patch("desk.commands.key.get_running_workstations_using_key")
+@patch("desk.commands.key.list_ec2_key_pairs")
+@patch("desk.commands.key.get_key_path")
+def test_desk_key_delete_refuses_when_in_use(
+    mock_key_path: object,
+    mock_remote_keys: object,
+    mock_running: object,
+    mock_delete: object,
+) -> None:
+    """desk key delete fails when key is used by running workstation."""
+    mock_key_path.return_value = "/path/to/my-key.pem"
+    mock_remote_keys.return_value = {"my-key"}
+    mock_running.return_value = ["i-abc123"]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["key", "delete", "my-key"])
+
+    assert result.exit_code != 0
+    assert "used by running" in result.output
+    mock_delete.assert_not_called()
+
+
+@patch("desk.commands.key.delete_key_pair")
+@patch("desk.commands.key.get_running_workstations_using_key")
+@patch("desk.commands.key.list_ec2_key_pairs")
+@patch("desk.commands.key.get_key_path")
+def test_desk_key_delete_force_bypasses_in_use_check(
+    mock_key_path: object,
+    mock_remote_keys: object,
+    mock_running: object,
+    mock_delete: object,
+    tmp_path,
+) -> None:
+    """desk key delete --force deletes even when key is in use."""
+    key_path = tmp_path / "my-key.pem"
+    key_path.write_text("key material")
+    mock_key_path.return_value = str(key_path)
+    mock_remote_keys.return_value = {"my-key"}
+    mock_running.return_value = ["i-abc123"]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["key", "delete", "my-key", "--force", "--yes"])
+
+    assert result.exit_code == 0
+    mock_delete.assert_called_once()
+
+
+@patch("desk.commands.key.create_key_pair")
+@patch("desk.commands.key.get_key_path")
+def test_desk_shows_friendly_error_without_traceback(
+    mock_key_path: object, mock_create: object, tmp_path
+) -> None:
+    """Unexpected exceptions show Error: message, not full traceback."""
+    mock_key_path.return_value = str(tmp_path / "x.pem")
+    mock_create.side_effect = RuntimeError("Something went wrong")
+
+    result = _run_desk("key", "create", "x")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "Error: Something went wrong" in output
+    assert "Traceback" not in output
 
 
 def test_desk_version() -> None:
@@ -170,7 +304,7 @@ def test_desk_list_empty(mock_list: object) -> None:
     """desk list shows message when no workstations."""
     mock_list.return_value = []
     runner = CliRunner()
-    result = runner.invoke(main, ["list"])
+    result = runner.invoke(cli, ["list"])
     assert result.exit_code == 0
     assert "No workstations found" in result.output
 
@@ -197,7 +331,7 @@ def test_desk_connect_resolves_and_execs_ssh(
     mock_execvp.side_effect = OSError(2, "No such file or directory")
 
     runner = CliRunner()
-    result = runner.invoke(main, ["connect", "max"])
+    result = runner.invoke(cli, ["connect", "max"])
 
     mock_resolve.assert_called_once_with("max", region=None, profile=None)
     mock_execvp.assert_called_once()
@@ -220,7 +354,7 @@ def test_desk_connect_waits_for_ssm_then_connects(
     mock_ssm.side_effect = [False, False, True]  # Ready on 3rd check
     mock_execvp.side_effect = OSError(2, "No such file")
     runner = CliRunner()
-    result = runner.invoke(main, ["connect", "max", "--wait-timeout", "10"])
+    result = runner.invoke(cli, ["connect", "max", "--wait-timeout", "10"])
     assert mock_ssm.call_count == 3
     mock_execvp.assert_called_once()
 
@@ -230,7 +364,7 @@ def test_desk_connect_not_found(mock_resolve: object) -> None:
     """desk connect with unknown workstation shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'x' not found")
     runner = CliRunner()
-    result = runner.invoke(main, ["connect", "x"])
+    result = runner.invoke(cli, ["connect", "x"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
@@ -251,7 +385,7 @@ def test_desk_stop_by_name(mock_resolve: object, mock_stop: object) -> None:
     mock_resolve.return_value = "i-abc123"
     mock_stop.return_value = "i-abc123"
     runner = CliRunner()
-    result = runner.invoke(main, ["stop", "max"])
+    result = runner.invoke(cli, ["stop", "max"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with("max", region=None, profile=None)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
@@ -265,7 +399,7 @@ def test_desk_stop_by_instance_id(mock_resolve: object, mock_stop: object) -> No
     mock_resolve.return_value = "i-abc123"
     mock_stop.return_value = "i-abc123"
     runner = CliRunner()
-    result = runner.invoke(main, ["stop", "i-abc123"])
+    result = runner.invoke(cli, ["stop", "i-abc123"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with("i-abc123", region=None, profile=None)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
@@ -276,7 +410,7 @@ def test_desk_stop_not_found(mock_resolve: object) -> None:
     """desk stop with unknown name shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
     runner = CliRunner()
-    result = runner.invoke(main, ["stop", "unknown"])
+    result = runner.invoke(cli, ["stop", "unknown"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
@@ -290,7 +424,7 @@ def test_desk_list_table_output(mock_list: object) -> None:
         Workstation(instance_id="i-abc123", name="max", state="running"),
     ]
     runner = CliRunner()
-    result = runner.invoke(main, ["list"])
+    result = runner.invoke(cli, ["list"])
     assert result.exit_code == 0
     assert "i-abc123" in result.output
     assert "max" in result.output

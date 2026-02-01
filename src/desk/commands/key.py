@@ -7,7 +7,12 @@ import os
 import click
 from botocore.exceptions import ClientError
 
-from desk.aws import create_key_pair, list_ec2_key_pairs
+from desk.aws import (
+    create_key_pair,
+    delete_key_pair,
+    get_running_workstations_using_key,
+    list_ec2_key_pairs,
+)
 from desk.keys import get_desk_keys_dir, get_key_path, list_local_keys
 
 
@@ -149,3 +154,85 @@ def key_list(
         local = "yes" if name in local_keys else "-"
         remote = "yes" if name in remote_keys else "-"
         click.echo(f"{name:<20}  {local:<6}  {remote}")
+
+
+@key_group.command("delete")
+@click.argument("name", required=True)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt.",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Delete even if key is used by running workstations.",
+)
+@click.option(
+    "--region",
+    "-r",
+    default=None,
+    envvar="AWS_REGION",
+    help="AWS region.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    envvar="AWS_PROFILE",
+    help="AWS profile.",
+)
+def key_delete(
+    name: str,
+    yes: bool,
+    force: bool,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Delete a key pair.
+
+    Removes the local .pem file and the EC2 key pair from AWS.
+    Fails if any running workstation uses the key (unless --force).
+    """
+    region = region or _get_region()
+    profile = profile or _get_profile()
+
+    key_path = get_key_path(name)
+    local_exists = os.path.exists(key_path)
+    remote_exists = name in list_ec2_key_pairs(region=region, profile=profile)
+
+    if not local_exists and not remote_exists:
+        raise click.ClickException(
+            f"Key '{name}' not found. Run 'desk key list' to see keys."
+        )
+
+    if not force and remote_exists:
+        running = get_running_workstations_using_key(
+            key_name=name, region=region, profile=profile
+        )
+        if running:
+            raise click.ClickException(
+                f"Key '{name}' is used by running workstations: {', '.join(running)}. "
+                "Stop them first or use --force to delete anyway."
+            )
+
+    if not yes and not click.confirm(f"Delete key '{name}'?"):
+        raise click.Abort()
+
+    if local_exists:
+        os.remove(key_path)
+        click.echo(f"Deleted local key: {key_path}")
+
+    if remote_exists:
+        try:
+            delete_key_pair(key_name=name, region=region, profile=profile)
+            click.echo(f"Deleted AWS key pair: {name}")
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "InvalidKeyPair.NotFound":
+                pass  # Already gone
+            else:
+                raise
+
+    click.secho("Deleted.", fg="green")
