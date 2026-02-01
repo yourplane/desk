@@ -152,3 +152,45 @@ def run_instance(
 
     instance_id = response["Instances"][0]["InstanceId"]
     return instance_id
+
+
+@dataclass
+class Workstation:
+    """EC2 instance identified as a desk workstation."""
+
+    instance_id: str
+    name: str
+    state: str
+
+
+def list_workstations(
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[Workstation]:
+    """List EC2 instances tagged Type=workstation."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+
+    workstations: list[Workstation] = []
+    paginator = ec2.get_paginator("describe_instances")
+
+    for page in paginator.paginate(
+        Filters=[
+            {"Name": "tag:Type", "Values": ["workstation"]},
+        ],
+    ):
+        for reservation in page.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                name = next(
+                    (t["Value"] for t in instance.get("Tags", []) if t["Key"] == "Name"),
+                    "",
+                )
+                workstations.append(
+                    Workstation(
+                        instance_id=instance["InstanceId"],
+                        name=name,
+                        state=instance["State"]["Name"],
+                    )
+                )
+
+    return workstations

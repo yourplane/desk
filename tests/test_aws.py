@@ -7,8 +7,10 @@ from botocore.exceptions import ClientError
 
 from desk.aws import (
     DeskVpcOutputs,
+    Workstation,
     get_desk_vpc_outputs,
     get_latest_ubuntu_ami,
+    list_workstations,
     run_instance,
 )
 
@@ -118,3 +120,88 @@ def test_run_instance_success(mock_session: MagicMock) -> None:
     assert call_kw["ImageId"] == "ami-123"
     assert call_kw["InstanceType"] == "t3.medium"
     assert "workstation" in str(call_kw["TagSpecifications"])
+
+
+def test_workstation_dataclass() -> None:
+    """Workstation holds instance info."""
+    w = Workstation(instance_id="i-123", name="my-box", state="running")
+    assert w.instance_id == "i-123"
+    assert w.name == "my-box"
+    assert w.state == "running"
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_workstations_empty(mock_session: MagicMock) -> None:
+    """list_workstations returns empty list when no instances."""
+    mock_ec2 = MagicMock()
+    mock_paginator = MagicMock()
+    mock_paginator.paginate.return_value = [{"Reservations": []}]
+    mock_ec2.get_paginator.return_value = mock_paginator
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_workstations()
+
+    assert result == []
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_workstations_success(mock_session: MagicMock) -> None:
+    """list_workstations returns workstations from describe_instances."""
+    mock_ec2 = MagicMock()
+    mock_paginator = MagicMock()
+    mock_paginator.paginate.return_value = [
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-abc123",
+                            "State": {"Name": "running"},
+                            "Tags": [
+                                {"Key": "Name", "Value": "max"},
+                                {"Key": "Type", "Value": "workstation"},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+    mock_ec2.get_paginator.return_value = mock_paginator
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_workstations()
+
+    assert len(result) == 1
+    assert result[0].instance_id == "i-abc123"
+    assert result[0].name == "max"
+    assert result[0].state == "running"
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_workstations_missing_name_tag(mock_session: MagicMock) -> None:
+    """list_workstations handles instances without Name tag."""
+    mock_ec2 = MagicMock()
+    mock_paginator = MagicMock()
+    mock_paginator.paginate.return_value = [
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-xyz789",
+                            "State": {"Name": "stopped"},
+                            "Tags": [{"Key": "Type", "Value": "workstation"}],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+    mock_ec2.get_paginator.return_value = mock_paginator
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_workstations()
+
+    assert len(result) == 1
+    assert result[0].name == ""

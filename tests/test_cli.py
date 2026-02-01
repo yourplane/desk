@@ -2,6 +2,11 @@
 
 import subprocess
 import sys
+from unittest.mock import patch
+
+from click.testing import CliRunner
+
+from desk.cli import main
 
 
 def _run_desk(*args: str) -> subprocess.CompletedProcess[str]:
@@ -34,6 +39,7 @@ def test_desk_help() -> None:
     output = _output(result)
     assert "Manage EC2 instances" in output
     assert "create" in output
+    assert "list" in output
 
 
 def test_desk_version() -> None:
@@ -42,3 +48,37 @@ def test_desk_version() -> None:
     assert result.returncode == 0
     output = _output(result)
     assert "desk, version 0.1.0" in output
+
+
+def test_desk_list_help() -> None:
+    """desk list --help succeeds."""
+    result = _run_desk("list", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "List workstation instances" in output
+
+
+@patch("desk.commands.list_.list_workstations")
+def test_desk_list_empty(mock_list: object) -> None:
+    """desk list shows message when no workstations."""
+    mock_list.return_value = []
+    runner = CliRunner()
+    result = runner.invoke(main, ["list"])
+    assert result.exit_code == 0
+    assert "No workstations found" in result.output
+
+
+@patch("desk.commands.list_.list_workstations")
+def test_desk_list_table_output(mock_list: object) -> None:
+    """desk list shows table of workstations."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="max", state="running"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(main, ["list"])
+    assert result.exit_code == 0
+    assert "i-abc123" in result.output
+    assert "max" in result.output
+    assert "running" in result.output
