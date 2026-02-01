@@ -262,6 +262,17 @@ def wait_for_ssm_ready(
     return False
 
 
+def list_ec2_key_pairs(
+    region: str | None = None,
+    profile: str | None = None,
+) -> set[str]:
+    """Return set of EC2 key pair names in the region."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    resp = ec2.describe_key_pairs()
+    return {kp["KeyName"] for kp in resp.get("KeyPairs", [])}
+
+
 def create_key_pair(
     key_name: str,
     region: str | None = None,

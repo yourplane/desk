@@ -96,7 +96,9 @@ def test_desk_key_create_local_exists(mock_create: object, mock_key_path: object
 
 @patch("desk.commands.key.get_desk_keys_dir")
 @patch("desk.commands.key.create_key_pair")
-def test_desk_key_create_aws_duplicate(mock_create: object, mock_keys_dir: object, tmp_path) -> None:
+def test_desk_key_create_aws_duplicate(
+    mock_create: object, mock_keys_dir: object, tmp_path
+) -> None:
     """desk key create shows friendly error when key exists in AWS."""
     from botocore.exceptions import ClientError
 
@@ -111,6 +113,40 @@ def test_desk_key_create_aws_duplicate(mock_create: object, mock_keys_dir: objec
 
     assert result.exit_code != 0
     assert "already exists in AWS" in result.output
+
+
+@patch("desk.commands.key.list_ec2_key_pairs")
+@patch("desk.commands.key.list_local_keys")
+def test_desk_key_list_empty(mock_local: object, mock_remote: object) -> None:
+    """desk key list shows message when no keys."""
+    mock_local.return_value = set()
+    mock_remote.return_value = set()
+    runner = CliRunner()
+    result = runner.invoke(main, ["key", "list"])
+    assert result.exit_code == 0
+    assert "No keys found" in result.output
+
+
+@patch("desk.commands.key.list_ec2_key_pairs")
+@patch("desk.commands.key.list_local_keys")
+def test_desk_key_list_shows_local_and_remote(
+    mock_local: object, mock_remote: object
+) -> None:
+    """desk key list shows keys with local/remote indicators."""
+    mock_local.return_value = {"my-key", "local-only"}
+    mock_remote.return_value = {"my-key", "remote-only"}
+    runner = CliRunner()
+    result = runner.invoke(main, ["key", "list"])
+    assert result.exit_code == 0
+    assert "NAME" in result.output
+    assert "LOCAL" in result.output
+    assert "REMOTE" in result.output
+    assert "my-key" in result.output
+    assert "local-only" in result.output
+    assert "remote-only" in result.output
+    # my-key has both, local-only has local only, remote-only has remote only
+    assert "yes" in result.output
+    assert "-" in result.output
 
 
 def test_desk_version() -> None:

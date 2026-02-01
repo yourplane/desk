@@ -7,8 +7,8 @@ import os
 import click
 from botocore.exceptions import ClientError
 
-from desk.aws import create_key_pair
-from desk.keys import get_desk_keys_dir, get_key_path
+from desk.aws import create_key_pair, list_ec2_key_pairs
+from desk.keys import get_desk_keys_dir, get_key_path, list_local_keys
 
 
 def _get_region() -> str | None:
@@ -84,3 +84,68 @@ def key_create(
     click.echo()
     click.echo("Use with: desk create --key-name " + name)
     click.echo("          desk connect <workstation> --key " + name)
+
+
+@key_group.command("list")
+@click.option(
+    "--region",
+    "-r",
+    default=None,
+    envvar="AWS_REGION",
+    help="AWS region.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    envvar="AWS_PROFILE",
+    help="AWS profile.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["table", "plain"]),
+    default="table",
+    show_default=True,
+    help="Output format.",
+)
+def key_list(
+    region: str | None,
+    profile: str | None,
+    output: str,
+) -> None:
+    """List keys with local and remote status.
+
+    Shows which keys exist in the desk keys folder (local) and which
+    exist as EC2 key pairs in AWS (remote).
+    """
+    region = region or _get_region()
+    profile = profile or _get_profile()
+
+    local_keys = list_local_keys()
+    try:
+        remote_keys = list_ec2_key_pairs(region=region, profile=profile)
+    except Exception as e:
+        click.echo(f"Warning: could not fetch AWS key pairs: {e}", err=True)
+        remote_keys = set()
+
+    all_names = sorted(local_keys | remote_keys)
+    if not all_names:
+        click.echo("No keys found.")
+        return
+
+    if output == "plain":
+        for name in all_names:
+            local = "yes" if name in local_keys else "-"
+            remote = "yes" if name in remote_keys else "-"
+            click.echo(f"{name}\t{local}\t{remote}")
+        return
+
+    # Table format
+    header = f"{'NAME':<20}  {'LOCAL':<6}  REMOTE"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for name in all_names:
+        local = "yes" if name in local_keys else "-"
+        remote = "yes" if name in remote_keys else "-"
+        click.echo(f"{name:<20}  {local:<6}  {remote}")

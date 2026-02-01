@@ -10,6 +10,7 @@ from desk.aws import (
     Workstation,
     create_key_pair,
     get_desk_vpc_outputs,
+    list_ec2_key_pairs,
     get_latest_ubuntu_ami,
     list_workstations,
     resolve_workstation,
@@ -260,6 +261,23 @@ def test_is_ssm_ready_not_registered(mock_session: MagicMock) -> None:
     mock_session.return_value.client.return_value = mock_ssm
 
     assert is_ssm_ready("i-xyz789") is False
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_ec2_key_pairs(mock_session: MagicMock) -> None:
+    """list_ec2_key_pairs returns key names from AWS."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_key_pairs.return_value = {
+        "KeyPairs": [
+            {"KeyName": "my-key"},
+            {"KeyName": "other-key"},
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_ec2_key_pairs()
+
+    assert result == {"my-key", "other-key"}
 
 
 @patch("desk.aws.boto3.Session")
