@@ -26,7 +26,7 @@ def _get_profile() -> str | None:
 
 
 @click.command("connect")
-@click.argument("workstation", required=True)
+@click.argument("workstation", default="main")
 @click.option(
     "--user",
     "-u",
@@ -45,7 +45,8 @@ def _get_profile() -> str | None:
     "--key",
     "-k",
     "key_name",
-    default=None,
+    default="main-key",
+    show_default=True,
     help="Desk-managed key name (from desk key create). Resolves to ~/.config/desk/keys/<name>.pem",
 )
 @click.option(

@@ -30,6 +30,33 @@ def test_desk_create_help() -> None:
     output = _output(result)
     assert "Create a new workstation instance" in output
     assert "--name" in output
+    assert "main-key" in output
+
+
+@patch("desk.commands.create.run_instance")
+@patch("desk.commands.create.get_latest_ubuntu_ami")
+@patch("desk.commands.create.get_desk_vpc_outputs")
+@patch("desk.commands.create.list_ec2_key_pairs")
+def test_desk_create_aborts_when_main_key_missing_and_declined(
+    mock_list_keys: object,
+    mock_vpc: object,
+    mock_ami: object,
+    mock_run: object,
+) -> None:
+    """desk create prompts to create main-key when missing; aborts if user declines."""
+    mock_list_keys.return_value = set()
+    mock_vpc.return_value = type("V", (), {
+        "private_subnet_ids": ["subnet-1"],
+        "security_group_id": "sg-1",
+        "instance_profile_name": "profile-1",
+    })()
+    mock_ami.return_value = "ami-123"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["create"], input="n\n")
+
+    assert result.exit_code != 0
+    mock_run.assert_not_called()
 
 
 def test_desk_help() -> None:
