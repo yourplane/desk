@@ -71,7 +71,7 @@ desk key list
 desk key delete my-key
 ```
 
-When using desk-managed keys, `desk create --key-name my-key` and `desk connect my-workstation -i <path>` can resolve the key path from the desk keys folder by name, so you can use `desk connect my-workstation --key my-key` instead of `-i ~/.config/desk/keys/my-key.pem`.
+When using desk-managed keys, `desk create --key my-key` and `desk connect my-workstation -i <path>` can resolve the key path from the desk keys folder by name, so you can use `desk connect my-workstation --key my-key` instead of `-i ~/.config/desk/keys/my-key.pem`.
 
 ---
 
@@ -86,8 +86,8 @@ desk key delete my-key
 # List all workstations
 desk list
 
-# Create a workstation (include --key-name for SSH access)
-desk create --name my-workstation --key-name my-key
+# Create a workstation (include --key for SSH access)
+desk create --name my-workstation --key my-key
 
 # Connect (SSH over SSM—private subnets only)
 desk connect my-workstation -i ~/.config/desk/keys/my-key.pem
@@ -145,7 +145,7 @@ Keys created with `desk key create` are stored in `~/.config/desk/keys/` and kep
 
 ```bash
 desk key create my-key
-desk create --name my-workstation --key-name my-key
+desk create --name my-workstation --key my-key
 desk connect my-workstation --key my-key
 ```
 
@@ -159,7 +159,7 @@ aws ec2 create-key-pair --key-name desk-key --query 'KeyMaterial' --output text 
 chmod 600 ~/.ssh/desk-key.pem
 
 # Create workstation and connect
-desk create --name my-workstation --key-name desk-key
+desk create --name my-workstation --key desk-key
 desk connect my-workstation -i ~/.ssh/desk-key.pem
 ```
 

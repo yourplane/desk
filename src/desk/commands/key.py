@@ -56,7 +56,7 @@ def key_create(
     """Create a new key pair.
 
     Creates an EC2 key pair in AWS and saves the private key to
-    ~/.config/desk/keys/<name>.pem. Use with desk create --key-name and
+    ~/.config/desk/keys/<name>.pem. Use with desk create --key and
     desk connect --key.
     """
     region = region or _get_region()
@@ -87,7 +87,7 @@ def key_create(
     click.echo(f"  Local:  {key_path}")
     click.echo(f"  AWS:   {name}")
     click.echo()
-    click.echo("Use with: desk create --key-name " + name)
+    click.echo("Use with: desk create --key " + name)
     click.echo("          desk connect <workstation> --key " + name)
 
 

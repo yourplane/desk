@@ -45,8 +45,9 @@ def _get_profile() -> str | None:
     help="AMI ID. Default: latest Ubuntu 24.04 LTS.",
 )
 @click.option(
-    "--key-name",
+    "--key",
     "-k",
+    "key_name",
     default=None,
     help="EC2 key pair name for SSH access (required for desk connect).",
 )

@@ -342,9 +342,47 @@ def test_desk_connect_resolves_and_execs_ssh(
     assert "ubuntu@i-abc123" in args
 
 
-@patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.is_ssm_ready")
+@patch("desk.commands.connect.resolve_workstation")
+@patch("desk.commands.connect.get_key_path")
+def test_desk_connect_with_key(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk connect --key uses desk-managed key path."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "my-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "max", "--key", "my-key"])
+
+    args = mock_execvp.call_args[0][1]
+    assert "-i" in args
+    idx = args.index("-i")
+    assert args[idx + 1] == str(key_file)
+
+
+@patch("desk.commands.connect.get_key_path")
+def test_desk_connect_key_not_found(mock_get_key_path: object) -> None:
+    """desk connect --key fails when key file does not exist."""
+    mock_get_key_path.return_value = "/nonexistent/my-key.pem"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "max", "--key", "my-key"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+@patch("desk.commands.connect.is_ssm_ready")
+@patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.resolve_workstation")
 def test_desk_connect_waits_for_ssm_then_connects(
     mock_resolve: object, mock_ssm: object, mock_execvp: object

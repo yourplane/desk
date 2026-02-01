@@ -9,6 +9,7 @@ import time
 import click
 
 from desk.aws import is_ssm_ready, resolve_workstation
+from desk.keys import get_key_path
 
 
 def _get_region() -> str | None:
@@ -35,7 +36,14 @@ def _get_profile() -> str | None:
     "-i",
     "identity_file",
     default=None,
-    help="Path to SSH private key (required for Ubuntu/Amazon Linux instances).",
+    help="Path to SSH private key.",
+)
+@click.option(
+    "--key",
+    "-k",
+    "key_name",
+    default=None,
+    help="Desk-managed key name (from desk key create). Resolves to ~/.config/desk/keys/<name>.pem",
 )
 @click.option(
     "--region",
@@ -67,6 +75,7 @@ def connect(
     workstation: str,
     user: str,
     identity_file: str | None,
+    key_name: str | None,
     region: str | None,
     profile: str | None,
     wait: bool,
@@ -77,10 +86,23 @@ def connect(
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
     Requires the Session Manager plugin and SSH client to be installed.
 
-    The instance must have an SSH key associated. Use -i to specify the key path.
+    The instance must have an SSH key associated. Use -i for key path or --key for desk-managed keys.
     """
     region = region or _get_region()
     profile = profile or _get_profile()
+
+    # Resolve identity: -i takes precedence over --key
+    if identity_file:
+        key_path = identity_file
+    elif key_name:
+        key_path = get_key_path(key_name)
+        if not os.path.exists(key_path):
+            raise click.ClickException(
+                f"Key '{key_name}' not found at {key_path}. "
+                "Create it with: desk key create " + key_name
+            )
+    else:
+        key_path = None
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
@@ -130,8 +152,8 @@ def connect(
         "StrictHostKeyChecking=accept-new",
         f"{user}@{instance_id}",
     ]
-    if identity_file:
-        ssh_args[1:1] = ["-i", identity_file]
+    if key_path:
+        ssh_args[1:1] = ["-i", key_path]
 
     # Replace our process with ssh for proper terminal handling
     try:
