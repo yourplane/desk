@@ -19,6 +19,19 @@ def _get_profile() -> str | None:
     return os.environ.get("AWS_PROFILE")
 
 
+def _color_state(state: str) -> str:
+    """Return state string with color for readability."""
+    colors = {
+        "running": "green",
+        "pending": "yellow",
+        "stopped": "red",
+        "stopping": "yellow",
+        "terminated": "red",
+    }
+    color = colors.get(state, None)
+    return click.style(state, fg=color) if color else state
+
+
 @click.command("list")
 @click.option(
     "--region",
@@ -63,7 +76,7 @@ def list_cmd(
 
     if output == "plain":
         for w in workstations:
-            click.echo(f"{w.instance_id}\t{w.name}\t{w.state}")
+            click.echo(f"{w.instance_id}\t{w.name}\t{_color_state(w.state)}")
         return
 
     # Table format
@@ -78,4 +91,5 @@ def list_cmd(
 
     for w in workstations:
         name = w.name or "-"
-        click.echo(f"{w.instance_id:<{max_id}}  {name:<{max_name}}  {w.state}")
+        state = _color_state(w.state)
+        click.echo(f"{w.instance_id:<{max_id}}  {name:<{max_name}}  {state}")
