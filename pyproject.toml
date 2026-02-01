@@ -1,0 +1,31 @@
+[project]
+name = "desk"
+version = "0.1.0"
+description = "CLI to manage EC2 workstations—SSH over SSM, private subnets only"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+    "cfn-lint>=0.90.0",
+    "tox>=4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.tox]
+package = "editable"
+env_list = ["py", "lint"]
+
+[tool.tox.env.lint]
+package = "skip"
+description = "Lint CloudFormation templates with cfn-lint"
+deps = ["cfn-lint>=0.90.0"]
+commands = [["cfn-lint", "infrastructure"]]
+
+[tool.tox.env.py]
+description = "Install package and run CLI smoke test"
+deps = []
+commands = ["desk create --help"]
