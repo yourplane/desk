@@ -194,3 +194,15 @@ def list_workstations(
                 )
 
     return workstations
+
+
+def stop_instance(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Stop an EC2 instance. Returns the instance ID."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.stop_instances(InstanceIds=[instance_id])
+    return instance_id

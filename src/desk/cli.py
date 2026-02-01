@@ -3,7 +3,7 @@
 import click
 
 from desk import __version__
-from desk.commands import create, list_
+from desk.commands import create, list_, stop
 
 
 @click.group()
@@ -15,6 +15,7 @@ def main() -> None:
 
 main.add_command(create.create, "create")
 main.add_command(list_.list_cmd, "list")
+main.add_command(stop.stop, "stop")
 
 if __name__ == "__main__":
     main()

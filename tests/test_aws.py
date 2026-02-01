@@ -12,6 +12,7 @@ from desk.aws import (
     get_latest_ubuntu_ami,
     list_workstations,
     run_instance,
+    stop_instance,
 )
 
 
@@ -205,3 +206,15 @@ def test_list_workstations_missing_name_tag(mock_session: MagicMock) -> None:
 
     assert len(result) == 1
     assert result[0].name == ""
+
+
+@patch("desk.aws.boto3.Session")
+def test_stop_instance_success(mock_session: MagicMock) -> None:
+    """stop_instance calls stop_instances and returns instance ID."""
+    mock_ec2 = MagicMock()
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = stop_instance("i-abc123")
+
+    assert result == "i-abc123"
+    mock_ec2.stop_instances.assert_called_once_with(InstanceIds=["i-abc123"])

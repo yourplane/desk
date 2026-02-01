@@ -40,6 +40,7 @@ def test_desk_help() -> None:
     assert "Manage EC2 instances" in output
     assert "create" in output
     assert "list" in output
+    assert "stop" in output
 
 
 def test_desk_version() -> None:
@@ -66,6 +67,60 @@ def test_desk_list_empty(mock_list: object) -> None:
     result = runner.invoke(main, ["list"])
     assert result.exit_code == 0
     assert "No workstations found" in result.output
+
+
+def test_desk_stop_help() -> None:
+    """desk stop --help succeeds."""
+    result = _run_desk("stop", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Stop a workstation instance" in output
+    assert "WORKSTATION" in output
+
+
+@patch("desk.commands.stop.stop_instance")
+@patch("desk.commands.stop.list_workstations")
+def test_desk_stop_by_name(mock_list: object, mock_stop: object) -> None:
+    """desk stop resolves name and stops instance."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="max", state="running"),
+    ]
+    mock_stop.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "max"])
+    assert result.exit_code == 0
+    mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
+    assert "Stopped" in result.output
+
+
+@patch("desk.commands.stop.stop_instance")
+@patch("desk.commands.stop.list_workstations")
+def test_desk_stop_by_instance_id(mock_list: object, mock_stop: object) -> None:
+    """desk stop with instance ID stops the instance."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="max", state="running"),
+    ]
+    mock_stop.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "i-abc123"])
+    assert result.exit_code == 0
+    mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
+
+
+@patch("desk.commands.stop.list_workstations")
+def test_desk_stop_not_found(mock_list: object) -> None:
+    """desk stop with unknown name shows error."""
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="max", state="running"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "unknown"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
 
 
 @patch("desk.commands.list_.list_workstations")
