@@ -85,6 +85,13 @@ from desk.commands import connect, create
     show_default=True,
     help="Seconds to wait for SSM before failing.",
 )
+@click.option(
+    "--forward",
+    "-L",
+    "forwards",
+    multiple=True,
+    help="Port forward in SSH -L format: [local_port:]remote_host:remote_port. Can be repeated.",
+)
 def up(
     name: str,
     key_name: str,
@@ -96,6 +103,7 @@ def up(
     user: str,
     wait: bool,
     wait_timeout: int,
+    forwards: tuple[str, ...],
 ) -> None:
     """Create a workstation and connect to it.
 
@@ -171,4 +179,5 @@ def up(
         profile=profile,
         wait=wait,
         wait_timeout=wait_timeout,
+        forwards=forwards,
     )

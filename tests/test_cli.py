@@ -31,6 +31,7 @@ def test_desk_up_help() -> None:
     assert "Create a workstation and connect to it" in output
     assert "main" in output
     assert "main-key" in output
+    assert "--forward" in output or "-L" in output
 
 
 @patch("desk.commands.up.connect.connect")
@@ -512,19 +513,29 @@ def test_desk_connect_help() -> None:
     output = _output(result)
     assert "Connect to a workstation via SSH" in output
     assert "WORKSTATION" in output
+    assert "--forward" in output or "-L" in output
 
 
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.resolve_workstation")
+@patch("desk.commands.connect.get_key_path")
 def test_desk_connect_resolves_and_execs_ssh(
-    mock_resolve: object, mock_ssm: object, mock_execvp: object
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
 ) -> None:
     """desk connect resolves workstation and execs ssh with ProxyCommand."""
     mock_resolve.return_value = "i-abc123"
     mock_ssm.return_value = True  # SSM ready, skip wait
     # execvp replaces process - simulate it raising so we don't actually exec
     mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max"])
@@ -580,13 +591,23 @@ def test_desk_connect_key_not_found(mock_get_key_path: object) -> None:
 @patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.resolve_workstation")
+@patch("desk.commands.connect.get_key_path")
 def test_desk_connect_waits_for_ssm_then_connects(
-    mock_resolve: object, mock_execvp: object, mock_is_ssm_ready: object
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_execvp: object,
+    mock_is_ssm_ready: object,
+    tmp_path,
 ) -> None:
     """desk connect waits when SSM not ready, then proceeds."""
     mock_resolve.return_value = "i-abc123"
     mock_is_ssm_ready.side_effect = [False, False, True]  # Ready on 3rd check
     mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max", "--wait-timeout", "10"])
     assert mock_is_ssm_ready.call_count == 3
@@ -594,13 +615,83 @@ def test_desk_connect_waits_for_ssm_then_connects(
 
 
 @patch("desk.commands.connect.resolve_workstation")
-def test_desk_connect_not_found(mock_resolve: object) -> None:
+@patch("desk.commands.connect.get_key_path")
+def test_desk_connect_not_found(
+    mock_get_key_path: object, mock_resolve: object, tmp_path
+) -> None:
     """desk connect with unknown workstation shows error."""
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
     mock_resolve.side_effect = ValueError("Workstation 'x' not found")
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "x"])
     assert result.exit_code != 0
     assert "not found" in result.output
+
+
+@patch("desk.commands.connect.os.execvp")
+@patch("desk.commands.connect.is_ssm_ready")
+@patch("desk.commands.connect.resolve_workstation")
+@patch("desk.commands.connect.get_key_path")
+def test_desk_connect_with_port_forward(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk connect --forward adds -L flag to ssh."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "max", "-L", "8080:localhost:80"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "-L" in args
+    idx = args.index("-L")
+    assert args[idx + 1] == "8080:localhost:80"
+
+
+@patch("desk.commands.connect.os.execvp")
+@patch("desk.commands.connect.is_ssm_ready")
+@patch("desk.commands.connect.resolve_workstation")
+@patch("desk.commands.connect.get_key_path")
+def test_desk_connect_with_multiple_port_forwards(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk connect with multiple --forward options adds all -L flags."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["connect", "max", "-L", "8080:localhost:80", "--forward", "3000:localhost:3000"]
+    )
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    # Both port forwards should be in the args
+    assert args.count("-L") == 2
+    assert "8080:localhost:80" in args
+    assert "3000:localhost:3000" in args
 
 
 def test_desk_stop_help() -> None:

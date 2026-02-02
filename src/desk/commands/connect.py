@@ -75,6 +75,13 @@ def _get_profile() -> str | None:
     show_default=True,
     help="Seconds to wait for SSM before failing.",
 )
+@click.option(
+    "--forward",
+    "-L",
+    "forwards",
+    multiple=True,
+    help="Port forward in SSH -L format: [local_port:]remote_host:remote_port. Can be repeated.",
+)
 def connect(
     workstation: str,
     user: str,
@@ -84,6 +91,7 @@ def connect(
     profile: str | None,
     wait: bool,
     wait_timeout: int,
+    forwards: tuple[str, ...],
 ) -> None:
     """Connect to a workstation via SSH over SSM tunnel.
 
@@ -170,6 +178,10 @@ def connect(
     ]
     if key_path:
         ssh_args[1:1] = ["-i", key_path]
+
+    # Add port forwards
+    for fwd in forwards:
+        ssh_args[1:1] = ["-L", fwd]
 
     log.info("exec ssh user=%s instance_id=%s", user, instance_id)
     # Replace our process with ssh for proper terminal handling
