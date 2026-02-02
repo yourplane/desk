@@ -25,19 +25,23 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.tox]
-package = "editable"
-env_list = ["py", "lint"]
+legacy_tox_ini = """
+[tox]
+env_list = py, lint
 
-[tool.tox.env.lint]
-package = "skip"
-description = "Lint CloudFormation templates with cfn-lint"
-deps = ["cfn-lint>=0.90.0"]
-commands = [["cfn-lint", "infrastructure"]]
+[testenv]
+description = Run unit tests
+deps =
+    pytest>=7.0.0
+    pytest-cov>=4.0.0
+commands = pytest tests/ -v
 
-[tool.tox.env.py]
-description = "Run unit tests"
-deps = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
-commands = ["pytest tests/ -v"]
+[testenv:lint]
+description = Lint CloudFormation templates with cfn-lint
+skip_install = true
+deps = cfn-lint>=0.90.0
+commands = cfn-lint infrastructure/desk-vpc.yaml
+"""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
