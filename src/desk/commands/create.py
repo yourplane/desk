@@ -13,6 +13,7 @@ from desk.aws import (
     get_desk_vpc_outputs,
     get_latest_ubuntu_ami,
     list_ec2_key_pairs,
+    list_workstations,
     run_instance,
 )
 from desk.keys import get_desk_keys_dir, get_key_path
@@ -99,6 +100,19 @@ def create(
     """
     region = region or _get_region()
     profile = profile or _get_profile()
+
+    # Check for duplicate workstation names (only terminated state allows duplicates)
+    existing = list_workstations(region=region, profile=profile)
+    duplicates = [
+        w for w in existing
+        if w.name == name and w.state != "terminated"
+    ]
+    if duplicates:
+        states = ", ".join(f"{w.instance_id} ({w.state})" for w in duplicates)
+        raise click.ClickException(
+            f"Workstation named '{name}' already exists: {states}. "
+            "Use a different name or terminate the existing workstation first."
+        )
 
     click.echo("Fetching desk VPC configuration...")
     vpc_outputs: DeskVpcOutputs = get_desk_vpc_outputs(

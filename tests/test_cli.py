@@ -47,13 +47,16 @@ def test_desk_create_help() -> None:
 @patch("desk.commands.create.get_latest_ubuntu_ami")
 @patch("desk.commands.create.get_desk_vpc_outputs")
 @patch("desk.commands.create.list_ec2_key_pairs")
+@patch("desk.commands.create.list_workstations")
 def test_desk_create_aborts_when_main_key_missing_and_declined(
+    mock_list_workstations: object,
     mock_list_keys: object,
     mock_vpc: object,
     mock_ami: object,
     mock_run: object,
 ) -> None:
     """desk create prompts to create main-key when missing; aborts if user declines."""
+    mock_list_workstations.return_value = []
     mock_list_keys.return_value = set()
     mock_vpc.return_value = type("V", (), {
         "private_subnet_ids": ["subnet-1"],
@@ -67,6 +70,94 @@ def test_desk_create_aborts_when_main_key_missing_and_declined(
 
     assert result.exit_code != 0
     mock_run.assert_not_called()
+
+
+@patch("desk.commands.create.list_workstations")
+def test_desk_create_rejects_duplicate_name_running(mock_list_workstations: object) -> None:
+    """desk create fails when workstation with same name is running."""
+    from desk.aws import Workstation
+
+    mock_list_workstations.return_value = [
+        Workstation(instance_id="i-existing", name="main", state="running"),
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["create", "--name", "main"])
+
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    assert "i-existing" in result.output
+    assert "running" in result.output
+
+
+@patch("desk.commands.create.list_workstations")
+def test_desk_create_rejects_duplicate_name_stopped(mock_list_workstations: object) -> None:
+    """desk create fails when workstation with same name is stopped."""
+    from desk.aws import Workstation
+
+    mock_list_workstations.return_value = [
+        Workstation(instance_id="i-stopped", name="myws", state="stopped"),
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["create", "--name", "myws"])
+
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    assert "i-stopped" in result.output
+    assert "stopped" in result.output
+
+
+@patch("desk.commands.create.list_workstations")
+def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: object) -> None:
+    """desk create fails when workstation with same name is stopping."""
+    from desk.aws import Workstation
+
+    mock_list_workstations.return_value = [
+        Workstation(instance_id="i-stopping", name="myws", state="stopping"),
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["create", "--name", "myws"])
+
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    assert "stopping" in result.output
+
+
+@patch("desk.commands.create.run_instance")
+@patch("desk.commands.create.get_latest_ubuntu_ami")
+@patch("desk.commands.create.get_desk_vpc_outputs")
+@patch("desk.commands.create.list_ec2_key_pairs")
+@patch("desk.commands.create.list_workstations")
+def test_desk_create_allows_duplicate_name_when_terminated(
+    mock_list_workstations: object,
+    mock_list_keys: object,
+    mock_vpc: object,
+    mock_ami: object,
+    mock_run: object,
+) -> None:
+    """desk create succeeds when only terminated workstations have same name."""
+    from desk.aws import Workstation
+
+    mock_list_workstations.return_value = [
+        Workstation(instance_id="i-old", name="main", state="terminated"),
+    ]
+    mock_list_keys.return_value = {"main-key"}
+    mock_vpc.return_value = type("V", (), {
+        "private_subnet_ids": ["subnet-1"],
+        "security_group_id": "sg-1",
+        "instance_profile_name": "profile-1",
+    })()
+    mock_ami.return_value = "ami-123"
+    mock_run.return_value = "i-new123"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["create", "--name", "main"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    assert "created successfully" in result.output
 
 
 def test_desk_help() -> None:
