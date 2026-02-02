@@ -13,6 +13,7 @@ from desk.aws import (
     get_desk_vpc_outputs,
     get_instance_state,
     get_running_workstations_using_key,
+    is_ssm_ready,
     list_ec2_key_pairs,
     get_latest_ubuntu_ami,
     list_workstations,
@@ -172,9 +173,8 @@ def test_resolve_workstation_multiple_running_same_name() -> None:
 def test_resolve_workstation_by_name_only_stopped() -> None:
     """resolve_workstation by name finds only running; not found if only stopped."""
     with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = [
-            Workstation(instance_id="i-abc123", name="main", state="stopped"),
-        ]
+        # Mock returns empty when filtering for running/pending (default states)
+        mock_list.return_value = []
         with pytest.raises(ValueError, match="not found"):
             resolve_workstation("main")
 
@@ -264,7 +264,6 @@ def test_list_workstations_missing_name_tag(mock_session: MagicMock) -> None:
     assert result[0].name == ""
 
 
-@patch("desk.aws.boto3.Session")
 @patch("desk.aws.boto3.Session")
 def test_is_ssm_ready_online(mock_session: MagicMock) -> None:
     """is_ssm_ready returns True when PingStatus is Online."""

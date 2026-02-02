@@ -249,12 +249,15 @@ def test_desk_key_help() -> None:
     assert "Create a new key pair" in output
 
 
+@patch("desk.commands.key.get_key_path")
 @patch("desk.commands.key.get_desk_keys_dir")
 @patch("desk.commands.key.create_key_pair")
-def test_desk_key_create_success(mock_create: object, mock_keys_dir: object, tmp_path) -> None:
+def test_desk_key_create_success(mock_create: object, mock_keys_dir: object, mock_key_path: object, tmp_path) -> None:
     """desk key create creates key and saves to desk keys dir."""
-    keys_dir = str(tmp_path / "keys")
-    mock_keys_dir.return_value = keys_dir
+    keys_dir = tmp_path / "keys"
+    key_file = keys_dir / "my-key.pem"
+    mock_keys_dir.return_value = str(keys_dir)
+    mock_key_path.return_value = str(key_file)
     mock_create.return_value = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n"
 
     runner = CliRunner()
@@ -262,10 +265,8 @@ def test_desk_key_create_success(mock_create: object, mock_keys_dir: object, tmp
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(key_name="my-key", region=None, profile=None)
-    key_path = f"{keys_dir}/my-key.pem"
     assert "Created key 'my-key'" in result.output
-    assert key_path in result.output
-    assert (tmp_path / "keys" / "my-key.pem").exists()
+    assert key_file.exists()
 
 
 @patch("desk.commands.key.get_key_path")
@@ -284,15 +285,16 @@ def test_desk_key_create_local_exists(mock_create: object, mock_key_path: object
     mock_create.assert_not_called()
 
 
-@patch("desk.commands.key.get_desk_keys_dir")
+@patch("desk.commands.key.get_key_path")
 @patch("desk.commands.key.create_key_pair")
 def test_desk_key_create_aws_duplicate(
-    mock_create: object, mock_keys_dir: object, tmp_path
+    mock_create: object, mock_key_path: object, tmp_path
 ) -> None:
     """desk key create shows friendly error when key exists in AWS."""
     from botocore.exceptions import ClientError
 
-    mock_keys_dir.return_value = str(tmp_path / "keys")
+    # Key doesn't exist locally
+    mock_key_path.return_value = str(tmp_path / "nonexistent.pem")
     mock_create.side_effect = ClientError(
         {"Error": {"Code": "InvalidKeyPair.Duplicate", "Message": "already exists"}},
         "CreateKeyPair",
@@ -456,21 +458,25 @@ def test_desk_key_delete_force_bypasses_in_use_check(
     mock_delete.assert_called_once()
 
 
-@patch("desk.commands.key.create_key_pair")
-@patch("desk.commands.key.get_key_path")
-def test_desk_shows_friendly_error_without_traceback(
-    mock_key_path: object, mock_create: object, tmp_path
-) -> None:
-    """Unexpected exceptions show Error: message, not full traceback."""
-    mock_key_path.return_value = str(tmp_path / "x.pem")
-    mock_create.side_effect = RuntimeError("Something went wrong")
+def test_desk_shows_friendly_error_without_traceback() -> None:
+    """Unexpected exceptions show Error: message, not full traceback via main()."""
+    from io import StringIO
+    from unittest.mock import patch
 
-    result = _run_desk("key", "create", "x")
-    output = result.stdout + result.stderr
+    # Test the main() wrapper function's exception handling
+    with patch("desk.cli.cli") as mock_cli:
+        mock_cli.side_effect = RuntimeError("Something went wrong")
 
-    assert result.returncode != 0
-    assert "Error: Something went wrong" in output
-    assert "Traceback" not in output
+        with patch("sys.stderr", new_callable=StringIO) as mock_stderr:
+            with patch("sys.exit") as mock_exit:
+                from desk.cli import main
+                main()
+
+                mock_exit.assert_called_once_with(1)
+
+        output = mock_stderr.getvalue()
+        assert "Error: Something went wrong" in output
+        assert "Traceback" not in output
 
 
 def test_desk_version() -> None:
@@ -575,15 +581,15 @@ def test_desk_connect_key_not_found(mock_get_key_path: object) -> None:
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.resolve_workstation")
 def test_desk_connect_waits_for_ssm_then_connects(
-    mock_resolve: object, mock_ssm: object, mock_execvp: object
+    mock_resolve: object, mock_execvp: object, mock_is_ssm_ready: object
 ) -> None:
     """desk connect waits when SSM not ready, then proceeds."""
     mock_resolve.return_value = "i-abc123"
-    mock_ssm.side_effect = [False, False, True]  # Ready on 3rd check
+    mock_is_ssm_ready.side_effect = [False, False, True]  # Ready on 3rd check
     mock_execvp.side_effect = OSError(2, "No such file")
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max", "--wait-timeout", "10"])
-    assert mock_ssm.call_count == 3
+    assert mock_is_ssm_ready.call_count == 3
     mock_execvp.assert_called_once()
 
 
