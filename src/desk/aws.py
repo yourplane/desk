@@ -377,3 +377,42 @@ def start_instance(
     ec2 = session.client("ec2")
     ec2.start_instances(InstanceIds=[instance_id])
     return instance_id
+
+
+def get_instance_state(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Get the current state of an EC2 instance. Returns None if not found."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    resp = ec2.describe_instances(InstanceIds=[instance_id])
+    reservations = resp.get("Reservations", [])
+    if not reservations:
+        return None
+    instances = reservations[0].get("Instances", [])
+    if not instances:
+        return None
+    return instances[0]["State"]["Name"]
+
+
+def wait_for_instance_state(
+    instance_id: str,
+    target_state: str,
+    region: str | None = None,
+    profile: str | None = None,
+    timeout: int = 300,
+    poll_interval: float = 3.0,
+) -> bool:
+    """Wait for an instance to reach the target state. Returns True if reached, False if timeout."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = get_instance_state(instance_id, region=region, profile=profile)
+        log.debug("wait_for_instance_state instance_id=%s current=%s target=%s", instance_id, state, target_state)
+        if state == target_state:
+            return True
+        time.sleep(poll_interval)
+    return False

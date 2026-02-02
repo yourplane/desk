@@ -33,6 +33,67 @@ def test_desk_up_help() -> None:
     assert "main-key" in output
 
 
+@patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.start_instance")
+@patch("desk.commands.up.list_workstations")
+@patch("desk.commands.up.resolve_workstation")
+def test_desk_up_starts_stopped_instance(
+    mock_resolve: object,
+    mock_list: object,
+    mock_start: object,
+    mock_connect: object,
+) -> None:
+    """desk up starts a stopped instance instead of creating."""
+    from desk.aws import Workstation
+
+    mock_resolve.side_effect = ValueError("not found")
+    mock_list.return_value = [
+        Workstation(instance_id="i-stopped", name="main", state="stopped"),
+    ]
+    mock_start.return_value = "i-stopped"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up", "--name", "main"])
+
+    assert result.exit_code == 0
+    mock_start.assert_called_once_with("i-stopped", region=None, profile=None)
+    assert "stopped" in result.output.lower()
+    assert "Starting" in result.output
+    mock_connect.assert_called_once()
+
+
+@patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.start_instance")
+@patch("desk.commands.up.get_instance_state")
+@patch("desk.commands.up.list_workstations")
+@patch("desk.commands.up.resolve_workstation")
+def test_desk_up_waits_for_stopping_instance(
+    mock_resolve: object,
+    mock_list: object,
+    mock_get_state: object,
+    mock_start: object,
+    mock_connect: object,
+) -> None:
+    """desk up waits for stopping instance to stop, then starts it."""
+    from desk.aws import Workstation
+
+    mock_resolve.side_effect = ValueError("not found")
+    mock_list.return_value = [
+        Workstation(instance_id="i-stopping", name="main", state="stopping"),
+    ]
+    # Simulate instance transitioning: stopping -> stopping -> stopped
+    mock_get_state.side_effect = ["stopping", "stopped"]
+    mock_start.return_value = "i-stopping"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up", "--name", "main"])
+
+    assert result.exit_code == 0
+    assert mock_get_state.call_count >= 1
+    mock_start.assert_called_once_with("i-stopping", region=None, profile=None)
+    mock_connect.assert_called_once()
+
+
 def test_desk_create_help() -> None:
     """desk create --help succeeds and shows usage."""
     result = _run_desk("create", "--help")

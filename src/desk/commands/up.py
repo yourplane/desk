@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+import time
+
 import click
 
-from desk.aws import resolve_workstation
+from desk.aws import (
+    get_instance_state,
+    list_workstations,
+    resolve_workstation,
+    start_instance,
+)
 from desk.commands import connect, create
 
 
@@ -92,7 +100,7 @@ def up(
     """Create a workstation and connect to it.
 
     If a workstation with the target name already exists (running or pending),
-    skips create and connects. Stopped instances with that name are ignored.
+    skips create and connects. If stopped or stopping, starts and connects.
     Otherwise creates then connects. Uses the same defaults (main, main-key).
     """
     ctx = click.get_current_context()
@@ -101,17 +109,55 @@ def up(
     except ValueError as e:
         if "not found" not in str(e).lower():
             raise click.UsageError(str(e)) from e
-        # No running/pending workstation with this name, create it
-        ctx.invoke(
-            create.create,
-            name=name,
-            instance_type=instance_type,
-            ami=ami,
-            key_name=key_name,
-            stack=stack,
-            region=region,
-            profile=profile,
-        )
+        # No running/pending workstation with this name
+        # Check if there's a stopped/stopping one to start
+        stopped = [
+            w for w in list_workstations(
+                region=region, profile=profile, states=["stopped", "stopping"]
+            )
+            if w.name == name
+        ]
+        if stopped:
+            ws = stopped[0]
+            instance_id = ws.instance_id
+            if ws.state == "stopping":
+                # Wait for instance to stop with spinner
+                spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+                idx = 0
+                deadline = time.monotonic() + wait_timeout
+                err = sys.stderr
+                while time.monotonic() < deadline:
+                    state = get_instance_state(instance_id, region=region, profile=profile)
+                    if state == "stopped":
+                        err.write("\r" + " " * 50 + "\r")
+                        err.flush()
+                        break
+                    char = spinner[idx % len(spinner)]
+                    err.write(f"\r{char} Waiting for {instance_id} to stop... ")
+                    err.flush()
+                    idx += 1
+                    time.sleep(0.5)
+                else:
+                    err.write("\n")
+                    err.flush()
+                    raise click.ClickException(
+                        f"Timeout waiting for {instance_id} to stop. Try again later."
+                    )
+            click.echo(f"Starting {instance_id}...")
+            start_instance(instance_id, region=region, profile=profile)
+            click.secho("Started.", fg="green")
+        else:
+            # No existing workstation at all, create it
+            ctx.invoke(
+                create.create,
+                name=name,
+                instance_type=instance_type,
+                ami=ami,
+                key_name=key_name,
+                stack=stack,
+                region=region,
+                profile=profile,
+            )
     else:
         click.echo(f"Workstation '{name}' already exists. Connecting...")
 

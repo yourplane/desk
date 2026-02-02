@@ -11,6 +11,7 @@ from desk.aws import (
     create_key_pair,
     delete_key_pair,
     get_desk_vpc_outputs,
+    get_instance_state,
     get_running_workstations_using_key,
     list_ec2_key_pairs,
     get_latest_ubuntu_ami,
@@ -384,3 +385,36 @@ def test_resolve_workstation_by_name_with_stopped_states() -> None:
         ]
         result = resolve_workstation("main", states=["stopped"])
         assert result == "i-abc123"
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_instance_state_success(mock_session: MagicMock) -> None:
+    """get_instance_state returns the instance state."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_instances.return_value = {
+        "Reservations": [
+            {
+                "Instances": [
+                    {"InstanceId": "i-abc123", "State": {"Name": "stopped"}},
+                ],
+            },
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_instance_state("i-abc123")
+
+    assert result == "stopped"
+    mock_ec2.describe_instances.assert_called_once_with(InstanceIds=["i-abc123"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_instance_state_not_found(mock_session: MagicMock) -> None:
+    """get_instance_state returns None when instance not found."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_instances.return_value = {"Reservations": []}
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_instance_state("i-nonexistent")
+
+    assert result is None
