@@ -379,6 +379,18 @@ def start_instance(
     return instance_id
 
 
+def terminate_instance(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Terminate an EC2 instance. Returns the instance ID."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.terminate_instances(InstanceIds=[instance_id])
+    return instance_id
+
+
 def get_instance_state(
     instance_id: str,
     region: str | None = None,

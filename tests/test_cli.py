@@ -643,6 +643,66 @@ def test_desk_stop_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
+def test_desk_kill_help() -> None:
+    """desk kill --help succeeds."""
+    result = _run_desk("kill", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Terminate a workstation instance" in output
+    assert "WORKSTATION" in output
+    assert "--yes" in output
+
+
+@patch("desk.commands.kill.terminate_instance")
+@patch("desk.commands.kill.resolve_workstation")
+def test_desk_kill_with_yes_flag(mock_resolve: object, mock_terminate: object) -> None:
+    """desk kill --yes terminates without prompting."""
+    mock_resolve.return_value = "i-abc123"
+    mock_terminate.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["kill", "max", "--yes"])
+    assert result.exit_code == 0
+    mock_resolve.assert_called_once_with(
+        "max", region=None, profile=None, states=["pending", "running", "stopping", "stopped"]
+    )
+    mock_terminate.assert_called_once_with("i-abc123", region=None, profile=None)
+    assert "Terminated" in result.output
+
+
+@patch("desk.commands.kill.terminate_instance")
+@patch("desk.commands.kill.resolve_workstation")
+def test_desk_kill_confirms_before_terminate(mock_resolve: object, mock_terminate: object) -> None:
+    """desk kill prompts for confirmation."""
+    mock_resolve.return_value = "i-abc123"
+    mock_terminate.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["kill", "max"], input="y\n")
+    assert result.exit_code == 0
+    mock_terminate.assert_called_once()
+    assert "Terminate" in result.output
+
+
+@patch("desk.commands.kill.terminate_instance")
+@patch("desk.commands.kill.resolve_workstation")
+def test_desk_kill_aborts_on_no(mock_resolve: object, mock_terminate: object) -> None:
+    """desk kill aborts when user declines confirmation."""
+    mock_resolve.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["kill", "max"], input="n\n")
+    assert result.exit_code != 0
+    mock_terminate.assert_not_called()
+
+
+@patch("desk.commands.kill.resolve_workstation")
+def test_desk_kill_not_found(mock_resolve: object) -> None:
+    """desk kill with unknown name shows error."""
+    mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["kill", "unknown", "--yes"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
 def test_desk_start_help() -> None:
     """desk start --help succeeds."""
     result = _run_desk("start", "--help")

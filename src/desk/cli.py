@@ -5,7 +5,7 @@ import sys
 import click
 
 from desk import __version__
-from desk.commands import connect, create, key, list_, start, stop, up
+from desk.commands import connect, create, key, kill, list_, start, stop, up
 
 
 @click.group()
@@ -19,6 +19,7 @@ cli.add_command(up.up, "up")
 cli.add_command(connect.connect, "connect")
 cli.add_command(create.create, "create")
 cli.add_command(key.key_group, "key")
+cli.add_command(kill.kill, "kill")
 cli.add_command(list_.list_cmd, "list")
 cli.add_command(start.start, "start")
 cli.add_command(stop.stop, "stop")

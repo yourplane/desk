@@ -20,6 +20,7 @@ from desk.aws import (
     run_instance,
     start_instance,
     stop_instance,
+    terminate_instance,
 )
 
 
@@ -418,3 +419,15 @@ def test_get_instance_state_not_found(mock_session: MagicMock) -> None:
     result = get_instance_state("i-nonexistent")
 
     assert result is None
+
+
+@patch("desk.aws.boto3.Session")
+def test_terminate_instance_success(mock_session: MagicMock) -> None:
+    """terminate_instance calls terminate_instances and returns instance ID."""
+    mock_ec2 = MagicMock()
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = terminate_instance("i-abc123")
+
+    assert result == "i-abc123"
+    mock_ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-abc123"])
