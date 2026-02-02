@@ -210,12 +210,17 @@ def resolve_workstation(
     name_or_id: str,
     region: str | None = None,
     profile: str | None = None,
+    *,
+    states: list[str] | None = None,
 ) -> str:
     """Resolve workstation name or instance ID to instance ID. Raises ValueError if not found.
 
-    When resolving by name, considers running and pending instances (pending =
-    just created, not yet booted). Errors if multiple instances share the same name.
+    When resolving by name, considers instances in the given states (default:
+    running and pending). Errors if multiple instances share the same name.
     """
+    if states is None:
+        states = ["running", "pending"]
+
     if name_or_id.startswith("i-"):
         workstations = list_workstations(region=region, profile=profile)
         for w in workstations:
@@ -223,11 +228,11 @@ def resolve_workstation(
                 return w.instance_id
         raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
 
-    # Resolve by name: running or pending (pending = just created, not yet running)
-    running = list_workstations(
-        region=region, profile=profile, states=["running", "pending"]
+    # Resolve by name with given states filter
+    matching_state = list_workstations(
+        region=region, profile=profile, states=states
     )
-    matches = [w for w in running if w.name == name_or_id]
+    matches = [w for w in matching_state if w.name == name_or_id]
     if len(matches) > 1:
         ids = ", ".join(m.instance_id for m in matches)
         raise ValueError(
@@ -359,4 +364,16 @@ def stop_instance(
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
     ec2.stop_instances(InstanceIds=[instance_id])
+    return instance_id
+
+
+def start_instance(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Start a stopped EC2 instance. Returns the instance ID."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.start_instances(InstanceIds=[instance_id])
     return instance_id

@@ -582,6 +582,56 @@ def test_desk_stop_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
+def test_desk_start_help() -> None:
+    """desk start --help succeeds."""
+    result = _run_desk("start", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Start a stopped workstation instance" in output
+    assert "WORKSTATION" in output
+
+
+@patch("desk.commands.start.start_instance")
+@patch("desk.commands.start.resolve_workstation")
+def test_desk_start_by_name(mock_resolve: object, mock_start: object) -> None:
+    """desk start resolves name and starts instance."""
+    mock_resolve.return_value = "i-abc123"
+    mock_start.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["start", "max"])
+    assert result.exit_code == 0
+    mock_resolve.assert_called_once_with(
+        "max", region=None, profile=None, states=["stopped"]
+    )
+    mock_start.assert_called_once_with("i-abc123", region=None, profile=None)
+    assert "Started" in result.output
+
+
+@patch("desk.commands.start.start_instance")
+@patch("desk.commands.start.resolve_workstation")
+def test_desk_start_by_instance_id(mock_resolve: object, mock_start: object) -> None:
+    """desk start with instance ID starts the instance."""
+    mock_resolve.return_value = "i-abc123"
+    mock_start.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["start", "i-abc123"])
+    assert result.exit_code == 0
+    mock_resolve.assert_called_once_with(
+        "i-abc123", region=None, profile=None, states=["stopped"]
+    )
+    mock_start.assert_called_once_with("i-abc123", region=None, profile=None)
+
+
+@patch("desk.commands.start.resolve_workstation")
+def test_desk_start_not_found(mock_resolve: object) -> None:
+    """desk start with unknown name shows error."""
+    mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["start", "unknown"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
 @patch("desk.commands.list_.list_workstations")
 def test_desk_list_table_output(mock_list: object) -> None:
     """desk list shows table of workstations."""

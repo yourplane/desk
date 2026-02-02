@@ -17,6 +17,7 @@ from desk.aws import (
     list_workstations,
     resolve_workstation,
     run_instance,
+    start_instance,
     stop_instance,
 )
 
@@ -361,3 +362,25 @@ def test_stop_instance_success(mock_session: MagicMock) -> None:
 
     assert result == "i-abc123"
     mock_ec2.stop_instances.assert_called_once_with(InstanceIds=["i-abc123"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_start_instance_success(mock_session: MagicMock) -> None:
+    """start_instance calls start_instances and returns instance ID."""
+    mock_ec2 = MagicMock()
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = start_instance("i-abc123")
+
+    assert result == "i-abc123"
+    mock_ec2.start_instances.assert_called_once_with(InstanceIds=["i-abc123"])
+
+
+def test_resolve_workstation_by_name_with_stopped_states() -> None:
+    """resolve_workstation with states=['stopped'] finds stopped instances."""
+    with patch("desk.aws.list_workstations") as mock_list:
+        mock_list.return_value = [
+            Workstation(instance_id="i-abc123", name="main", state="stopped"),
+        ]
+        result = resolve_workstation("main", states=["stopped"])
+        assert result == "i-abc123"
