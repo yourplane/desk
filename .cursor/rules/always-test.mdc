@@ -26,6 +26,10 @@ tox run
 - After modifying `pyproject.toml` (deps, scripts, tox config)
 - Before considering a change complete
 
+## Git Workflow
+
+**Do not commit or push unless explicitly asked.** Wait for the user to tell you to commit, push, or both. Don't automatically combine commits with implementation work.
+
 ## Note to Self
 
 If you are an AI agent working on this project: run `tox run -e py` after every change and fix any failing tests before finishing.
