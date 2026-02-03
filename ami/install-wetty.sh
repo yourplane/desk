@@ -5,6 +5,9 @@
 #
 # Usage: ./install-wetty.sh
 #
+# This script is idempotent - safe to run multiple times.
+# It will skip steps that have already been completed.
+#
 
 set -e
 
@@ -42,7 +45,7 @@ fi
 # Install nvm if not present
 install_nvm() {
     if [ -d "$HOME/.nvm" ]; then
-        info "nvm already installed"
+        info "nvm already installed, skipping"
     else
         info "Installing nvm..."
         curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
@@ -55,9 +58,15 @@ install_nvm() {
 
 # Install Node.js via nvm
 install_node() {
-    info "Installing Node.js $NODE_VERSION via nvm..."
-    nvm install "$NODE_VERSION"
-    nvm use "$NODE_VERSION"
+    # Check if the required Node.js version is already installed
+    if nvm ls "$NODE_VERSION" &>/dev/null && nvm ls "$NODE_VERSION" | grep -q "v$NODE_VERSION"; then
+        info "Node.js $NODE_VERSION already installed, skipping"
+        nvm use "$NODE_VERSION"
+    else
+        info "Installing Node.js $NODE_VERSION via nvm..."
+        nvm install "$NODE_VERSION"
+        nvm use "$NODE_VERSION"
+    fi
     
     echo ""
     info "Node.js version: $(node --version)"
@@ -66,7 +75,20 @@ install_node() {
 
 # Install wetty
 install_wetty() {
-    info "Installing wetty@$WETTY_VERSION..."
+    # Check if wetty is already installed at the correct version
+    if command -v wetty &>/dev/null; then
+        local installed_version
+        installed_version=$(npm list -g wetty 2>/dev/null | grep wetty@ | sed 's/.*wetty@//' || echo "")
+        if [ "$installed_version" = "$WETTY_VERSION" ]; then
+            info "wetty@$WETTY_VERSION already installed, skipping"
+            return
+        else
+            info "Updating wetty from $installed_version to $WETTY_VERSION..."
+        fi
+    else
+        info "Installing wetty@$WETTY_VERSION..."
+    fi
+    
     npm install -g "wetty@$WETTY_VERSION"
     
     # Verify installation
@@ -80,16 +102,26 @@ install_wetty() {
 # Setup SSH key for passwordless auth
 setup_ssh_key() {
     if [ -f "$SSH_KEY_PATH" ]; then
-        info "SSH key already exists at $SSH_KEY_PATH"
+        info "SSH key already exists at $SSH_KEY_PATH, skipping generation"
     else
         info "Generating SSH key for wetty..."
         ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "wetty-key"
-        
-        # Add to authorized_keys
-        cat "${SSH_KEY_PATH}.pub" >> "$HOME/.ssh/authorized_keys"
-        chmod 600 "$HOME/.ssh/authorized_keys"
-        
-        info "SSH key generated and added to authorized_keys"
+        info "SSH key generated"
+    fi
+    
+    # Ensure authorized_keys exists
+    mkdir -p "$HOME/.ssh"
+    touch "$HOME/.ssh/authorized_keys"
+    chmod 600 "$HOME/.ssh/authorized_keys"
+    
+    # Add public key to authorized_keys if not already present
+    local pubkey
+    pubkey=$(cat "${SSH_KEY_PATH}.pub")
+    if grep -qF "$pubkey" "$HOME/.ssh/authorized_keys" 2>/dev/null; then
+        info "SSH public key already in authorized_keys, skipping"
+    else
+        echo "$pubkey" >> "$HOME/.ssh/authorized_keys"
+        info "SSH public key added to authorized_keys"
     fi
     
     # Test SSH connection
@@ -115,15 +147,15 @@ build_wetty_command() {
     fi
 }
 
-# Create systemd service (optional)
+# Create systemd service for auto-start
 create_systemd_service() {
     local service_file="/etc/systemd/system/wetty.service"
     local nvm_node="$HOME/.nvm/versions/node/v$(nvm version "$NODE_VERSION" | tr -d 'v')/bin"
     local wetty_cmd=$(build_wetty_command "$nvm_node")
     
-    info "Creating systemd service..."
-    
-    sudo tee "$service_file" > /dev/null << EOF
+    # Build the expected service content
+    local expected_content
+    expected_content=$(cat << EOF
 [Unit]
 Description=Wetty Web Terminal
 After=network.target
@@ -139,59 +171,91 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-
-    sudo systemctl daemon-reload
-    info "Systemd service created at $service_file"
-    echo ""
-    info "To enable and start wetty service:"
-    echo "  sudo systemctl enable wetty"
-    echo "  sudo systemctl start wetty"
+)
+    
+    # Check if service file already exists with correct content
+    if [ -f "$service_file" ]; then
+        local current_content
+        current_content=$(sudo cat "$service_file" 2>/dev/null || echo "")
+        if [ "$current_content" = "$expected_content" ]; then
+            info "Systemd service already configured correctly, skipping"
+        else
+            info "Updating systemd service..."
+            echo "$expected_content" | sudo tee "$service_file" > /dev/null
+            sudo systemctl daemon-reload
+            info "Systemd service updated"
+        fi
+    else
+        info "Creating systemd service..."
+        echo "$expected_content" | sudo tee "$service_file" > /dev/null
+        sudo systemctl daemon-reload
+        info "Systemd service created at $service_file"
+    fi
 }
 
-# Print manual start instructions
+# Enable wetty service for auto-start on boot
+enable_systemd_service() {
+    if systemctl is-enabled wetty &>/dev/null; then
+        info "Wetty service already enabled for auto-start, skipping"
+    else
+        info "Enabling wetty service for auto-start..."
+        sudo systemctl enable wetty
+        info "Wetty service enabled"
+    fi
+}
+
+# Start wetty (via systemd if available, otherwise in background)
+start_wetty() {
+    # Check if wetty is already running
+    if systemctl is-active wetty &>/dev/null; then
+        info "Wetty is already running via systemd"
+        return
+    fi
+    
+    if pgrep -f "wetty.*--port $WETTY_PORT" &>/dev/null; then
+        info "Wetty is already running in background"
+        return
+    fi
+    
+    # Start via systemd
+    info "Starting wetty via systemd..."
+    sudo systemctl start wetty
+    
+    # Verify it started
+    sleep 2
+    if systemctl is-active wetty &>/dev/null; then
+        info "Wetty started successfully"
+    else
+        warn "Failed to start wetty via systemd, check: sudo systemctl status wetty"
+    fi
+}
+
+# Print status and access instructions
 print_instructions() {
     echo ""
     echo "=========================================="
-    echo -e "${GREEN}Installation Complete!${NC}"
+    echo -e "${GREEN}Wetty Setup Complete!${NC}"
     echo "=========================================="
     echo ""
     
     if [ "$TUNNEL_MODE" = "true" ]; then
         echo "Mode: TUNNEL (no authentication, localhost only)"
-        echo ""
-        echo "To start wetty manually:"
-        echo ""
-        echo "  # Load nvm first"
-        echo "  export NVM_DIR=\"\$HOME/.nvm\""
-        echo "  [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\""
-        echo ""
-        echo "  # Start wetty (tunnel mode - SSH key auth, no login prompt)"
-        echo "  wetty --host 127.0.0.1 --port $WETTY_PORT --base $WETTY_BASE --ssh-host $SSH_HOST --ssh-user $SSH_USER --ssh-key $SSH_KEY_PATH --ssh-auth publickey"
-        echo ""
-        echo "Or run in background:"
-        echo "  nohup wetty --host 127.0.0.1 --port $WETTY_PORT --base $WETTY_BASE --ssh-host $SSH_HOST --ssh-user $SSH_USER --ssh-key $SSH_KEY_PATH --ssh-auth publickey > /tmp/wetty.log 2>&1 &"
-        echo ""
-        echo "Connect via SSH tunnel from your local machine:"
-        echo "  ssh -L $WETTY_PORT:127.0.0.1:$WETTY_PORT user@your-server"
-        echo ""
-        echo "Then access wetty at: http://localhost:$WETTY_PORT$WETTY_BASE"
     else
         echo "Mode: SSH (key-based authentication)"
-        echo ""
-        echo "To start wetty manually:"
-        echo ""
-        echo "  # Load nvm first"
-        echo "  export NVM_DIR=\"\$HOME/.nvm\""
-        echo "  [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\""
-        echo ""
-        echo "  # Start wetty"
-        echo "  wetty --host 127.0.0.1 --port $WETTY_PORT --base $WETTY_BASE --ssh-host $SSH_HOST --ssh-user $SSH_USER --ssh-key $SSH_KEY_PATH"
-        echo ""
-        echo "Or run in background:"
-        echo "  nohup wetty --host 127.0.0.1 --port $WETTY_PORT --base $WETTY_BASE --ssh-host $SSH_HOST --ssh-user $SSH_USER --ssh-key $SSH_KEY_PATH > /tmp/wetty.log 2>&1 &"
-        echo ""
-        echo "Access wetty at: http://localhost:$WETTY_PORT$WETTY_BASE"
     fi
+    echo ""
+    echo "Wetty is configured to start automatically on boot."
+    echo ""
+    echo "Service management:"
+    echo "  sudo systemctl status wetty   # Check status"
+    echo "  sudo systemctl restart wetty  # Restart"
+    echo "  sudo systemctl stop wetty     # Stop"
+    echo "  journalctl -u wetty -f        # View logs"
+    echo ""
+    echo "Connect via SSH tunnel from your local machine:"
+    echo "  ssh -L $WETTY_PORT:127.0.0.1:$WETTY_PORT user@your-server"
+    echo ""
+    echo "Then access wetty at: http://localhost:$WETTY_PORT$WETTY_BASE"
     echo ""
 }
 
@@ -216,11 +280,9 @@ main() {
     setup_ssh_key
     
     echo ""
-    read -p "Create systemd service for auto-start? [y/N] " -n 1 -r
-    echo ""
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        create_systemd_service
-    fi
+    create_systemd_service
+    enable_systemd_service
+    start_wetty
     
     print_instructions
 }
