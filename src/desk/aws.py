@@ -428,3 +428,82 @@ def wait_for_instance_state(
             return True
         time.sleep(poll_interval)
     return False
+
+
+@dataclass
+class CommandResult:
+    """Result of an SSM command invocation."""
+
+    command_id: str
+    status: str
+    stdout: str
+    stderr: str
+    exit_code: int | None
+
+
+def send_ssm_command(
+    instance_id: str,
+    command: str,
+    region: str | None = None,
+    profile: str | None = None,
+    timeout_seconds: int = 3600,
+) -> str:
+    """
+    Send a command to an instance via SSM. Returns the command ID.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+
+    response = ssm.send_command(
+        InstanceIds=[instance_id],
+        DocumentName="AWS-RunShellScript",
+        Parameters={"commands": [command]},
+        TimeoutSeconds=timeout_seconds,
+    )
+
+    command_id = response["Command"]["CommandId"]
+    log.debug("send_ssm_command instance_id=%s command_id=%s", instance_id, command_id)
+    return command_id
+
+
+def get_command_invocation(
+    command_id: str,
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> CommandResult:
+    """
+    Get the status and output of an SSM command invocation.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+
+    response = ssm.get_command_invocation(
+        CommandId=command_id,
+        InstanceId=instance_id,
+    )
+
+    status = response["Status"]
+    stdout = response.get("StandardOutputContent", "")
+    stderr = response.get("StandardErrorContent", "")
+
+    # ResponseCode is only present when command has finished
+    exit_code = None
+    if "ResponseCode" in response:
+        exit_code = response["ResponseCode"]
+
+    log.debug(
+        "get_command_invocation command_id=%s instance_id=%s status=%s exit_code=%s",
+        command_id,
+        instance_id,
+        status,
+        exit_code,
+    )
+
+    return CommandResult(
+        command_id=command_id,
+        status=status,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+    )

@@ -864,3 +864,255 @@ def test_desk_list_table_output(mock_list: object) -> None:
     assert "i-abc123" in result.output
     assert "max" in result.output
     assert "running" in result.output
+
+
+def test_desk_run_help() -> None:
+    """desk run --help succeeds."""
+    result = _run_desk("run", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Run a script on a workstation via SSM" in output
+    assert "SCRIPT" in output
+    assert "--follow" in output
+    assert "--workstation" in output
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_sends_command(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+) -> None:
+    """desk run sends command via SSM and returns when started."""
+    from desk.aws import CommandResult
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+    mock_get_invocation.return_value = CommandResult(
+        command_id="cmd-12345",
+        status="InProgress",
+        stdout="",
+        stderr="",
+        exit_code=None,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "echo hello", "-w", "main"])
+
+    assert result.exit_code == 0
+    mock_resolve.assert_called_once_with("main", region=None, profile=None)
+    mock_send.assert_called_once()
+    assert "echo hello" in mock_send.call_args[0]
+    assert "Command is running" in result.output
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_follow_tails_output(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+) -> None:
+    """desk run --follow tails output until completion."""
+    from desk.aws import CommandResult
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+
+    # Simulate output appearing over time
+    mock_get_invocation.side_effect = [
+        CommandResult(
+            command_id="cmd-12345",
+            status="InProgress",
+            stdout="line1\n",
+            stderr="",
+            exit_code=None,
+        ),
+        CommandResult(
+            command_id="cmd-12345",
+            status="InProgress",
+            stdout="line1\nline2\n",
+            stderr="",
+            exit_code=None,
+        ),
+        CommandResult(
+            command_id="cmd-12345",
+            status="Success",
+            stdout="line1\nline2\nline3\n",
+            stderr="",
+            exit_code=0,
+        ),
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "echo hello", "--follow"])
+
+    assert result.exit_code == 0
+    # Output should contain the streamed lines
+    assert "line1" in result.output
+    assert "line2" in result.output
+    assert "line3" in result.output
+    assert "completed successfully" in result.output
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_follow_shows_stderr(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+) -> None:
+    """desk run --follow shows stderr output."""
+    from desk.aws import CommandResult
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+
+    mock_get_invocation.side_effect = [
+        CommandResult(
+            command_id="cmd-12345",
+            status="InProgress",
+            stdout="",
+            stderr="error output\n",
+            exit_code=None,
+        ),
+        CommandResult(
+            command_id="cmd-12345",
+            status="Failed",
+            stdout="",
+            stderr="error output\n",
+            exit_code=1,
+        ),
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "bad-command", "--follow"])
+
+    assert result.exit_code == 1
+    # stderr output should be in the combined output
+    assert "error output" in result.output
+
+
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_not_ssm_ready_no_wait(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+) -> None:
+    """desk run fails when SSM not ready and --no-wait specified."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = False
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "echo hello", "--no-wait"])
+
+    assert result.exit_code != 0
+    assert "not SSM-ready" in result.output
+
+
+@patch("desk.commands.run.wait_for_ssm_ready")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_waits_for_ssm(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_wait: object,
+) -> None:
+    """desk run waits for SSM when not ready and wait=True."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = False
+    mock_wait.return_value = False  # Timeout
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "echo hello", "--wait-timeout", "5"])
+
+    assert result.exit_code != 0
+    mock_wait.assert_called_once()
+    assert "did not become SSM-ready" in result.output
+
+
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_workstation_not_found(mock_resolve: object) -> None:
+    """desk run fails when workstation not found."""
+    mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "echo hello", "-w", "unknown"])
+
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_immediate_completion(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+) -> None:
+    """desk run handles immediate command completion."""
+    from desk.aws import CommandResult
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+    mock_get_invocation.return_value = CommandResult(
+        command_id="cmd-12345",
+        status="Success",
+        stdout="done\n",
+        stderr="",
+        exit_code=0,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "echo done"])
+
+    assert result.exit_code == 0
+    assert "done" in result.output
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_command_failure_exits_nonzero(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+) -> None:
+    """desk run exits with nonzero code on command failure."""
+    from desk.aws import CommandResult
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+    mock_get_invocation.return_value = CommandResult(
+        command_id="cmd-12345",
+        status="Failed",
+        stdout="",
+        stderr="error\n",
+        exit_code=1,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "exit 1"])
+
+    assert result.exit_code != 0
+    assert "failed" in result.output.lower()
