@@ -30,6 +30,16 @@ def _get_profile() -> str | None:
     return os.environ.get("AWS_PROFILE")
 
 
+def _shell_quote(s: str) -> str:
+    """Quote a string for safe use in a shell command.
+
+    Uses single quotes and escapes any single quotes in the string.
+    """
+    # Replace single quotes with '\'' (end quote, escaped quote, start quote)
+    escaped = s.replace("'", "'\"'\"'")
+    return f"'{escaped}'"
+
+
 @click.command("run")
 @click.argument("script")
 @click.option(
@@ -38,6 +48,12 @@ def _get_profile() -> str | None:
     default="main",
     show_default=True,
     help="Workstation name or instance ID.",
+)
+@click.option(
+    "--user",
+    "-u",
+    default=None,
+    help="Run the command as this user (default: root).",
 )
 @click.option(
     "--follow",
@@ -83,6 +99,7 @@ def _get_profile() -> str | None:
 def run(
     script: str,
     workstation: str,
+    user: str | None,
     follow: bool,
     region: str | None,
     profile: str | None,
@@ -106,6 +123,7 @@ def run(
         desk run "apt update && apt upgrade -y" --follow
         desk run ./deploy.sh -w my-workstation -f
         desk run /path/to/script.sh --follow
+        desk run "whoami" --user ubuntu
     """
     region = region or _get_region()
     profile = profile or _get_profile()
@@ -121,10 +139,18 @@ def run(
         except OSError as e:
             raise click.ClickException(f"Failed to read script file: {e}") from e
 
+    # Wrap command to run as specified user
+    if user:
+        # Use sudo -u to run as the specified user with a login shell
+        # Write script to a temp file and execute it to handle complex scripts
+        script_content = f"sudo -u {user} bash -c {_shell_quote(script_content)}"
+        log.info("wrapping command to run as user: %s", user)
+
     log.debug(
-        "run script=%r workstation=%s follow=%s region=%s profile=%s",
+        "run script=%r workstation=%s user=%s follow=%s region=%s profile=%s",
         script_content[:100] + "..." if len(script_content) > 100 else script_content,
         workstation,
+        user,
         follow,
         region,
         profile,

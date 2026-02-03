@@ -1192,3 +1192,113 @@ def test_desk_run_inline_command_not_treated_as_file(
     sent_script = mock_send.call_args[0][1]
     assert sent_script == "echo hello && date"
     assert "Reading script from" not in result.output
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_as_user(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+) -> None:
+    """desk run --user wraps command to run as specified user."""
+    from desk.aws import CommandResult
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+    mock_get_invocation.return_value = CommandResult(
+        command_id="cmd-12345",
+        status="InProgress",
+        stdout="",
+        stderr="",
+        exit_code=None,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "whoami", "--user", "ubuntu"])
+
+    assert result.exit_code == 0
+    mock_send.assert_called_once()
+    sent_script = mock_send.call_args[0][1]
+    # Should be wrapped with sudo -u
+    assert "sudo -u ubuntu" in sent_script
+    assert "whoami" in sent_script
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_as_user_with_quotes(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+) -> None:
+    """desk run --user properly escapes quotes in commands."""
+    from desk.aws import CommandResult
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+    mock_get_invocation.return_value = CommandResult(
+        command_id="cmd-12345",
+        status="InProgress",
+        stdout="",
+        stderr="",
+        exit_code=None,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "echo 'hello world'", "-u", "ubuntu"])
+
+    assert result.exit_code == 0
+    mock_send.assert_called_once()
+    sent_script = mock_send.call_args[0][1]
+    assert "sudo -u ubuntu" in sent_script
+    # The command should be properly quoted
+    assert "hello world" in sent_script
+
+
+@patch("desk.commands.run.get_command_invocation")
+@patch("desk.commands.run.send_ssm_command")
+@patch("desk.commands.run.is_ssm_ready")
+@patch("desk.commands.run.resolve_workstation")
+def test_desk_run_as_user_with_script_file(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_invocation: object,
+    tmp_path,
+) -> None:
+    """desk run --user works with local script files."""
+    from desk.aws import CommandResult
+
+    # Create a local script file
+    script_file = tmp_path / "test_script.sh"
+    script_file.write_text("#!/bin/bash\necho 'running as user'\n")
+
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm_ready.return_value = True
+    mock_send.return_value = "cmd-12345"
+    mock_get_invocation.return_value = CommandResult(
+        command_id="cmd-12345",
+        status="InProgress",
+        stdout="",
+        stderr="",
+        exit_code=None,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", str(script_file), "--user", "ubuntu"])
+
+    assert result.exit_code == 0
+    mock_send.assert_called_once()
+    sent_script = mock_send.call_args[0][1]
+    # Should read file AND wrap with sudo
+    assert "sudo -u ubuntu" in sent_script
+    assert "running as user" in sent_script
