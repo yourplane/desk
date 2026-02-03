@@ -93,6 +93,8 @@ def run(
     """Run a script on a workstation via SSM.
 
     SCRIPT is the command or script to execute on the remote workstation.
+    If SCRIPT is a path to a local file, its contents are read and executed
+    on the remote workstation.
 
     By default, returns as soon as the command starts executing.
     Use --follow to tail the output until completion.
@@ -102,14 +104,26 @@ def run(
     \b
         desk run "echo hello"
         desk run "apt update && apt upgrade -y" --follow
-        desk run "./deploy.sh" -w my-workstation -f
+        desk run ./deploy.sh -w my-workstation -f
+        desk run /path/to/script.sh --follow
     """
     region = region or _get_region()
     profile = profile or _get_profile()
 
+    # Check if script is a local file path
+    script_content = script
+    if os.path.isfile(script):
+        log.info("reading script from local file: %s", script)
+        try:
+            with open(script) as f:
+                script_content = f.read()
+            click.echo(f"Reading script from {script}", err=True)
+        except OSError as e:
+            raise click.ClickException(f"Failed to read script file: {e}") from e
+
     log.debug(
         "run script=%r workstation=%s follow=%s region=%s profile=%s",
-        script,
+        script_content[:100] + "..." if len(script_content) > 100 else script_content,
         workstation,
         follow,
         region,
@@ -149,7 +163,7 @@ def run(
     try:
         command_id = send_ssm_command(
             instance_id,
-            script,
+            script_content,
             region=region,
             profile=profile,
             timeout_seconds=command_timeout,
