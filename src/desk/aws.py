@@ -469,6 +469,107 @@ def send_ssm_command(
     return command_id
 
 
+@dataclass
+class AmiInfo:
+    """Information about an AMI."""
+
+    image_id: str
+    name: str
+    state: str
+    source_instance_id: str | None = None
+
+
+def create_ami(
+    instance_id: str,
+    name: str,
+    description: str | None = None,
+    no_reboot: bool = False,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """
+    Create an AMI from an EC2 instance. Returns the AMI ID.
+
+    Args:
+        instance_id: The instance to create an AMI from
+        name: Name for the AMI
+        description: Optional description for the AMI
+        no_reboot: If True, don't reboot the instance before creating the image
+        region: AWS region
+        profile: AWS profile
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+
+    create_kw: dict = {
+        "InstanceId": instance_id,
+        "Name": name,
+        "TagSpecifications": [
+            {
+                "ResourceType": "image",
+                "Tags": [
+                    {"Key": "Name", "Value": name},
+                    {"Key": "desk:managed", "Value": "true"},
+                    {"Key": "desk:source-instance", "Value": instance_id},
+                ],
+            },
+        ],
+    }
+    if description:
+        create_kw["Description"] = description
+    if no_reboot:
+        create_kw["NoReboot"] = True
+
+    response = ec2.create_image(**create_kw)
+    image_id = response["ImageId"]
+    log.debug("create_ami instance_id=%s image_id=%s name=%s", instance_id, image_id, name)
+    return image_id
+
+
+def get_ami_state(
+    image_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Get the current state of an AMI. Returns None if not found."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    try:
+        response = ec2.describe_images(ImageIds=[image_id])
+        images = response.get("Images", [])
+        if not images:
+            return None
+        return images[0]["State"]
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "InvalidAMIID.NotFound":
+            return None
+        raise
+
+
+def wait_for_ami_available(
+    image_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+    timeout: int = 1200,
+    poll_interval: float = 10.0,
+) -> bool:
+    """
+    Wait for an AMI to become available. Returns True if available, False if timeout.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = get_ami_state(image_id, region=region, profile=profile)
+        log.debug("wait_for_ami_available image_id=%s state=%s", image_id, state)
+        if state == "available":
+            return True
+        if state in ("failed", "error", "deregistered"):
+            return False
+        time.sleep(poll_interval)
+    return False
+
+
 def get_command_invocation(
     command_id: str,
     instance_id: str,

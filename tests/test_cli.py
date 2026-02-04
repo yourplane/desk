@@ -471,6 +471,194 @@ def test_desk_key_delete_force_bypasses_in_use_check(
     mock_delete.assert_called_once()
 
 
+def test_desk_ami_help() -> None:
+    """desk ami --help succeeds."""
+    result = _run_desk("ami", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Manage AMIs" in output
+    assert "create" in output
+
+
+def test_desk_ami_create_help() -> None:
+    """desk ami create --help succeeds."""
+    result = _run_desk("ami", "create", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Create an AMI from a workstation" in output
+    assert "WORKSTATION" in output
+    assert "--name" in output
+    assert "--no-reboot" in output
+    assert "--wait" in output
+
+
+@patch("desk.commands.ami.get_ami_state")
+@patch("desk.commands.ami.create_ami")
+@patch("desk.commands.ami.get_instance_state")
+@patch("desk.commands.ami.resolve_workstation")
+def test_desk_ami_create_success(
+    mock_resolve: object,
+    mock_get_state: object,
+    mock_create_ami: object,
+    mock_ami_state: object,
+) -> None:
+    """desk ami create creates AMI and waits for it."""
+    mock_resolve.return_value = "i-abc123"
+    mock_get_state.return_value = "running"
+    mock_create_ami.return_value = "ami-12345"
+    mock_ami_state.side_effect = ["pending", "available"]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "create", "main", "--name", "my-ami"])
+
+    assert result.exit_code == 0
+    mock_resolve.assert_called_once_with(
+        "main", region=None, profile=None,
+        states=["pending", "running", "stopping", "stopped"]
+    )
+    mock_create_ami.assert_called_once_with(
+        instance_id="i-abc123",
+        name="my-ami",
+        description=None,
+        no_reboot=False,
+        region=None,
+        profile=None,
+    )
+    assert "ami-12345" in result.output
+    assert "created successfully" in result.output
+
+
+@patch("desk.commands.ami.get_ami_state")
+@patch("desk.commands.ami.create_ami")
+@patch("desk.commands.ami.get_instance_state")
+@patch("desk.commands.ami.resolve_workstation")
+def test_desk_ami_create_no_wait(
+    mock_resolve: object,
+    mock_get_state: object,
+    mock_create_ami: object,
+    mock_ami_state: object,
+) -> None:
+    """desk ami create --no-wait returns immediately."""
+    mock_resolve.return_value = "i-abc123"
+    mock_get_state.return_value = "stopped"
+    mock_create_ami.return_value = "ami-12345"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "create", "main", "--no-wait"])
+
+    assert result.exit_code == 0
+    mock_create_ami.assert_called_once()
+    mock_ami_state.assert_not_called()
+    assert "being created in the background" in result.output
+
+
+@patch("desk.commands.ami.create_ami")
+@patch("desk.commands.ami.get_instance_state")
+@patch("desk.commands.ami.resolve_workstation")
+def test_desk_ami_create_with_no_reboot(
+    mock_resolve: object,
+    mock_get_state: object,
+    mock_create_ami: object,
+) -> None:
+    """desk ami create --no-reboot passes no_reboot flag."""
+    mock_resolve.return_value = "i-abc123"
+    mock_get_state.return_value = "running"
+    mock_create_ami.return_value = "ami-12345"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "create", "main", "--no-reboot", "--no-wait"])
+
+    assert result.exit_code == 0
+    mock_create_ami.assert_called_once()
+    call_kwargs = mock_create_ami.call_args[1]
+    assert call_kwargs["no_reboot"] is True
+    assert "inconsistent state" in result.output
+
+
+@patch("desk.commands.ami.resolve_workstation")
+def test_desk_ami_create_workstation_not_found(mock_resolve: object) -> None:
+    """desk ami create fails when workstation not found."""
+    mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "create", "unknown"])
+
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+@patch("desk.commands.ami.wait_for_instance_state")
+@patch("desk.commands.ami.get_instance_state")
+@patch("desk.commands.ami.resolve_workstation")
+def test_desk_ami_create_waits_for_stopping_instance(
+    mock_resolve: object,
+    mock_get_state: object,
+    mock_wait_state: object,
+) -> None:
+    """desk ami create waits for stopping instance to stop."""
+    mock_resolve.return_value = "i-abc123"
+    mock_get_state.return_value = "stopping"
+    mock_wait_state.return_value = False  # Timeout
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "create", "main"])
+
+    assert result.exit_code != 0
+    assert "Timed out" in result.output
+    mock_wait_state.assert_called_once()
+
+
+@patch("desk.commands.ami.get_ami_state")
+@patch("desk.commands.ami.create_ami")
+@patch("desk.commands.ami.get_instance_state")
+@patch("desk.commands.ami.resolve_workstation")
+def test_desk_ami_create_generates_default_name(
+    mock_resolve: object,
+    mock_get_state: object,
+    mock_create_ami: object,
+    mock_ami_state: object,
+) -> None:
+    """desk ami create generates timestamp-based name when not provided."""
+    mock_resolve.return_value = "i-abc123"
+    mock_get_state.return_value = "stopped"
+    mock_create_ami.return_value = "ami-12345"
+    mock_ami_state.return_value = "available"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "create", "main"])
+
+    assert result.exit_code == 0
+    mock_create_ami.assert_called_once()
+    # Check that name was generated with workstation name and timestamp
+    call_kwargs = mock_create_ami.call_args[1]
+    assert call_kwargs["name"].startswith("main-")
+    # Name should have format main-YYYYMMDD-HHMMSS
+    assert len(call_kwargs["name"]) > len("main-")
+
+
+@patch("desk.commands.ami.get_ami_state")
+@patch("desk.commands.ami.create_ami")
+@patch("desk.commands.ami.get_instance_state")
+@patch("desk.commands.ami.resolve_workstation")
+def test_desk_ami_create_fails_on_ami_failure(
+    mock_resolve: object,
+    mock_get_state: object,
+    mock_create_ami: object,
+    mock_ami_state: object,
+) -> None:
+    """desk ami create fails when AMI creation fails."""
+    mock_resolve.return_value = "i-abc123"
+    mock_get_state.return_value = "stopped"
+    mock_create_ami.return_value = "ami-12345"
+    mock_ami_state.return_value = "failed"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "create", "main"])
+
+    assert result.exit_code != 0
+    assert "failed" in result.output
+
+
 def test_desk_shows_friendly_error_without_traceback() -> None:
     """Unexpected exceptions show Error: message, not full traceback via main()."""
     from io import StringIO

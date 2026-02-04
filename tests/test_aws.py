@@ -8,8 +8,10 @@ from botocore.exceptions import ClientError
 from desk.aws import (
     DeskVpcOutputs,
     Workstation,
+    create_ami,
     create_key_pair,
     delete_key_pair,
+    get_ami_state,
     get_desk_vpc_outputs,
     get_instance_state,
     get_running_workstations_using_key,
@@ -430,3 +432,85 @@ def test_terminate_instance_success(mock_session: MagicMock) -> None:
 
     assert result == "i-abc123"
     mock_ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-abc123"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_create_ami_success(mock_session: MagicMock) -> None:
+    """create_ami returns AMI ID."""
+    mock_ec2 = MagicMock()
+    mock_ec2.create_image.return_value = {"ImageId": "ami-12345"}
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = create_ami(
+        instance_id="i-abc123",
+        name="my-ami",
+        description="Test AMI",
+    )
+
+    assert result == "ami-12345"
+    mock_ec2.create_image.assert_called_once()
+    call_kwargs = mock_ec2.create_image.call_args[1]
+    assert call_kwargs["InstanceId"] == "i-abc123"
+    assert call_kwargs["Name"] == "my-ami"
+    assert call_kwargs["Description"] == "Test AMI"
+    assert "desk:managed" in str(call_kwargs["TagSpecifications"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_create_ami_no_reboot(mock_session: MagicMock) -> None:
+    """create_ami passes NoReboot flag."""
+    mock_ec2 = MagicMock()
+    mock_ec2.create_image.return_value = {"ImageId": "ami-12345"}
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = create_ami(
+        instance_id="i-abc123",
+        name="my-ami",
+        no_reboot=True,
+    )
+
+    assert result == "ami-12345"
+    call_kwargs = mock_ec2.create_image.call_args[1]
+    assert call_kwargs["NoReboot"] is True
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_ami_state_available(mock_session: MagicMock) -> None:
+    """get_ami_state returns state when AMI exists."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [{"ImageId": "ami-12345", "State": "available"}]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_ami_state("ami-12345")
+
+    assert result == "available"
+    mock_ec2.describe_images.assert_called_once_with(ImageIds=["ami-12345"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_ami_state_not_found(mock_session: MagicMock) -> None:
+    """get_ami_state returns None when AMI not found."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.side_effect = ClientError(
+        {"Error": {"Code": "InvalidAMIID.NotFound", "Message": "not found"}},
+        "DescribeImages",
+    )
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_ami_state("ami-nonexistent")
+
+    assert result is None
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_ami_state_empty_result(mock_session: MagicMock) -> None:
+    """get_ami_state returns None when no images returned."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {"Images": []}
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_ami_state("ami-12345")
+
+    assert result is None

@@ -5,7 +5,7 @@ import sys
 import click
 
 from desk import __version__
-from desk.commands import auto_stop, connect, create, key, kill, list_, reap, run, scp, start, stop, up
+from desk.commands import ami, auto_stop, connect, create, key, kill, list_, reap, run, scp, start, stop, up
 
 
 @click.group()
@@ -15,6 +15,7 @@ def cli() -> None:
     pass
 
 
+cli.add_command(ami.ami_group, "ami")
 cli.add_command(up.up, "up")
 cli.add_command(connect.connect, "connect")
 cli.add_command(create.create, "create")
