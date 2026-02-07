@@ -1965,3 +1965,96 @@ def test_parse_duration_invalid() -> None:
         parse_duration("h")
     with pytest.raises(ValueError, match="Invalid duration"):
         parse_duration("m")
+
+
+# ── reap tests ──────────────────────────────────────────────────────
+
+
+def test_desk_reap_help() -> None:
+    """desk reap --help succeeds."""
+    result = _run_desk("reap", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Stop all workstations past their auto-stop time" in output
+    assert "--dry-run" in output
+
+
+@patch("desk.commands.reap.stop_instance")
+@patch("desk.commands.reap.list_workstations")
+def test_desk_reap_stops_overdue(mock_list: object, mock_stop: object) -> None:
+    """desk reap stops instances whose shutdown time is in the past."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-overdue", name="old", state="running", shutdown_at="2020-01-01T00:00:00Z"),
+        Workstation(instance_id="i-ok", name="new", state="running", shutdown_at="2099-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["reap"])
+    assert result.exit_code == 0
+    mock_stop.assert_called_once_with("i-overdue", region=None, profile=None)
+    assert "1 workstation(s) stopped" in result.output
+    assert "i-overdue" in result.output
+
+
+@patch("desk.commands.reap.stop_instance")
+@patch("desk.commands.reap.list_workstations")
+def test_desk_reap_dry_run(mock_list: object, mock_stop: object) -> None:
+    """desk reap --dry-run shows what would be stopped without stopping."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-overdue", name="old", state="running", shutdown_at="2020-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["reap", "--dry-run"])
+    assert result.exit_code == 0
+    mock_stop.assert_not_called()
+    assert "Would stop" in result.output
+    assert "would be stopped" in result.output
+
+
+@patch("desk.commands.reap.list_workstations")
+def test_desk_reap_none_overdue(mock_list: object) -> None:
+    """desk reap with no overdue instances reports nothing to do."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-ok", name="new", state="running", shutdown_at="2099-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["reap"])
+    assert result.exit_code == 0
+    assert "No overdue workstations" in result.output
+
+
+@patch("desk.commands.reap.list_workstations")
+def test_desk_reap_skips_no_tag(mock_list: object) -> None:
+    """desk reap skips instances without a shutdown tag."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-notag", name="notag", state="running", shutdown_at=None),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["reap"])
+    assert result.exit_code == 0
+    assert "No overdue workstations" in result.output
+
+
+@patch("desk.commands.reap.stop_instance")
+@patch("desk.commands.reap.list_workstations")
+def test_desk_reap_stops_multiple(mock_list: object, mock_stop: object) -> None:
+    """desk reap stops all overdue instances."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-one", name="one", state="running", shutdown_at="2020-01-01T00:00:00Z"),
+        Workstation(instance_id="i-two", name="two", state="running", shutdown_at="2020-06-01T00:00:00Z"),
+        Workstation(instance_id="i-ok", name="ok", state="running", shutdown_at="2099-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["reap"])
+    assert result.exit_code == 0
+    assert mock_stop.call_count == 2
+    assert "2 workstation(s) stopped" in result.output
