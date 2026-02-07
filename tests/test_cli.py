@@ -1302,3 +1302,245 @@ def test_desk_run_as_user_with_script_file(
     # Should read file AND wrap with sudo
     assert "sudo -u ubuntu" in sent_script
     assert "running as user" in sent_script
+
+
+def test_desk_scp_help() -> None:
+    """desk scp --help succeeds."""
+    result = _run_desk("scp", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Copy files to/from a workstation" in output
+    assert "SOURCE" in output
+    assert "DESTINATION" in output
+    assert "--recursive" in output or "-r" in output
+
+
+@patch("desk.commands.scp.os.execvp")
+@patch("desk.commands.scp.is_ssm_ready")
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_upload(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk scp uploads local file to remote."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt"])
+
+    mock_resolve.assert_called_once_with("main", region=None, profile=None)
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert args[0] == "scp"
+    assert "ProxyCommand=" in " ".join(args)
+    assert "./local.txt" in args
+    assert "ubuntu@i-abc123:~/remote.txt" in args
+
+
+@patch("desk.commands.scp.os.execvp")
+@patch("desk.commands.scp.is_ssm_ready")
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_download(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk scp downloads remote file to local."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", ":~/remote.txt", "./local.txt"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "ubuntu@i-abc123:~/remote.txt" in args
+    assert "./local.txt" in args
+
+
+@patch("desk.commands.scp.os.execvp")
+@patch("desk.commands.scp.is_ssm_ready")
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_with_workstation_prefix(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk scp with workstation:path format."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "main:/etc/hosts", "./hosts", "-w", "main"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "ubuntu@i-abc123:/etc/hosts" in args
+    assert "./hosts" in args
+
+
+@patch("desk.commands.scp.os.execvp")
+@patch("desk.commands.scp.is_ssm_ready")
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_recursive(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk scp --recursive adds -r flag."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "-r", "./local-dir", ":~/remote-dir"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    # -r should be in args (but not as part of another option)
+    # Find standalone -r
+    assert "-r" in args
+
+
+@patch("desk.commands.scp.os.execvp")
+@patch("desk.commands.scp.is_ssm_ready")
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_with_custom_key(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk scp --key uses desk-managed key path."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "my-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--key", "my-key"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "-i" in args
+    idx = args.index("-i")
+    assert args[idx + 1] == str(key_file)
+
+
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_key_not_found(mock_get_key_path: object) -> None:
+    """desk scp --key fails when key file does not exist."""
+    mock_get_key_path.return_value = "/nonexistent/my-key.pem"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--key", "my-key"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_workstation_not_found(
+    mock_get_key_path: object, mock_resolve: object, tmp_path
+) -> None:
+    """desk scp with unknown workstation shows error."""
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "-w", "unknown"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+@patch("desk.commands.scp.is_ssm_ready")
+@patch("desk.commands.scp.os.execvp")
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_waits_for_ssm_then_proceeds(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_execvp: object,
+    mock_is_ssm_ready: object,
+    tmp_path,
+) -> None:
+    """desk scp waits when SSM not ready, then proceeds."""
+    mock_resolve.return_value = "i-abc123"
+    mock_is_ssm_ready.side_effect = [False, False, True]
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--wait-timeout", "10"])
+    assert mock_is_ssm_ready.call_count == 3
+    mock_execvp.assert_called_once()
+
+
+@patch("desk.commands.scp.os.execvp")
+@patch("desk.commands.scp.is_ssm_ready")
+@patch("desk.commands.scp.resolve_workstation")
+@patch("desk.commands.scp.get_key_path")
+def test_desk_scp_with_custom_user(
+    mock_get_key_path: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    tmp_path,
+) -> None:
+    """desk scp --user uses custom username."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_key_path.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--user", "admin"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "admin@i-abc123:~/remote.txt" in args
