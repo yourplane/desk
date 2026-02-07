@@ -1600,6 +1600,21 @@ def test_desk_list_shutdown_overdue_shown(mock_list: object) -> None:
 
 
 @patch("desk.commands.list_.list_workstations")
+def test_desk_list_stopped_not_overdue(mock_list: object) -> None:
+    """desk list does not show OVERDUE for stopped/stopping instances."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-stopped", name="old", state="stopped", shutdown_at="2020-01-01T00:00:00Z"),
+        Workstation(instance_id="i-stopping", name="going", state="stopping", shutdown_at="2020-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["list"])
+    assert result.exit_code == 0
+    assert "OVERDUE" not in result.output
+
+
+@patch("desk.commands.list_.list_workstations")
 def test_desk_list_no_shutdown_shows_dash(mock_list: object) -> None:
     """desk list shows '-' when no shutdown tag."""
     from desk.aws import Workstation

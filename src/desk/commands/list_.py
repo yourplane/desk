@@ -33,13 +33,16 @@ def _color_state(state: str) -> str:
     return click.style(state, fg=color) if color else state
 
 
-def _format_shutdown(shutdown_at: str | None) -> tuple[str, int]:
+def _format_shutdown(shutdown_at: str | None, state: str = "running") -> tuple[str, int]:
     """Format the shutdown_at timestamp for display.
 
     Returns (display_string, raw_length) where display_string may contain
     ANSI color codes and raw_length is the visible character count.
     """
     if not shutdown_at:
+        return "-", 1
+    # Don't show OVERDUE for instances that are already stopping/stopped
+    if state in ("stopped", "stopping", "terminated", "shutting-down"):
         return "-", 1
     try:
         dt = datetime.strptime(shutdown_at, "%Y-%m-%dT%H:%M:%SZ").replace(
@@ -121,7 +124,7 @@ def list_cmd(
 
     if output == "plain":
         for w in workstations:
-            shutdown_label, _ = _format_shutdown(w.shutdown_at)
+            shutdown_label, _ = _format_shutdown(w.shutdown_at, w.state)
             click.echo(
                 f"{w.instance_id}\t{w.name}\t{_color_state(w.state)}\t{shutdown_label}"
             )
@@ -130,7 +133,7 @@ def list_cmd(
     # Pre-compute shutdown labels so we can measure column width
     shutdown_labels: list[tuple[str, int]] = []
     for w in workstations:
-        label, raw_len = _format_shutdown(w.shutdown_at)
+        label, raw_len = _format_shutdown(w.shutdown_at, w.state)
         shutdown_labels.append((label, raw_len))
 
     # Table format
