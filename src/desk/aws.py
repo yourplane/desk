@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import boto3
 
@@ -10,6 +11,9 @@ from desk.log import get_logger
 
 log = get_logger("aws")
 from botocore.exceptions import ClientError
+
+# Tag key used to store the scheduled shutdown time (ISO 8601 UTC).
+TAG_SHUTDOWN_AT = "desk:shutdown-at"
 
 
 @dataclass
@@ -170,6 +174,7 @@ class Workstation:
     instance_id: str
     name: str
     state: str
+    shutdown_at: str | None = None
 
 
 def list_workstations(
@@ -191,15 +196,13 @@ def list_workstations(
     for page in paginator.paginate(Filters=filters):
         for reservation in page.get("Reservations", []):
             for instance in reservation.get("Instances", []):
-                name = next(
-                    (t["Value"] for t in instance.get("Tags", []) if t["Key"] == "Name"),
-                    "",
-                )
+                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
                 workstations.append(
                     Workstation(
                         instance_id=instance["InstanceId"],
-                        name=name,
+                        name=tags.get("Name", ""),
                         state=instance["State"]["Name"],
+                        shutdown_at=tags.get(TAG_SHUTDOWN_AT),
                     )
                 )
 
@@ -507,3 +510,75 @@ def get_command_invocation(
         stderr=stderr,
         exit_code=exit_code,
     )
+
+
+def parse_duration(value: str) -> float:
+    """Parse a human duration string into hours.
+
+    Accepted formats:
+      4h       → 4.0
+      30m      → 0.5
+      2h30m    → 2.5
+      4        → 4.0  (bare number treated as hours)
+      0        → 0.0
+
+    Raises ValueError on unrecognised input.
+    """
+    import re
+
+    value = value.strip()
+
+    # Bare number → hours
+    try:
+        return float(value)
+    except ValueError:
+        pass
+
+    pattern = re.compile(r"^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?$", re.IGNORECASE)
+    m = pattern.match(value)
+    if not m or (m.group(1) is None and m.group(2) is None):
+        raise ValueError(
+            f"Invalid duration '{value}'. Use e.g. 4h, 30m, 2h30m, or a bare number (hours)."
+        )
+    hours = float(m.group(1)) if m.group(1) else 0.0
+    minutes = float(m.group(2)) if m.group(2) else 0.0
+    return hours + minutes / 60.0
+
+
+def compute_shutdown_at(hours: float) -> str:
+    """Return an ISO 8601 UTC timestamp *hours* from now."""
+    from datetime import timedelta
+
+    dt = datetime.now(timezone.utc) + timedelta(hours=hours)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def set_shutdown_tag(
+    instance_id: str,
+    shutdown_at: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """Set (or update) the desk:shutdown-at tag on an instance."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.create_tags(
+        Resources=[instance_id],
+        Tags=[{"Key": TAG_SHUTDOWN_AT, "Value": shutdown_at}],
+    )
+    log.debug("set_shutdown_tag instance_id=%s shutdown_at=%s", instance_id, shutdown_at)
+
+
+def clear_shutdown_tag(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """Remove the desk:shutdown-at tag from an instance."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.delete_tags(
+        Resources=[instance_id],
+        Tags=[{"Key": TAG_SHUTDOWN_AT}],
+    )
+    log.debug("clear_shutdown_tag instance_id=%s", instance_id)

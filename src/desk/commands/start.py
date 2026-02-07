@@ -6,7 +6,7 @@ import os
 
 import click
 
-from desk.aws import resolve_workstation, start_instance
+from desk.aws import compute_shutdown_at, parse_duration, resolve_workstation, set_shutdown_tag, start_instance
 
 
 def _get_region() -> str | None:
@@ -35,10 +35,19 @@ def _get_profile() -> str | None:
     envvar="AWS_PROFILE",
     help="AWS profile.",
 )
+@click.option(
+    "--shutdown",
+    "shutdown_after",
+    type=str,
+    default="4h",
+    show_default=True,
+    help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable).",
+)
 def start(
     workstation: str,
     region: str | None,
     profile: str | None,
+    shutdown_after: str,
 ) -> None:
     """Start a stopped workstation instance.
 
@@ -59,4 +68,10 @@ def start(
 
     click.echo(f"Starting {instance_id}...")
     start_instance(instance_id, region=region, profile=profile)
+
+    shutdown_hours = parse_duration(shutdown_after)
+    if shutdown_hours > 0:
+        shutdown_time = compute_shutdown_at(shutdown_hours)
+        set_shutdown_tag(instance_id, shutdown_time, region=region, profile=profile)
+
     click.secho("Started.", fg="green")

@@ -8,9 +8,12 @@ import time
 import click
 
 from desk.aws import (
+    compute_shutdown_at,
     get_instance_state,
     list_workstations,
+    parse_duration,
     resolve_workstation,
+    set_shutdown_tag,
     start_instance,
 )
 from desk.commands import connect, create
@@ -92,6 +95,14 @@ from desk.commands import connect, create
     multiple=True,
     help="Port forward in SSH -L format: [local_port:]remote_host:remote_port. Can be repeated.",
 )
+@click.option(
+    "--shutdown",
+    "shutdown_after",
+    type=str,
+    default="4h",
+    show_default=True,
+    help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable).",
+)
 def up(
     name: str,
     key_name: str,
@@ -104,6 +115,7 @@ def up(
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
+    shutdown_after: str,
 ) -> None:
     """Create a workstation and connect to it.
 
@@ -153,6 +165,10 @@ def up(
                     )
             click.echo(f"Starting {instance_id}...")
             start_instance(instance_id, region=region, profile=profile)
+            shutdown_hours = parse_duration(shutdown_after)
+            if shutdown_hours > 0:
+                shutdown_time = compute_shutdown_at(shutdown_hours)
+                set_shutdown_tag(instance_id, shutdown_time, region=region, profile=profile)
             click.secho("Started.", fg="green")
         else:
             # No existing workstation at all, create it
@@ -165,6 +181,7 @@ def up(
                 stack=stack,
                 region=region,
                 profile=profile,
+                shutdown_after=shutdown_after,
             )
     else:
         click.echo(f"Workstation '{name}' already exists. Connecting...")

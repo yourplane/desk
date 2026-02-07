@@ -35,6 +35,8 @@ def test_desk_up_help() -> None:
 
 
 @patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.set_shutdown_tag")
+@patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
 @patch("desk.commands.up.start_instance")
 @patch("desk.commands.up.list_workstations")
 @patch("desk.commands.up.resolve_workstation")
@@ -42,6 +44,8 @@ def test_desk_up_starts_stopped_instance(
     mock_resolve: object,
     mock_list: object,
     mock_start: object,
+    mock_compute: object,
+    mock_set_tag: object,
     mock_connect: object,
 ) -> None:
     """desk up starts a stopped instance instead of creating."""
@@ -64,6 +68,8 @@ def test_desk_up_starts_stopped_instance(
 
 
 @patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.set_shutdown_tag")
+@patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
 @patch("desk.commands.up.start_instance")
 @patch("desk.commands.up.get_instance_state")
 @patch("desk.commands.up.list_workstations")
@@ -73,6 +79,8 @@ def test_desk_up_waits_for_stopping_instance(
     mock_list: object,
     mock_get_state: object,
     mock_start: object,
+    mock_compute: object,
+    mock_set_tag: object,
     mock_connect: object,
 ) -> None:
     """desk up waits for stopping instance to stop, then starts it."""
@@ -187,6 +195,8 @@ def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: obj
     assert "stopping" in result.output
 
 
+@patch("desk.commands.create.set_shutdown_tag")
+@patch("desk.commands.create.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
 @patch("desk.commands.create.run_instance")
 @patch("desk.commands.create.get_latest_ubuntu_ami")
 @patch("desk.commands.create.get_desk_vpc_outputs")
@@ -198,6 +208,8 @@ def test_desk_create_allows_duplicate_name_when_terminated(
     mock_vpc: object,
     mock_ami: object,
     mock_run: object,
+    mock_compute: object,
+    mock_set_tag: object,
 ) -> None:
     """desk create succeeds when only terminated workstations have same name."""
     from desk.aws import Workstation
@@ -809,9 +821,13 @@ def test_desk_start_help() -> None:
     assert "WORKSTATION" in output
 
 
+@patch("desk.commands.start.set_shutdown_tag")
+@patch("desk.commands.start.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
 @patch("desk.commands.start.start_instance")
 @patch("desk.commands.start.resolve_workstation")
-def test_desk_start_by_name(mock_resolve: object, mock_start: object) -> None:
+def test_desk_start_by_name(
+    mock_resolve: object, mock_start: object, mock_compute: object, mock_set_tag: object
+) -> None:
     """desk start resolves name and starts instance."""
     mock_resolve.return_value = "i-abc123"
     mock_start.return_value = "i-abc123"
@@ -825,9 +841,13 @@ def test_desk_start_by_name(mock_resolve: object, mock_start: object) -> None:
     assert "Started" in result.output
 
 
+@patch("desk.commands.start.set_shutdown_tag")
+@patch("desk.commands.start.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
 @patch("desk.commands.start.start_instance")
 @patch("desk.commands.start.resolve_workstation")
-def test_desk_start_by_instance_id(mock_resolve: object, mock_start: object) -> None:
+def test_desk_start_by_instance_id(
+    mock_resolve: object, mock_start: object, mock_compute: object, mock_set_tag: object
+) -> None:
     """desk start with instance ID starts the instance."""
     mock_resolve.return_value = "i-abc123"
     mock_start.return_value = "i-abc123"
@@ -1544,3 +1564,404 @@ def test_desk_scp_with_custom_user(
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
     assert "admin@i-abc123:~/remote.txt" in args
+
+
+# ── shutdown / auto-stop tests ───────────────────────────────────────
+
+
+@patch("desk.commands.list_.list_workstations")
+def test_desk_list_shows_shutdown_column(mock_list: object) -> None:
+    """desk list table includes a SHUTDOWN column."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="main", state="running", shutdown_at="2099-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["list"])
+    assert result.exit_code == 0
+    assert "SHUTDOWN" in result.output
+    # Should show a future relative time
+    assert "in " in result.output
+
+
+@patch("desk.commands.list_.list_workstations")
+def test_desk_list_shutdown_overdue_shown(mock_list: object) -> None:
+    """desk list shows OVERDUE for past shutdown times."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="main", state="running", shutdown_at="2020-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["list"])
+    assert result.exit_code == 0
+    assert "OVERDUE" in result.output
+
+
+@patch("desk.commands.list_.list_workstations")
+def test_desk_list_no_shutdown_shows_dash(mock_list: object) -> None:
+    """desk list shows '-' when no shutdown tag."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="main", state="running", shutdown_at=None),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["list"])
+    assert result.exit_code == 0
+    assert "SHUTDOWN" in result.output
+
+
+@patch("desk.commands.list_.list_workstations")
+def test_desk_list_plain_includes_shutdown(mock_list: object) -> None:
+    """desk list --output plain includes shutdown info."""
+    from desk.aws import Workstation
+
+    mock_list.return_value = [
+        Workstation(instance_id="i-abc123", name="main", state="running", shutdown_at="2099-01-01T00:00:00Z"),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli, ["list", "--output", "plain"])
+    assert result.exit_code == 0
+    assert "in " in result.output
+
+
+@patch("desk.commands.start.set_shutdown_tag")
+@patch("desk.commands.start.compute_shutdown_at")
+@patch("desk.commands.start.start_instance")
+@patch("desk.commands.start.resolve_workstation")
+def test_desk_start_sets_shutdown_tag(
+    mock_resolve: object,
+    mock_start: object,
+    mock_compute: object,
+    mock_set_tag: object,
+) -> None:
+    """desk start sets a shutdown tag by default."""
+    mock_resolve.return_value = "i-abc123"
+    mock_start.return_value = "i-abc123"
+    mock_compute.return_value = "2026-02-07T20:00:00Z"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["start", "main"])
+    assert result.exit_code == 0
+    mock_compute.assert_called_once_with(4.0)
+    mock_set_tag.assert_called_once_with(
+        "i-abc123", "2026-02-07T20:00:00Z", region=None, profile=None
+    )
+
+
+@patch("desk.commands.start.set_shutdown_tag")
+@patch("desk.commands.start.start_instance")
+@patch("desk.commands.start.resolve_workstation")
+def test_desk_start_custom_shutdown_hours(
+    mock_resolve: object,
+    mock_start: object,
+    mock_set_tag: object,
+) -> None:
+    """desk start --shutdown 8 sets tag with 8 hours."""
+    mock_resolve.return_value = "i-abc123"
+    mock_start.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["start", "main", "--shutdown", "8"])
+    assert result.exit_code == 0
+    mock_set_tag.assert_called_once()
+    # The compute_shutdown_at call was made with 8.0 (tested indirectly)
+
+
+@patch("desk.commands.start.set_shutdown_tag")
+@patch("desk.commands.start.start_instance")
+@patch("desk.commands.start.resolve_workstation")
+def test_desk_start_shutdown_zero_skips_tag(
+    mock_resolve: object,
+    mock_start: object,
+    mock_set_tag: object,
+) -> None:
+    """desk start --shutdown 0 does not set a shutdown tag."""
+    mock_resolve.return_value = "i-abc123"
+    mock_start.return_value = "i-abc123"
+    runner = CliRunner()
+    result = runner.invoke(cli, ["start", "main", "--shutdown", "0"])
+    assert result.exit_code == 0
+    mock_set_tag.assert_not_called()
+
+
+@patch("desk.commands.create.set_shutdown_tag")
+@patch("desk.commands.create.compute_shutdown_at")
+@patch("desk.commands.create.run_instance")
+@patch("desk.commands.create.get_latest_ubuntu_ami")
+@patch("desk.commands.create.get_desk_vpc_outputs")
+@patch("desk.commands.create.list_ec2_key_pairs")
+@patch("desk.commands.create.list_workstations")
+def test_desk_create_sets_shutdown_tag(
+    mock_list_workstations: object,
+    mock_list_keys: object,
+    mock_vpc: object,
+    mock_ami: object,
+    mock_run: object,
+    mock_compute: object,
+    mock_set_tag: object,
+) -> None:
+    """desk create sets a shutdown tag on the new instance."""
+    mock_list_workstations.return_value = []
+    mock_list_keys.return_value = {"main-key"}
+    mock_vpc.return_value = type("V", (), {
+        "private_subnet_ids": ["subnet-1"],
+        "security_group_id": "sg-1",
+        "instance_profile_name": "profile-1",
+    })()
+    mock_ami.return_value = "ami-123"
+    mock_run.return_value = "i-new123"
+    mock_compute.return_value = "2026-02-07T20:00:00Z"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["create", "--name", "main"])
+    assert result.exit_code == 0
+    mock_compute.assert_called_once_with(4.0)
+    mock_set_tag.assert_called_once_with(
+        "i-new123", "2026-02-07T20:00:00Z", region=None, profile=None
+    )
+
+
+@patch("desk.commands.create.set_shutdown_tag")
+@patch("desk.commands.create.run_instance")
+@patch("desk.commands.create.get_latest_ubuntu_ami")
+@patch("desk.commands.create.get_desk_vpc_outputs")
+@patch("desk.commands.create.list_ec2_key_pairs")
+@patch("desk.commands.create.list_workstations")
+def test_desk_create_shutdown_zero_skips_tag(
+    mock_list_workstations: object,
+    mock_list_keys: object,
+    mock_vpc: object,
+    mock_ami: object,
+    mock_run: object,
+    mock_set_tag: object,
+) -> None:
+    """desk create --shutdown 0 does not set a shutdown tag."""
+    mock_list_workstations.return_value = []
+    mock_list_keys.return_value = {"main-key"}
+    mock_vpc.return_value = type("V", (), {
+        "private_subnet_ids": ["subnet-1"],
+        "security_group_id": "sg-1",
+        "instance_profile_name": "profile-1",
+    })()
+    mock_ami.return_value = "ami-123"
+    mock_run.return_value = "i-new123"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["create", "--name", "main", "--shutdown", "0"])
+    assert result.exit_code == 0
+    mock_set_tag.assert_not_called()
+
+
+def test_desk_auto_stop_help() -> None:
+    """desk auto-stop --help succeeds."""
+    result = _run_desk("auto-stop", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Set or change the auto-stop time" in output
+    assert "WORKSTATION" in output
+    assert "DURATION" in output
+    assert "--clear" in output
+
+
+@patch("desk.commands.auto_stop.set_shutdown_tag")
+@patch("desk.commands.auto_stop.compute_shutdown_at")
+@patch("desk.commands.auto_stop.resolve_workstation")
+def test_desk_auto_stop_sets_shutdown(
+    mock_resolve: object,
+    mock_compute: object,
+    mock_set_tag: object,
+) -> None:
+    """desk auto-stop sets shutdown tag on a workstation."""
+    mock_resolve.return_value = "i-abc123"
+    mock_compute.return_value = "2026-02-07T20:00:00Z"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auto-stop", "main", "6h"])
+    assert result.exit_code == 0
+    mock_resolve.assert_called_once_with("main", region=None, profile=None)
+    mock_compute.assert_called_once_with(6.0)
+    mock_set_tag.assert_called_once_with(
+        "i-abc123", "2026-02-07T20:00:00Z", region=None, profile=None
+    )
+    assert "Auto-stop set to" in result.output
+
+
+@patch("desk.commands.auto_stop.set_shutdown_tag")
+@patch("desk.commands.auto_stop.compute_shutdown_at")
+@patch("desk.commands.auto_stop.resolve_workstation")
+def test_desk_auto_stop_with_minutes(
+    mock_resolve: object,
+    mock_compute: object,
+    mock_set_tag: object,
+) -> None:
+    """desk auto-stop main 30m sets shutdown 30 minutes from now."""
+    mock_resolve.return_value = "i-abc123"
+    mock_compute.return_value = "2026-02-07T16:30:00Z"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auto-stop", "main", "30m"])
+    assert result.exit_code == 0
+    mock_compute.assert_called_once_with(0.5)
+    mock_set_tag.assert_called_once()
+
+
+@patch("desk.commands.auto_stop.set_shutdown_tag")
+@patch("desk.commands.auto_stop.compute_shutdown_at")
+@patch("desk.commands.auto_stop.resolve_workstation")
+def test_desk_auto_stop_with_hours_and_minutes(
+    mock_resolve: object,
+    mock_compute: object,
+    mock_set_tag: object,
+) -> None:
+    """desk auto-stop main 2h30m sets shutdown 2.5 hours from now."""
+    mock_resolve.return_value = "i-abc123"
+    mock_compute.return_value = "2026-02-07T18:30:00Z"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auto-stop", "main", "2h30m"])
+    assert result.exit_code == 0
+    mock_compute.assert_called_once_with(2.5)
+    mock_set_tag.assert_called_once()
+
+
+@patch("desk.commands.auto_stop.set_shutdown_tag")
+@patch("desk.commands.auto_stop.compute_shutdown_at")
+@patch("desk.commands.auto_stop.resolve_workstation")
+def test_desk_auto_stop_defaults(
+    mock_resolve: object,
+    mock_compute: object,
+    mock_set_tag: object,
+) -> None:
+    """desk auto-stop with no args uses 'main' and 4h."""
+    mock_resolve.return_value = "i-abc123"
+    mock_compute.return_value = "2026-02-07T20:00:00Z"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auto-stop"])
+    assert result.exit_code == 0
+    mock_resolve.assert_called_once_with("main", region=None, profile=None)
+    mock_compute.assert_called_once_with(4.0)
+    mock_set_tag.assert_called_once()
+
+
+@patch("desk.commands.auto_stop.clear_shutdown_tag")
+@patch("desk.commands.auto_stop.resolve_workstation")
+def test_desk_auto_stop_clear(
+    mock_resolve: object,
+    mock_clear_tag: object,
+) -> None:
+    """desk auto-stop --clear removes the shutdown tag."""
+    mock_resolve.return_value = "i-abc123"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auto-stop", "main", "--clear"])
+    assert result.exit_code == 0
+    mock_clear_tag.assert_called_once_with("i-abc123", region=None, profile=None)
+    assert "cleared" in result.output.lower()
+
+
+@patch("desk.commands.auto_stop.resolve_workstation")
+def test_desk_auto_stop_workstation_not_found(mock_resolve: object) -> None:
+    """desk auto-stop with unknown workstation shows error."""
+    mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auto-stop", "unknown"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+@patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.set_shutdown_tag")
+@patch("desk.commands.up.compute_shutdown_at")
+@patch("desk.commands.up.start_instance")
+@patch("desk.commands.up.list_workstations")
+@patch("desk.commands.up.resolve_workstation")
+def test_desk_up_sets_shutdown_tag_on_start(
+    mock_resolve: object,
+    mock_list: object,
+    mock_start: object,
+    mock_compute: object,
+    mock_set_tag: object,
+    mock_connect: object,
+) -> None:
+    """desk up sets shutdown tag when starting a stopped instance."""
+    from desk.aws import Workstation
+
+    mock_resolve.side_effect = ValueError("not found")
+    mock_list.return_value = [
+        Workstation(instance_id="i-stopped", name="main", state="stopped"),
+    ]
+    mock_start.return_value = "i-stopped"
+    mock_compute.return_value = "2026-02-07T20:00:00Z"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up", "--name", "main"])
+    assert result.exit_code == 0
+    mock_compute.assert_called_once_with(4.0)
+    mock_set_tag.assert_called_once_with(
+        "i-stopped", "2026-02-07T20:00:00Z", region=None, profile=None
+    )
+
+
+def test_compute_shutdown_at() -> None:
+    """compute_shutdown_at returns ISO 8601 timestamp in the future."""
+    from datetime import datetime, timezone
+
+    from desk.aws import compute_shutdown_at
+
+    result = compute_shutdown_at(4.0)
+    dt = datetime.strptime(result, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    # Should be roughly 4 hours from now (within 10 seconds tolerance)
+    diff = (dt - now).total_seconds()
+    assert 4 * 3600 - 10 < diff < 4 * 3600 + 10
+
+
+def test_parse_duration_hours() -> None:
+    """parse_duration handles hour formats."""
+    from desk.aws import parse_duration
+
+    assert parse_duration("4h") == 4.0
+    assert parse_duration("4H") == 4.0
+    assert parse_duration("0.5h") == 0.5
+
+
+def test_parse_duration_minutes() -> None:
+    """parse_duration handles minute formats."""
+    from desk.aws import parse_duration
+
+    assert parse_duration("30m") == 0.5
+    assert parse_duration("90m") == 1.5
+    assert parse_duration("15M") == 0.25
+
+
+def test_parse_duration_combined() -> None:
+    """parse_duration handles combined hour+minute formats."""
+    from desk.aws import parse_duration
+
+    assert parse_duration("2h30m") == 2.5
+    assert parse_duration("1h15m") == 1.25
+
+
+def test_parse_duration_bare_number() -> None:
+    """parse_duration treats bare numbers as hours."""
+    from desk.aws import parse_duration
+
+    assert parse_duration("4") == 4.0
+    assert parse_duration("0") == 0.0
+    assert parse_duration("0.5") == 0.5
+
+
+def test_parse_duration_invalid() -> None:
+    """parse_duration raises ValueError on invalid input."""
+    import pytest
+
+    from desk.aws import parse_duration
+
+    with pytest.raises(ValueError, match="Invalid duration"):
+        parse_duration("abc")
+    with pytest.raises(ValueError, match="Invalid duration"):
+        parse_duration("h")
+    with pytest.raises(ValueError, match="Invalid duration"):
+        parse_duration("m")

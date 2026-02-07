@@ -9,12 +9,15 @@ from botocore.exceptions import ClientError
 
 from desk.aws import (
     DeskVpcOutputs,
+    compute_shutdown_at,
     create_key_pair,
     get_desk_vpc_outputs,
     get_latest_ubuntu_ami,
     list_ec2_key_pairs,
     list_workstations,
+    parse_duration,
     run_instance,
+    set_shutdown_tag,
 )
 from desk.keys import get_desk_keys_dir, get_key_path
 
@@ -81,6 +84,14 @@ def _get_profile() -> str | None:
     envvar="AWS_PROFILE",
     help="AWS profile.",
 )
+@click.option(
+    "--shutdown",
+    "shutdown_after",
+    type=str,
+    default="4h",
+    show_default=True,
+    help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable).",
+)
 def create(
     name: str,
     instance_type: str,
@@ -89,6 +100,7 @@ def create(
     stack: str,
     region: str | None,
     profile: str | None,
+    shutdown_after: str,
 ) -> None:
     """Create a new workstation instance.
 
@@ -167,6 +179,11 @@ def create(
         region=region,
         profile=profile,
     )
+
+    shutdown_hours = parse_duration(shutdown_after)
+    if shutdown_hours > 0:
+        shutdown_time = compute_shutdown_at(shutdown_hours)
+        set_shutdown_tag(instance_id, shutdown_time, region=region, profile=profile)
 
     click.echo()
     click.secho("Workstation created successfully!", fg="green", bold=True)
