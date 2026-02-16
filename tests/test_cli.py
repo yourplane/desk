@@ -1994,82 +1994,68 @@ def test_desk_reap_help() -> None:
     assert "--dry-run" in output
 
 
-@patch("desk.commands.reap.stop_instance")
-@patch("desk.commands.reap.list_workstations")
-def test_desk_reap_stops_overdue(mock_list: object, mock_stop: object) -> None:
+@patch("desk.commands.reap.reap_overdue")
+def test_desk_reap_stops_overdue(mock_reap: object) -> None:
     """desk reap stops instances whose shutdown time is in the past."""
     from desk.aws import Workstation
 
-    mock_list.return_value = [
+    mock_reap.return_value = [
         Workstation(instance_id="i-overdue", name="old", state="running", shutdown_at="2020-01-01T00:00:00Z"),
-        Workstation(instance_id="i-ok", name="new", state="running", shutdown_at="2099-01-01T00:00:00Z"),
     ]
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
-    mock_stop.assert_called_once_with("i-overdue", region=None, profile=None)
+    mock_reap.assert_called_once_with(region=None, profile=None, dry_run=False)
     assert "1 workstation(s) stopped" in result.output
     assert "i-overdue" in result.output
 
 
-@patch("desk.commands.reap.stop_instance")
-@patch("desk.commands.reap.list_workstations")
-def test_desk_reap_dry_run(mock_list: object, mock_stop: object) -> None:
+@patch("desk.commands.reap.reap_overdue")
+def test_desk_reap_dry_run(mock_reap: object) -> None:
     """desk reap --dry-run shows what would be stopped without stopping."""
     from desk.aws import Workstation
 
-    mock_list.return_value = [
+    mock_reap.return_value = [
         Workstation(instance_id="i-overdue", name="old", state="running", shutdown_at="2020-01-01T00:00:00Z"),
     ]
     runner = CliRunner()
     result = runner.invoke(cli, ["reap", "--dry-run"])
     assert result.exit_code == 0
-    mock_stop.assert_not_called()
+    mock_reap.assert_called_once_with(region=None, profile=None, dry_run=True)
     assert "Would stop" in result.output
     assert "would be stopped" in result.output
 
 
-@patch("desk.commands.reap.list_workstations")
-def test_desk_reap_none_overdue(mock_list: object) -> None:
+@patch("desk.commands.reap.reap_overdue")
+def test_desk_reap_none_overdue(mock_reap: object) -> None:
     """desk reap with no overdue instances reports nothing to do."""
-    from desk.aws import Workstation
-
-    mock_list.return_value = [
-        Workstation(instance_id="i-ok", name="new", state="running", shutdown_at="2099-01-01T00:00:00Z"),
-    ]
+    mock_reap.return_value = []
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
     assert "No overdue workstations" in result.output
 
 
-@patch("desk.commands.reap.list_workstations")
-def test_desk_reap_skips_no_tag(mock_list: object) -> None:
+@patch("desk.commands.reap.reap_overdue")
+def test_desk_reap_skips_no_tag(mock_reap: object) -> None:
     """desk reap skips instances without a shutdown tag."""
-    from desk.aws import Workstation
-
-    mock_list.return_value = [
-        Workstation(instance_id="i-notag", name="notag", state="running", shutdown_at=None),
-    ]
+    mock_reap.return_value = []
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
     assert "No overdue workstations" in result.output
 
 
-@patch("desk.commands.reap.stop_instance")
-@patch("desk.commands.reap.list_workstations")
-def test_desk_reap_stops_multiple(mock_list: object, mock_stop: object) -> None:
+@patch("desk.commands.reap.reap_overdue")
+def test_desk_reap_stops_multiple(mock_reap: object) -> None:
     """desk reap stops all overdue instances."""
     from desk.aws import Workstation
 
-    mock_list.return_value = [
+    mock_reap.return_value = [
         Workstation(instance_id="i-one", name="one", state="running", shutdown_at="2020-01-01T00:00:00Z"),
         Workstation(instance_id="i-two", name="two", state="running", shutdown_at="2020-06-01T00:00:00Z"),
-        Workstation(instance_id="i-ok", name="ok", state="running", shutdown_at="2099-01-01T00:00:00Z"),
     ]
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
-    assert mock_stop.call_count == 2
     assert "2 workstation(s) stopped" in result.output

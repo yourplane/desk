@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 
 import click
 
-from desk.aws import TAG_SHUTDOWN_AT, list_workstations, stop_instance
+from desk.aws import reap_overdue
 
 
 def _get_region() -> str | None:
@@ -54,24 +53,7 @@ def reap(
     region = region or _get_region()
     profile = profile or _get_profile()
 
-    now = datetime.now(timezone.utc)
-
-    workstations = list_workstations(
-        region=region, profile=profile, states=["running", "pending"]
-    )
-
-    overdue = []
-    for w in workstations:
-        if not w.shutdown_at:
-            continue
-        try:
-            dt = datetime.strptime(w.shutdown_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=timezone.utc
-            )
-        except ValueError:
-            continue
-        if dt <= now:
-            overdue.append(w)
+    overdue = reap_overdue(region=region, profile=profile, dry_run=dry_run)
 
     if not overdue:
         click.echo("No overdue workstations.")
@@ -83,7 +65,6 @@ def reap(
             click.echo(f"  Would stop {label}  (shutdown was {w.shutdown_at})")
         else:
             click.echo(f"  Stopping {label}...")
-            stop_instance(w.instance_id, region=region, profile=profile)
 
     count = len(overdue)
     if dry_run:

@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda that stops desk workstations past their auto-stop time, triggered every 10 minutes
+
+Resources:
+  ReaperFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: desk-reaper
+      Description: Stops desk workstations past their desk:shutdown-at time
+      Runtime: python3.12
+      CodeUri: reaper/
+      Handler: handler.handler
+      Timeout: 60
+      MemorySize: 128
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ec2:DescribeInstances
+                - ec2:StopInstances
+              Resource: "*"
+      Tags:
+        desk:managed: "true"
+      Events:
+        ScheduleRule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(10 minutes)
+            Description: Trigger desk-reaper every 10 minutes
+            Enabled: true
+    Metadata:
+      BuildMethod: makefile
+
+Outputs:
+  ReaperFunctionArn:
+    Description: ARN of the desk-reaper Lambda function
+    Value: !GetAtt ReaperFunction.Arn

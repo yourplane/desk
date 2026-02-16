@@ -32,8 +32,14 @@ Defaults: workstation name `main`, key `main-key`. Run `desk up` with no argumen
 | `desk up` | Create a workstation (if none exists) and connect. Skips create if one is already running or pending. |
 | `desk create` | Create a new workstation instance. |
 | `desk connect` | SSH to a workstation over SSM. Waits for SSM agent if instance is still booting. |
-| `desk list` | List workstations (instance ID, name, state). States are color-coded. |
+| `desk list` | List workstations (instance ID, name, state, shutdown time). States are color-coded. |
+| `desk start` | Start a stopped workstation. |
 | `desk stop` | Stop a running workstation. |
+| `desk kill` | Terminate a workstation (permanent). |
+| `desk run` | Run a script on a workstation via SSM. |
+| `desk scp` | Copy files to/from a workstation via SCP over SSM. |
+| `desk auto-stop` | Set or change the auto-stop timer on a workstation. |
+| `desk reap` | Stop all workstations past their auto-stop time. |
 | `desk key create/list/delete` | Manage SSH keys in `~/.config/desk/keys/`. |
 
 ---
@@ -198,10 +204,57 @@ The template provides:
 
 `desk create` uses the stack outputs automatically.
 
+### Auto-stop reaper Lambda
+
+The reaper is a Lambda that runs every 10 minutes and stops workstations past their `desk:shutdown-at` time. It uses the same `desk` library code as the CLI.
+
+Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html).
+
+**Build and deploy:**
+
+```bash
+cd infrastructure
+sam build -t desk-reaper.yaml
+sam deploy --guided --capabilities CAPABILITY_IAM --stack-name desk-reaper
+```
+
+On subsequent deploys (after the guided config is saved to `samconfig.toml`):
+
+```bash
+cd infrastructure
+sam build -t desk-reaper.yaml
+sam deploy
+```
+
 **Lint CloudFormation:**
 ```bash
 tox run -e lint
 ```
+
+---
+
+## Auto-stop
+
+Workstations are tagged with a `desk:shutdown-at` time (default: 4 hours after start). This is set automatically on `desk create`, `desk start`, and `desk up`.
+
+```bash
+# Configure shutdown duration on create/start/up
+desk create --shutdown 8h
+desk start main --shutdown 2h30m
+desk up --shutdown 30m
+desk up --shutdown 0           # disable auto-stop
+
+# Change the timer on a running workstation
+desk auto-stop main 6h         # reset to 6h from now
+desk auto-stop main 30m        # 30 minutes from now
+desk auto-stop main --clear    # remove timer
+
+# Manually stop overdue instances (also runs automatically via Lambda)
+desk reap                      # stop all overdue
+desk reap --dry-run            # preview without stopping
+```
+
+`desk list` shows a SHUTDOWN column with relative times. Overdue instances show in red.
 
 ---
 
@@ -218,6 +271,5 @@ tox run -e py    # tests
 
 | Feature | Description |
 |---------|-------------|
-| **desk start** | Start stopped workstations. |
 | **Config file** | User config for default profile, region. |
 | **Interactive selection** | Pick from multiple workstations when name is ambiguous. |

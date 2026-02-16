@@ -582,3 +582,42 @@ def clear_shutdown_tag(
         Tags=[{"Key": TAG_SHUTDOWN_AT}],
     )
     log.debug("clear_shutdown_tag instance_id=%s", instance_id)
+
+
+def reap_overdue(
+    region: str | None = None,
+    profile: str | None = None,
+    *,
+    dry_run: bool = False,
+) -> list[Workstation]:
+    """Find and stop workstations past their auto-stop time.
+
+    Returns the list of overdue workstations (stopped, or would-be-stopped
+    if dry_run is True).
+    """
+    now = datetime.now(timezone.utc)
+
+    workstations = list_workstations(
+        region=region, profile=profile, states=["running", "pending"]
+    )
+
+    overdue: list[Workstation] = []
+    for w in workstations:
+        if not w.shutdown_at:
+            continue
+        try:
+            dt = datetime.strptime(w.shutdown_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            log.warning("bad shutdown-at tag on %s: %s", w.instance_id, w.shutdown_at)
+            continue
+        if dt <= now:
+            overdue.append(w)
+
+    if not dry_run:
+        for w in overdue:
+            log.info("stopping overdue instance %s (%s)", w.name, w.instance_id)
+            stop_instance(w.instance_id, region=region, profile=profile)
+
+    return overdue
