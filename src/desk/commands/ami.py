@@ -12,6 +12,7 @@ from desk.aws import (
     create_ami,
     get_ami_state,
     get_instance_state,
+    list_amis,
     resolve_workstation,
     stop_instance,
     wait_for_ami_available,
@@ -33,6 +34,88 @@ def _get_profile() -> str | None:
 def ami_group() -> None:
     """Manage AMIs from desk workstations."""
     pass
+
+
+@ami_group.command("list")
+@click.option(
+    "--region",
+    "-r",
+    default=None,
+    envvar="AWS_REGION",
+    help="AWS region.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    envvar="AWS_PROFILE",
+    help="AWS profile.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["table", "plain"]),
+    default="table",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Show all owned AMIs, not only desk-created ones.",
+)
+def ami_list(
+    region: str | None,
+    profile: str | None,
+    output: str,
+    show_all: bool,
+) -> None:
+    """List AMIs created from desk workstations.
+
+    By default shows only AMIs created with 'desk ami create'. Use --all to show
+    all AMIs you own in this region.
+    """
+    region = region or _get_region()
+    profile = profile or _get_profile()
+
+    amis = list_amis(region=region, profile=profile, managed_only=not show_all)
+
+    if not amis:
+        click.echo("No AMIs found.")
+        return
+
+    if output == "plain":
+        for a in amis:
+            source = a.source_instance or "-"
+            click.echo(f"{a.image_id}\t{a.name}\t{a.state}\t{a.creation_date}\t{source}")
+        return
+
+    # Table format
+    max_id = max(len(a.image_id) for a in amis)
+    max_name = max(len(a.name) for a in amis)
+    max_state = max(len(a.state) for a in amis)
+    max_date = max(len(a.creation_date) for a in amis)
+    max_source = max(len(a.source_instance or "-") for a in amis)
+    max_id = max(max_id, 9)  # "IMAGE ID"
+    max_name = max(max_name, 4)
+    max_state = max(max_state, 5)
+    max_date = max(max_date, 7)
+    max_source = max(max_source, 7)
+
+    header = (
+        f"{'IMAGE ID':<{max_id}}  {'NAME':<{max_name}}  "
+        f"{'STATE':<{max_state}}  {'CREATED':<{max_date}}  SOURCE"
+    )
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for a in amis:
+        source = a.source_instance or "-"
+        click.echo(
+            f"{a.image_id:<{max_id}}  {a.name:<{max_name}}  "
+            f"{a.state:<{max_state}}  {a.creation_date:<{max_date}}  {source}"
+        )
 
 
 @ami_group.command("create")

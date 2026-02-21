@@ -546,6 +546,57 @@ def get_ami_state(
         raise
 
 
+@dataclass
+class AmiInfo:
+    """Desk-managed AMI summary for list output."""
+
+    image_id: str
+    name: str
+    state: str
+    creation_date: str
+    source_instance: str | None
+
+
+def list_amis(
+    region: str | None = None,
+    profile: str | None = None,
+    managed_only: bool = True,
+) -> list[AmiInfo]:
+    """
+    List AMIs. By default returns only AMIs tagged desk:managed=true (created by desk).
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+
+    params: dict = {"Owners": ["self"]}
+    if managed_only:
+        params["Filters"] = [{"Name": "tag:desk:managed", "Values": ["true"]}]
+
+    response = ec2.describe_images(**params)
+    images = response.get("Images", [])
+
+    def _tag(img: dict, key: str) -> str | None:
+        for t in img.get("Tags", []):
+            if t.get("Key") == key:
+                return t.get("Value")
+        return None
+
+    result: list[AmiInfo] = []
+    for img in images:
+        result.append(
+            AmiInfo(
+                image_id=img["ImageId"],
+                name=img.get("Name", "-"),
+                state=img.get("State", "unknown"),
+                creation_date=img.get("CreationDate", ""),
+                source_instance=_tag(img, "desk:source-instance"),
+            )
+        )
+
+    result.sort(key=lambda a: a.creation_date, reverse=True)
+    return result
+
+
 def wait_for_ami_available(
     image_id: str,
     region: str | None = None,

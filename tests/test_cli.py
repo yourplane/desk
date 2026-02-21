@@ -478,6 +478,93 @@ def test_desk_ami_help() -> None:
     output = _output(result)
     assert "Manage AMIs" in output
     assert "create" in output
+    assert "list" in output
+
+
+def test_desk_ami_list_help() -> None:
+    """desk ami list --help succeeds."""
+    result = _run_desk("ami", "list", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "List AMIs" in output
+    assert "table" in output
+    assert "plain" in output
+    assert "--all" in output
+
+
+@patch("desk.commands.ami.list_amis")
+def test_desk_ami_list_empty(mock_list_amis: object) -> None:
+    """desk ami list shows message when no AMIs found."""
+    mock_list_amis.return_value = []
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "list"])
+
+    assert result.exit_code == 0
+    assert "No AMIs found" in result.output
+    mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=True)
+
+
+@patch("desk.commands.ami.list_amis")
+def test_desk_ami_list_success(mock_list_amis: object) -> None:
+    """desk ami list shows table of AMIs."""
+    from desk.aws import AmiInfo
+
+    mock_list_amis.return_value = [
+        AmiInfo(
+            image_id="ami-123",
+            name="main-20250201-120000",
+            state="available",
+            creation_date="2025-02-01T12:00:00.000Z",
+            source_instance="i-abc",
+        ),
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "list"])
+
+    assert result.exit_code == 0
+    assert "IMAGE ID" in result.output
+    assert "ami-123" in result.output
+    assert "main-20250201-120000" in result.output
+    assert "available" in result.output
+    assert "i-abc" in result.output
+    mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=True)
+
+
+@patch("desk.commands.ami.list_amis")
+def test_desk_ami_list_plain(mock_list_amis: object) -> None:
+    """desk ami list --output plain prints tab-separated lines."""
+    from desk.aws import AmiInfo
+
+    mock_list_amis.return_value = [
+        AmiInfo(
+            image_id="ami-456",
+            name="custom",
+            state="pending",
+            creation_date="2025-02-02T00:00:00.000Z",
+            source_instance=None,
+        ),
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "list", "--output", "plain"])
+
+    assert result.exit_code == 0
+    assert "ami-456\tcustom\tpending\t2025-02-02T00:00:00.000Z\t-" in result.output
+    mock_list_amis.assert_called_once()
+
+
+@patch("desk.commands.ami.list_amis")
+def test_desk_ami_list_all_flag(mock_list_amis: object) -> None:
+    """desk ami list --all passes managed_only=False."""
+    mock_list_amis.return_value = []
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "list", "--all"])
+
+    assert result.exit_code == 0
+    mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=False)
 
 
 def test_desk_ami_create_help() -> None:

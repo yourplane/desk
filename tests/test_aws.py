@@ -6,6 +6,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from desk.aws import (
+    AmiInfo,
     DeskVpcOutputs,
     Workstation,
     create_ami,
@@ -14,10 +15,11 @@ from desk.aws import (
     get_ami_state,
     get_desk_vpc_outputs,
     get_instance_state,
+    get_latest_ubuntu_ami,
     get_running_workstations_using_key,
     is_ssm_ready,
+    list_amis,
     list_ec2_key_pairs,
-    get_latest_ubuntu_ami,
     list_workstations,
     resolve_workstation,
     run_instance,
@@ -514,3 +516,90 @@ def test_get_ami_state_empty_result(mock_session: MagicMock) -> None:
     result = get_ami_state("ami-12345")
 
     assert result is None
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_amis_success(mock_session: MagicMock) -> None:
+    """list_amis returns desk-managed AMIs sorted by creation date descending."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {
+                "ImageId": "ami-old",
+                "Name": "old-ami",
+                "State": "available",
+                "CreationDate": "2025-01-01T10:00:00.000Z",
+                "Tags": [
+                    {"Key": "desk:managed", "Value": "true"},
+                    {"Key": "desk:source-instance", "Value": "i-aaa"},
+                ],
+            },
+            {
+                "ImageId": "ami-new",
+                "Name": "new-ami",
+                "State": "available",
+                "CreationDate": "2025-02-01T12:00:00.000Z",
+                "Tags": [
+                    {"Key": "desk:managed", "Value": "true"},
+                    {"Key": "desk:source-instance", "Value": "i-bbb"},
+                ],
+            },
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_amis()
+
+    assert len(result) == 2
+    assert result[0].image_id == "ami-new"
+    assert result[0].name == "new-ami"
+    assert result[0].state == "available"
+    assert result[0].creation_date == "2025-02-01T12:00:00.000Z"
+    assert result[0].source_instance == "i-bbb"
+    assert result[1].image_id == "ami-old"
+    assert result[1].source_instance == "i-aaa"
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"],
+        Filters=[{"Name": "tag:desk:managed", "Values": ["true"]}],
+    )
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_amis_empty(mock_session: MagicMock) -> None:
+    """list_amis returns empty list when no desk AMIs exist."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {"Images": []}
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_amis()
+
+    assert result == []
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"],
+        Filters=[{"Name": "tag:desk:managed", "Values": ["true"]}],
+    )
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_amis_all_owned(mock_session: MagicMock) -> None:
+    """list_amis with managed_only=False does not filter by desk tag."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {
+                "ImageId": "ami-any",
+                "Name": "any-ami",
+                "State": "available",
+                "CreationDate": "2025-01-15T00:00:00.000Z",
+                "Tags": [],
+            }
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_amis(managed_only=False)
+
+    assert len(result) == 1
+    assert result[0].image_id == "ami-any"
+    assert result[0].source_instance is None
+    mock_ec2.describe_images.assert_called_once_with(Owners=["self"])
