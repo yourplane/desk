@@ -25,6 +25,25 @@ def _get_profile() -> str | None:
     return os.environ.get("AWS_PROFILE")
 
 
+def _remote_workstation_from_path(path: str) -> str | None:
+    """If path looks like 'workstation_name:remote_path', return the workstation name; else None.
+
+    Avoids treating Windows paths (C:\\...) or relative paths with colons as workstation refs.
+    """
+    if ":" not in path or path.startswith(":"):
+        return None
+    prefix, suffix = path.split(":", 1)
+    # Workstation name: no slash, and remote path typically starts with / or ~
+    if not prefix or "/" in prefix or "\\" in prefix:
+        return None
+    if suffix.startswith("/") or suffix.startswith("~"):
+        return prefix
+    # e.g. host:relative/path - still treat as workstation:path
+    if prefix and len(prefix) <= 64 and not prefix.endswith("."):
+        return prefix
+    return None
+
+
 def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) -> str:
     """Parse an SCP path, expanding workstation references.
 
@@ -41,13 +60,12 @@ def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) ->
         return f"{user}@{instance_id}:{remote_path}"
 
     if ":" in path:
-        # Could be workstation:path or /some/path (no colon in path means local)
-        # But we need to be careful: Windows paths like C:\... shouldn't match
-        # For simplicity, check if the part before : matches workstation name or is empty
         prefix, suffix = path.split(":", 1)
         if prefix == workstation or prefix == "":
             return f"{user}@{instance_id}:{suffix}"
-        # Otherwise treat as local path (might be absolute path with colon in some edge cases)
+        # workstation name in path overrides default (caller must resolve that workstation)
+        if _remote_workstation_from_path(path):
+            return f"{user}@{instance_id}:{suffix}"
 
     # Local path - return as-is
     return path
@@ -167,6 +185,13 @@ def scp(
             )
     else:
         key_path = None
+
+    # If source or destination is "workstation_name:path", use that workstation
+    for path in (source, destination):
+        ws_from_path = _remote_workstation_from_path(path)
+        if ws_from_path:
+            workstation = ws_from_path
+            break
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
