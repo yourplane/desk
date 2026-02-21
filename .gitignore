@@ -4,3 +4,4 @@
 *__pycache__*
 .aws-sam
 infrastructure/reaper/desk
+ami/git-askpass-helper.sh
