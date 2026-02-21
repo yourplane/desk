@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
 import time
 from datetime import datetime
+from typing import Any
 
 import click
 
@@ -12,11 +16,13 @@ from desk.aws import (
     create_ami,
     get_ami_state,
     get_instance_state,
+    is_ssm_ready,
     list_amis,
     resolve_workstation,
     stop_instance,
     wait_for_ami_available,
     wait_for_instance_state,
+    wait_for_ssm_ready,
 )
 
 
@@ -34,6 +40,49 @@ def _get_profile() -> str | None:
 def ami_group() -> None:
     """Manage AMIs from desk workstations."""
     pass
+
+
+def _load_build_config(path: str) -> dict[str, Any]:
+    """Load and validate ami build config from a JSON file."""
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise click.ClickException("Config must be a JSON object.")
+    copy_list = data.get("copy")
+    if copy_list is not None and not isinstance(copy_list, list):
+        raise click.ClickException("Config 'copy' must be a list.")
+    run_list = data.get("run")
+    if run_list is not None and not isinstance(run_list, list):
+        raise click.ClickException("Config 'run' must be a list.")
+    for i, item in enumerate(copy_list or []):
+        if not isinstance(item, dict) or "source" not in item or "dest" not in item:
+            raise click.ClickException(
+                f"Config 'copy[{i}]' must be an object with 'source' and 'dest'."
+            )
+    return data
+
+
+def _run_desk(
+    args: list[str],
+    region: str | None,
+    profile: str | None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run desk CLI with given args and env."""
+    cmd = [sys.executable, "-m", "desk.cli"] + args
+    run_env = os.environ.copy()
+    if region:
+        run_env["AWS_REGION"] = region
+    if profile:
+        run_env["AWS_PROFILE"] = profile
+    if env:
+        run_env.update(env)
+    return subprocess.run(
+        cmd,
+        env=run_env,
+        check=False,
+        capture_output=False,
+    )
 
 
 @ami_group.command("list")
@@ -116,6 +165,165 @@ def ami_list(
             f"{a.image_id:<{max_id}}  {a.name:<{max_name}}  "
             f"{a.state:<{max_state}}  {a.creation_date:<{max_date}}  {source}"
         )
+
+
+@ami_group.command("build")
+@click.argument(
+    "config_file",
+    type=click.Path(exists=True),
+)
+@click.option(
+    "--region",
+    "-r",
+    default=None,
+    envvar="AWS_REGION",
+    help="AWS region.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    envvar="AWS_PROFILE",
+    help="AWS profile.",
+)
+@click.option(
+    "--no-wait",
+    is_flag=True,
+    help="Do not wait for AMI to become available after creation.",
+)
+def ami_build(
+    config_file: str,
+    region: str | None,
+    profile: str | None,
+    no_wait: bool,
+) -> None:
+    """Build an AMI from a config file: create instance, copy files, run scripts, then ami create.
+
+    CONFIG_FILE is a JSON file with:
+      base_ami (optional): AMI ID to start from (default: latest Ubuntu 24.04)
+      workstation_name (optional): name for the builder instance (default: ami-builder)
+      instance_type (optional): e.g. t3.medium (default: t3.medium)
+      key (optional): desk key name (default: main-key)
+      copy: list of { \"source\": \"local-path\", \"dest\": \"remote-path\", \"recursive\": optional }
+      run: list of commands or script paths to execute on the instance (--follow)
+      ami_name (optional): name for the created AMI (default: workstation_name-timestamp)
+
+    Reuses desk create, desk scp, desk run, and desk ami create. The builder instance
+    is left running; use 'desk kill <workstation_name>' to remove it when done.
+    """
+    region = region or _get_region()
+    profile = profile or _get_profile()
+
+    config = _load_build_config(config_file)
+    base_ami = config.get("base_ami")
+    workstation_name = config.get("workstation_name", "ami-builder")
+    instance_type = config.get("instance_type", "t3.medium")
+    key_name = config.get("key", "main-key")
+    copy_list = config.get("copy") or []
+    run_list = config.get("run") or []
+    ami_name = config.get("ami_name")
+
+    click.echo(f"Building AMI from config: {config_file}")
+    click.echo(f"  Workstation: {workstation_name}")
+    click.echo()
+
+    # 1. Create instance from base AMI
+    create_args = [
+        "create",
+        "--name", workstation_name,
+        "--instance-type", instance_type,
+        "--key", key_name,
+        "--shutdown", "0",
+    ]
+    if base_ami:
+        create_args.extend(["--ami", base_ami])
+    click.echo("Step 1/4: Creating builder instance...")
+    result = _run_desk(create_args, region, profile)
+    if result.returncode != 0:
+        raise click.ClickException("desk create failed.")
+
+    # 2. Wait for SSM
+    click.echo("Step 2/4: Waiting for instance to be ready (SSM)...")
+    try:
+        instance_id = resolve_workstation(
+            workstation_name,
+            region=region,
+            profile=profile,
+            states=["pending", "running"],
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    if not wait_for_ssm_ready(
+        instance_id, region=region, profile=profile, timeout=600
+    ):
+        raise click.ClickException(
+            f"Instance {instance_id} did not become SSM-ready within 600s."
+        )
+    click.echo("  Instance ready.")
+    click.echo()
+
+    # 3. Copy files and run scripts
+    config_dir = os.path.dirname(os.path.abspath(config_file))
+
+    for i, item in enumerate(copy_list):
+        src = item["source"]
+        dest = item["dest"]
+        recursive = item.get("recursive", False)
+        if not os.path.isabs(src):
+            src = os.path.normpath(os.path.join(config_dir, src))
+        click.echo(f"Step 3/4: Copy ({i + 1}/{len(copy_list)}): {src} -> {workstation_name}:{dest}")
+        scp_args = [
+            "scp",
+            "--key", key_name,
+            "--workstation", workstation_name,
+            "--no-wait",
+            src,
+            f"{workstation_name}:{dest}",
+        ]
+        if recursive:
+            scp_args.insert(-2, "-r")
+        result = _run_desk(scp_args, region, profile, env={"PWD": config_dir})
+        if result.returncode != 0:
+            raise click.ClickException(f"desk scp failed for {src} -> {dest}.")
+
+    for i, cmd in enumerate(run_list):
+        # Resolve script path relative to config file dir if it looks like a path
+        run_cmd = cmd
+        if not os.path.isabs(cmd) and ("/" in cmd or cmd.endswith(".sh")):
+            candidate = os.path.normpath(os.path.join(config_dir, cmd))
+            if os.path.isfile(candidate):
+                run_cmd = candidate
+        click.echo(f"Step 3/4: Run ({i + 1}/{len(run_list)}): {run_cmd}")
+        run_args = [
+            "run",
+            "--workstation", workstation_name,
+            "--follow",
+            "--no-wait",
+            run_cmd,
+        ]
+        result = _run_desk(run_args, region, profile)
+        if result.returncode != 0:
+            raise click.ClickException(f"desk run failed for: {run_cmd}")
+
+    click.echo()
+
+    # 4. Create AMI
+    click.echo("Step 4/4: Creating AMI from builder...")
+    ami_create_args = [
+        "ami", "create",
+        workstation_name,
+        "--no-wait" if no_wait else "--wait",
+    ]
+    if ami_name:
+        ami_create_args.extend(["--name", ami_name])
+    result = _run_desk(ami_create_args, region, profile)
+    if result.returncode != 0:
+        raise click.ClickException("desk ami create failed.")
+
+    click.echo()
+    click.secho("AMI build complete.", fg="green", bold=True)
+    click.echo(f"Builder instance '{workstation_name}' is still running.")
+    click.echo(f"Remove it when done: desk kill {workstation_name}")
 
 
 @ami_group.command("create")

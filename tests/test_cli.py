@@ -567,6 +567,39 @@ def test_desk_ami_list_all_flag(mock_list_amis: object) -> None:
     mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=False)
 
 
+def test_desk_ami_build_help() -> None:
+    """desk ami build --help succeeds."""
+    result = _run_desk("ami", "build", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "CONFIG_FILE" in output
+    assert "base_ami" in output or "copy" in output
+    assert "desk create" in output or "create" in output
+
+
+def test_desk_ami_build_missing_config() -> None:
+    """desk ami build fails when config file does not exist."""
+    result = _run_desk("ami", "build", "/nonexistent/config.json")
+    assert result.returncode != 0
+    assert "No such file" in result.stderr or "nonexistent" in result.stderr.lower()
+
+
+def test_desk_ami_build_invalid_config(tmp_path: object) -> None:
+    """desk ami build fails when config is invalid JSON or schema."""
+    from pathlib import Path
+
+    path = Path(tmp_path) / "config.json"
+    path.write_text("not json")
+    result = _run_desk("ami", "build", str(path))
+    assert result.returncode != 0
+
+    path.write_text('{"copy": "not a list"}')
+    result = _run_desk("ami", "build", str(path))
+    assert result.returncode != 0
+    out = _output(result)
+    assert "config" in out.lower() or "copy" in out.lower() or "run" in out.lower() or "error" in out.lower()
+
+
 def test_desk_ami_create_help() -> None:
     """desk ami create --help succeeds."""
     result = _run_desk("ami", "create", "--help")
