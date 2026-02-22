@@ -112,6 +112,11 @@ def _list_sessions_with_details_command(session_prefix: str) -> str:
         "if [[ -d /proc/$child_pid ]] 2>/dev/null; then "
         "cwd=$(readlink /proc/$child_pid/cwd 2>/dev/null); "
         "cmd=$(cat /proc/$child_pid/cmdline 2>/dev/null | tr '\\0' ' '); cmd=\"${cmd:0:80}\"; "
+        "grandchild=$(pgrep -P $child_pid 2>/dev/null | sort -n | head -1); "
+        "if [[ -n \"$grandchild\" && -d /proc/$grandchild ]] 2>/dev/null; then "
+        "fg_cmd=$(cat /proc/$grandchild/cmdline 2>/dev/null | tr '\\0' ' '); fg_cmd=\"${fg_cmd:0:80}\"; "
+        "if [[ -n \"$fg_cmd\" && ( \"$cmd\" == /bin/bash* || \"$cmd\" == -bash* || \"$cmd\" == /usr/bin/bash* ) ]]; then cmd=\"$fg_cmd\"; fi; "
+        "fi; "
         "wtitle=$(echo \"$cmd\" | awk '{print $1}'); [[ -z \"$wtitle\" ]] && wtitle='-'; "
         "fi; "
         'printf "%s${sep}%s${sep}%s${sep}%s${sep}%s${sep}%s\n" "$session_id" "$state" "$widx" "$wtitle" "$cwd" "$cmd"; '
@@ -421,16 +426,28 @@ def tab_list(
             by_session[session_id] = (state, [])
         by_session[session_id][1].append((win_idx, win_title, cwd, cmd))
 
-    # Tree: session (level 1), then one line per window (level 2) with all info
+    def _state_short(s: str) -> str:
+        if re.search(r"\(Attached\)", s, re.I):
+            return "(Attached)"
+        if re.search(r"\(Detached\)", s, re.I):
+            return "(Detached)"
+        return s.strip()
+
+    # Tree: session (level 1) with bold session name, then one line per window (level 2)
     for session_id, (state, windows) in by_session.items():
-        click.echo(f"{session_id}  {state}")
+        state_short = _state_short(state)
+        session_display = click.style(session_id, bold=True, fg="cyan")
+        click.echo(f"{session_display}  {state_short}")
         for i, (win_idx, win_title, cwd, cmd) in enumerate(windows):
             is_last = i == len(windows) - 1
             branch = "└─ " if is_last else "├─ "
-            win_label = f"{win_idx}  {win_title}".strip() if win_title and win_title != "-" else win_idx
-            cmd_display = cmd if len(cmd) <= 50 else cmd[:48] + ".."
-            click.echo(f"  {branch}{win_label}   {cwd}   {cmd_display}")
-    click.echo(f"Use 'desk tab connect {workstation} <session>' to attach, 'desk tab close {workstation} <session>' to close.")
+            cmd_display = cmd.strip() if len(cmd) <= 50 else cmd[:48].rstrip() + ".."
+            first_word = (cmd.split() or [""])[0]
+            show_title = win_title and win_title != "-" and win_title != first_word
+            win_label = f"{win_idx}  {win_title}" if show_title else str(win_idx)
+            cwd_display = click.style(cwd, dim=True) if cwd and cwd != "-" else cwd
+            click.echo(f"  {branch}{win_label}   {cwd_display}   {cmd_display}")
+    click.echo(click.style(f"Use 'desk tab connect {workstation} <session>' to attach, 'desk tab close {workstation} <session>' to close.", dim=True))
 
 
 @tab_group.command("create")
