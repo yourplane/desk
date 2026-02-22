@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -111,10 +112,12 @@ def _list_sessions_with_details_command(session_prefix: str) -> str:
         "cwd=''; cmd=''; "
         "if [[ -d /proc/$child_pid ]] 2>/dev/null; then "
         "cwd=$(readlink /proc/$child_pid/cwd 2>/dev/null); "
-        "cmd=$(cat /proc/$child_pid/cmdline 2>/dev/null | tr '\\0' ' '); cmd=\"${cmd:0:80}\"; "
+        "cmd=$(cat /proc/$child_pid/cmdline 2>/dev/null | tr '\\0' ' '); "
+        "[[ ${#cmd} -gt 80 ]] && cmd=\"..${cmd: -78}\"; "
         "grandchild=$(pgrep -P $child_pid 2>/dev/null | sort -n | head -1); "
         "if [[ -n \"$grandchild\" && -d /proc/$grandchild ]] 2>/dev/null; then "
-        "fg_cmd=$(cat /proc/$grandchild/cmdline 2>/dev/null | tr '\\0' ' '); fg_cmd=\"${fg_cmd:0:80}\"; "
+        "fg_cmd=$(cat /proc/$grandchild/cmdline 2>/dev/null | tr '\\0' ' '); "
+        "[[ ${#fg_cmd} -gt 80 ]] && fg_cmd=\"..${fg_cmd: -78}\"; "
         "if [[ -n \"$fg_cmd\" && ( \"$cmd\" == /bin/bash* || \"$cmd\" == -bash* || \"$cmd\" == /usr/bin/bash* ) ]]; then cmd=\"$fg_cmd\"; fi; "
         "fi; "
         "wtitle=$(echo \"$cmd\" | awk '{print $1}'); [[ -z \"$wtitle\" ]] && wtitle='-'; "
@@ -433,6 +436,15 @@ def tab_list(
             return "(Detached)"
         return s.strip()
 
+    # Use terminal width so command gets all remaining space
+    try:
+        term_cols = shutil.get_terminal_size(fallback=(120, 24)).columns
+    except OSError:
+        term_cols = 120
+    # Per line: "  " + "├─ " (5) + win_label + "   " (3) + cwd + "   " (3) + cmd
+    min_cmd_len = 55  # enough for e.g. ".tox/py/bin/desk tab list main"
+    fixed_prefix = 2 + 3 + 3 + 3  # "  " + "├─ " + "   " + "   "; win_label and cwd vary
+
     # Tree: session (level 1) with bold session name, then one line per window (level 2)
     for session_id, (state, windows) in by_session.items():
         state_short = _state_short(state)
@@ -441,11 +453,25 @@ def tab_list(
         for i, (win_idx, win_title, cwd, cmd) in enumerate(windows):
             is_last = i == len(windows) - 1
             branch = "└─ " if is_last else "├─ "
-            cmd_display = cmd.strip() if len(cmd) <= 50 else cmd[:48].rstrip() + ".."
             first_word = (cmd.split() or [""])[0]
             show_title = win_title and win_title != "-" and win_title != first_word
             win_label = f"{win_idx}  {win_title}" if show_title else str(win_idx)
-            cwd_display = click.style(cwd, dim=True) if cwd and cwd != "-" else cwd
+            cwd_visible = (cwd or "-") if cwd and cwd != "-" else "-"
+            # Shrink cwd so command gets at least min_cmd_len
+            max_cwd_len = term_cols - fixed_prefix - len(win_label) - min_cmd_len - 2  # -2 for ".."
+            if len(cwd_visible) > max_cwd_len and max_cwd_len >= 4:
+                cwd_visible = cwd_visible[: max_cwd_len - 2].rstrip() + ".."
+            elif len(cwd_visible) > 40:
+                cwd_visible = cwd_visible[:38].rstrip() + ".."
+            cwd_display = click.style(cwd_visible, dim=True) if cwd_visible != "-" else cwd_visible
+            prefix_len = 2 + len(branch) + len(win_label) + 3 + len(cwd_visible) + 3
+            cmd_max_len = max(min_cmd_len, term_cols - prefix_len - 2)  # -2 for ".."
+            cmd_stripped = cmd.strip()
+            if len(cmd_stripped) <= cmd_max_len:
+                cmd_display = cmd_stripped
+            else:
+                # Show end of command so the actual command and args (e.g. "desk tab list main") stay visible
+                cmd_display = ".." + cmd_stripped[-(cmd_max_len - 2) :]
             click.echo(f"  {branch}{win_label}   {cwd_display}   {cmd_display}")
     click.echo(click.style(f"Use 'desk tab connect {workstation} <session>' to attach, 'desk tab close {workstation} <session>' to close.", dim=True))
 

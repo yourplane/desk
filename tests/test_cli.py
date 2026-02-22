@@ -2534,6 +2534,43 @@ def test_desk_tab_list_tree_two_levels_one_line_per_window(
     assert "/home/ubuntu" in result.output and "/home/ubuntu/proj" in result.output
 
 
+@patch("desk.commands.tab.shutil.get_terminal_size")
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk.commands.tab.resolve_workstation")
+def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_send: object,
+    mock_get_inv: object,
+    mock_get_terminal_size: object,
+) -> None:
+    """Command column gets enough space so '.tox/py/bin/desk tab list main' is not truncated."""
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    mock_get_terminal_size.return_value = type("Size", (), {"columns": 80, "lines": 24})()
+    cmd_text = ".tox/py/bin/desk tab list main"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {
+            "stdout": (
+                f"1084.desk-main\x01(Attached)\x011\x01-\x01/home/ubuntu/tasks/fix-tabs/desk\x01{cmd_text}\n"
+            ),
+            "stderr": "",
+            "status": "Success",
+            "exit_code": 0,
+        },
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "list", "main"])
+
+    assert result.exit_code == 0
+    assert cmd_text in result.output, f"Expected {cmd_text!r} to appear in full in output"
+
+
 @patch("desk.commands.tab.get_command_invocation")
 @patch("desk.commands.tab.send_ssm_command")
 @patch("desk.commands.tab.is_ssm_ready", return_value=True)
