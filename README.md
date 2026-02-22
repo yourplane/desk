@@ -40,6 +40,8 @@ No SSH key setup required: workstations are created without EC2 key pairs. When 
 | `desk scp` | Copy files to/from a workstation via SCP over SSM. |
 | `desk auto-stop` | Set or change the auto-stop timer on a workstation. |
 | `desk reap` | Stop all workstations past their auto-stop time. |
+| `desk ami` | Manage AMIs: `list`, `build` (from recipe), `create` (from a running workstation). |
+| `desk tab` | Manage screen sessions across disconnect/reconnect: `connect`, `list`, `create`, `close`. |
 
 ---
 
@@ -155,6 +157,19 @@ See [AWS docs](https://docs.aws.amazon.com/systems-manager/latest/userguide/sess
 
 ---
 
+## Configuration
+
+Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `config.example`. Overrides: `--region` / `--profile` or `AWS_REGION` / `AWS_PROFILE`.
+
+```ini
+[defaults]
+region = us-east-1
+profile = my-aws-profile
+ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations without --ami
+```
+
+---
+
 ## Infrastructure
 
 Deploy the desk VPC and networking:
@@ -182,19 +197,19 @@ The reaper is a Lambda that runs every 10 minutes and stops workstations past th
 
 Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html).
 
-**Build and deploy:**
+**Build and deploy:** From the repo root, `infrastructure/build.sh` copies the desk package into the reaper and runs `sam build`:
 
 ```bash
+./infrastructure/build.sh
 cd infrastructure
-sam build -t desk-reaper.yaml
 sam deploy --guided --capabilities CAPABILITY_IAM --stack-name desk-reaper
 ```
 
 On subsequent deploys (after the guided config is saved to `samconfig.toml`):
 
 ```bash
+./infrastructure/build.sh
 cd infrastructure
-sam build -t desk-reaper.yaml
 sam deploy
 ```
 
@@ -243,5 +258,4 @@ tox run -e py    # tests
 
 | Feature | Description |
 |---------|-------------|
-| **Config file** | User config for default profile, region. |
 | **Interactive selection** | Pick from multiple workstations when name is ambiguous. |
