@@ -2367,3 +2367,157 @@ def test_desk_reap_stops_multiple(mock_reap: object) -> None:
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
     assert "2 workstation(s) stopped" in result.output
+
+
+# --- desk tab ---
+
+
+def test_desk_tab_help() -> None:
+    """desk tab --help shows subcommands."""
+    result = _run_desk("tab", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "connect" in output
+    assert "list" in output
+    assert "create" in output
+    assert "close" in output
+    assert "screen" in output.lower()
+
+
+@patch("desk.commands.tab.os.execvp")
+@patch("desk.commands.tab.get_connection_argv")
+def test_desk_tab_connect_calls_connection_with_screen(
+    mock_get_argv: object,
+    mock_execvp: object,
+) -> None:
+    """desk tab connect builds SSH argv with screen attach command and execs."""
+    mock_get_argv.return_value = ["ssh", "-o", "ProxyCommand=...", "ubuntu@i-abc123", "screen -r desk-main || screen -S desk-main"]
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "connect", "main"])
+
+    mock_get_argv.assert_called_once()
+    call_kw = mock_get_argv.call_args[1]
+    assert "screen -r desk-main" in call_kw["remote_command"]
+    assert "screen -S desk-main" in call_kw["remote_command"]
+    mock_execvp.assert_called_once_with("ssh", mock_get_argv.return_value)
+
+
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.wait_for_ssm_ready")
+@patch("desk.commands.tab.resolve_workstation")
+@patch("desk.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk.commands.tab.get_default_profile", return_value=None)
+def test_desk_tab_list_no_session(
+    _mock_profile: object,
+    _mock_region: object,
+    mock_resolve: object,
+    mock_wait: object,
+    mock_send: object,
+    mock_get_inv: object,
+) -> None:
+    """desk tab list shows message when no screen session exists."""
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {"stdout": "No Sockets found in /run/screen.", "stderr": "", "status": "Success", "exit_code": 0},
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "list", "main"])
+
+    assert result.exit_code == 0
+    assert "No screen session" in result.output
+    assert "desk tab connect main" in result.output
+
+
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk.commands.tab.resolve_workstation")
+def test_desk_tab_list_shows_session_and_windows(
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_send: object,
+    mock_get_inv: object,
+) -> None:
+    """desk tab list shows session line and windows when present."""
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {
+            "stdout": "12345.desk-main\t(Detached)\n0\tbash\n1\tvim\n",
+            "stderr": "",
+            "status": "Success",
+            "exit_code": 0,
+        },
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "list", "main"])
+
+    assert result.exit_code == 0
+    assert "desk-main" in result.output
+    assert "Windows:" in result.output
+    assert "0:" in result.output
+    assert "bash" in result.output
+
+
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk.commands.tab.resolve_workstation")
+def test_desk_tab_create_success(
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_send: object,
+    mock_get_inv: object,
+) -> None:
+    """desk tab create runs remote screen command and reports success."""
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0},
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "create", "main"])
+
+    assert result.exit_code == 0
+    assert "New window created" in result.output
+    mock_send.assert_called_once()
+
+
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk.commands.tab.resolve_workstation")
+def test_desk_tab_close_success(
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_send: object,
+    mock_get_inv: object,
+) -> None:
+    """desk tab close runs remote screen kill and reports success."""
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0},
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "close", "main", "1"])
+
+    assert result.exit_code == 0
+    assert "Window 1 closed" in result.output
+    mock_send.assert_called_once()
