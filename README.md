@@ -18,10 +18,9 @@ Requires Python 3.10+.
 ## Quick start
 
 1. Deploy the desk VPC stack (see [Infrastructure](#infrastructure)).
-2. Create a key: `desk key create main-key` (or let `desk create` prompt you).
-3. Create and connect: `desk up`
+2. Create and connect: `desk up`
 
-Defaults: workstation name `main`, key `main-key`. Run `desk up` with no arguments to create (if needed) and SSH in.
+No SSH key setup required: workstations are created without EC2 key pairs. When you connect, desk temporarily injects your local public key (~/.ssh/id_ed25519 or ~/.ssh/id_rsa) via SSM, then you SSH over the SSM tunnel. Default workstation name: `main`.
 
 ---
 
@@ -32,6 +31,7 @@ Defaults: workstation name `main`, key `main-key`. Run `desk up` with no argumen
 | `desk up` | Create a workstation (if none exists) and connect. Skips create if one is already running or pending. |
 | `desk create` | Create a new workstation instance. |
 | `desk connect` | SSH to a workstation over SSM. Waits for SSM agent if instance is still booting. |
+| `desk keygen` | Generate an SSH key (~/.ssh/id_ed25519 by default) for use with connect/scp. |
 | `desk list` | List workstations (instance ID, name, state, shutdown time). States are color-coded. |
 | `desk start` | Start a stopped workstation. |
 | `desk stop` | Stop a running workstation. |
@@ -40,7 +40,6 @@ Defaults: workstation name `main`, key `main-key`. Run `desk up` with no argumen
 | `desk scp` | Copy files to/from a workstation via SCP over SSM. |
 | `desk auto-stop` | Set or change the auto-stop timer on a workstation. |
 | `desk reap` | Stop all workstations past their auto-stop time. |
-| `desk key create/list/delete` | Manage SSH keys in `~/.config/desk/keys/`. |
 
 ---
 
@@ -49,38 +48,38 @@ Defaults: workstation name `main`, key `main-key`. Run `desk up` with no argumen
 **Create and connect (recommended):**
 
 ```bash
-# Create if needed, then SSH (defaults: main, main-key)
+# Create if needed, then SSH (default workstation: main)
 desk up
 
-# Custom name and key
-desk up --name dev --key dev-key
+# Custom name
+desk up --name dev
 ```
 
 **Create a workstation:**
 
 ```bash
-# Defaults: name=main, key=main-key
+# Default name: main (no EC2 key pair; connect uses key injection)
 desk create
 
 # Custom options
-desk create --name my-box --key my-key --instance-type t3.large
+desk create --name my-box --instance-type t3.large
 ```
-
-If `main-key` does not exist, `desk create` will prompt to create it.
 
 **Connect (SSH over SSM):**
 
+Desk temporarily adds your **public** key to the instance's `authorized_keys` via SSM (then removes it after `--key-timeout`, default 300s). It uses ~/.ssh/id_ed25519 or ~/.ssh/id_rsa by default, or the key at `-i PATH`.
+
 ```bash
-# Defaults: workstation=main, key=main-key
+# Defaults: workstation=main, key=~/.ssh/id_ed25519 or id_rsa
 desk connect
 
 # By name or instance ID
 desk connect main
 desk connect i-0abc123def456
 
-# Custom key
-desk connect --key my-key
-desk connect -i ~/.ssh/my-key.pem
+# Custom identity file
+desk connect -i ~/.ssh/my-key
+desk connect --key-timeout 60   # remove injected key after 60s
 ```
 
 **List workstations:**
@@ -97,44 +96,17 @@ desk stop main
 desk stop i-0abc123def456
 ```
 
----
-
-## Key management
-
-Keys created with `desk key create` are stored in `~/.config/desk/keys/` and registered in AWS.
-
-| Command | Description |
-|---------|-------------|
-| `desk key create <name>` | Create key pair. Saves `~/.config/desk/keys/<name>.pem` and creates EC2 key pair in AWS. |
-| `desk key list` | List keys with local/remote status. |
-| `desk key delete <name>` | Remove local file and EC2 key pair. Prompts for confirmation. Fails if key is used by running workstations (override with `--force`). |
-
-**Desk-managed keys (recommended):**
-
-```bash
-desk key create main-key
-desk create    # uses main-key by default
-desk connect   # uses main-key by default
-```
-
-**Manual setup (existing keys):**
-
-```bash
-aws ec2 create-key-pair --key-name desk-key --query 'KeyMaterial' --output text > ~/.ssh/desk-key.pem
-chmod 600 ~/.ssh/desk-key.pem
-desk create --key desk-key
-desk connect -i ~/.ssh/desk-key.pem
-```
+**SSH key:** Create a key if you don't have one: `desk keygen` (creates ~/.ssh/id_ed25519 by default), or `desk keygen -f ~/.path/to/key`. Connect and scp use the default key; override with `-i PATH`.
 
 **SSH config (optional):**
 
-Add to `~/.ssh/config` to use `ssh` directly:
+To use `ssh` directly with instance IDs:
 
 ```
 Host i-* mi-*
   ProxyCommand sh -c "aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters 'portNumber=%p'"
   User ubuntu
-  IdentityFile ~/.config/desk/keys/main-key.pem
+  IdentityFile ~/.ssh/id_ed25519
 ```
 
 ---

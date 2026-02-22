@@ -135,15 +135,7 @@ def tab_group() -> None:
     "-i",
     "identity_file",
     default=None,
-    help="Path to SSH private key.",
-)
-@click.option(
-    "--key",
-    "-k",
-    "key_name",
-    default="main-key",
-    show_default=True,
-    help="Desk-managed key name.",
+    help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
 @click.option("--region", "-r", default=None, envvar="AWS_REGION", help="AWS region.")
 @click.option("--profile", "-p", default=None, envvar="AWS_PROFILE", help="AWS profile.")
@@ -172,7 +164,6 @@ def tab_connect(
     window_index_opt: int | None,
     user: str,
     identity_file: str | None,
-    key_name: str | None,
     region: str | None,
     profile: str | None,
     wait: bool,
@@ -198,11 +189,10 @@ def tab_connect(
     else:
         remote_cmd = f"screen -r {session} || screen -S {session}"
 
-    ssh_args = get_connection_argv(
+    argv = get_connection_argv(
         workstation=workstation,
         user=user,
         identity_file=identity_file,
-        key_name=key_name,
         region=region,
         profile=profile,
         wait=wait,
@@ -212,7 +202,7 @@ def tab_connect(
     )
     log.info("exec ssh with screen session=%s", session)
     try:
-        os.execvp("ssh", ssh_args)
+        os.execvp("ssh", argv)
     except OSError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(127)

@@ -469,6 +469,42 @@ def send_ssm_command(
     return command_id
 
 
+def add_temporary_ssh_key(
+    instance_id: str,
+    user: str,
+    public_key_content: str,
+    timeout_seconds: int = 300,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """
+    Add a public key to the instance's authorized_keys via SSM; remove it after
+    timeout_seconds. The command runs on the instance (add key, sleep, remove key).
+    Returns the SSM command ID. Caller should allow a second or two for the key
+    to be written before starting SSH.
+    """
+    # One line in authorized_keys: "<key> ssm-session" so we can remove it later
+    line = (public_key_content.strip() + " ssm-session").replace("'", "'\"'\"'")
+    script = f"""set -eu
+mkdir -p ~{user}/.ssh && chown {user}:{user} ~{user}/.ssh 2>/dev/null || true
+cd ~{user}/.ssh || exit 1
+authorized_key='{line}'
+echo "${{authorized_key}}" >> authorized_keys
+chown {user}:{user} authorized_keys 2>/dev/null || true
+chmod 600 authorized_keys 2>/dev/null || true
+sleep {timeout_seconds}
+(grep -v -F "${{authorized_key}}" authorized_keys || true) > authorized_keys~
+mv authorized_keys~ authorized_keys
+"""
+    return send_ssm_command(
+        instance_id,
+        script,
+        region=region,
+        profile=profile,
+        timeout_seconds=timeout_seconds + 60,
+    )
+
+
 @dataclass
 class AmiInfo:
     """Information about an AMI."""

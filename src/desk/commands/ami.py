@@ -194,7 +194,6 @@ def ami_build(
       base_ami (optional): AMI ID to start from (default: latest Ubuntu 24.04)
       workstation_name (optional): name for the builder instance (default: ami-builder)
       instance_type (optional): e.g. t3.medium (default: t3.medium)
-      key (optional): desk key name (default: main-key)
       copy: list of { \"source\": \"local-path\", \"dest\": \"remote-path\", \"recursive\": optional }
       run: list of commands or script paths to execute on the instance (--follow)
       ami_name (optional): name for the created AMI (default: workstation_name-timestamp)
@@ -209,7 +208,6 @@ def ami_build(
     base_ami = config.get("base_ami")
     workstation_name = config.get("workstation_name", "ami-builder")
     instance_type = config.get("instance_type", "t3.medium")
-    key_name = config.get("key", "main-key")
     copy_list = config.get("copy") or []
     run_list = config.get("run") or []
     ami_name = config.get("ami_name")
@@ -223,7 +221,6 @@ def ami_build(
         "create",
         "--name", workstation_name,
         "--instance-type", instance_type,
-        "--key", key_name,
         "--shutdown", "0",
     ]
     if base_ami:
@@ -265,7 +262,6 @@ def ami_build(
         click.echo(f"Step 3/4: Copy ({i + 1}/{len(copy_list)}): {src} -> {workstation_name}:{dest}")
         scp_args = [
             "scp",
-            "--key", key_name,
             "--workstation", workstation_name,
             "--no-wait",
             src,

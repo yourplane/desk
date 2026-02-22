@@ -8,9 +8,9 @@ import time
 
 import click
 
-from desk.aws import is_ssm_ready, resolve_workstation
+from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
 from desk.config import get_default_profile, get_default_region
-from desk.keys import get_key_path
+from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
 
 log = get_logger("connect")
@@ -20,17 +20,19 @@ def get_connection_argv(
     workstation: str,
     user: str,
     identity_file: str | None,
-    key_name: str | None,
     region: str | None,
     profile: str | None,
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
     remote_command: str | None = None,
+    key_timeout: int = 300,
 ) -> list[str]:
-    """Resolve workstation, wait for SSM, set AWS env, and build SSH argv.
+    """Resolve workstation, wait for SSM, inject public key via SSM, set AWS env, build SSH argv.
 
-    Caller can pass remote_command to run a command instead of a shell (e.g. screen).
+    Uses SSM to temporarily add the user's public key to the instance's authorized_keys
+    (then remove it after key_timeout seconds). Uses identity_file if given, else default
+    SSH key (~/.ssh/id_ed25519 or id_rsa). Caller can pass remote_command for e.g. screen.
     Returns argv suitable for os.execvp("ssh", argv).
     """
     region = region or get_default_region()
@@ -38,17 +40,13 @@ def get_connection_argv(
 
     log.debug("get_connection_argv workstation=%s region=%s profile=%s", workstation, region, profile)
 
-    if identity_file:
-        key_path = identity_file
-    elif key_name:
-        key_path = get_key_path(key_name)
-        if not os.path.exists(key_path):
-            raise click.ClickException(
-                f"Key '{key_name}' not found at {key_path}. "
-                "Create it with: desk key create " + key_name
-            )
-    else:
-        key_path = None
+    key_path = identity_file or get_default_private_key_path()
+    if not key_path:
+        raise click.ClickException(
+            "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa) or use -i PATH."
+        )
+    if not os.path.exists(key_path):
+        raise click.ClickException(f"Key not found at {key_path}.")
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
@@ -93,6 +91,22 @@ def get_connection_argv(
     if profile:
         os.environ["AWS_PROFILE"] = profile
 
+    try:
+        public_key = get_public_key_content(key_path)
+    except (FileNotFoundError, RuntimeError) as e:
+        raise click.ClickException(str(e)) from e
+
+    log.info("adding temporary SSH key to %s for %ds", instance_id, key_timeout)
+    add_temporary_ssh_key(
+        instance_id,
+        user=user,
+        public_key_content=public_key,
+        timeout_seconds=key_timeout,
+        region=region,
+        profile=profile,
+    )
+    time.sleep(1.5)
+
     proxy_cmd = (
         "sh -c \"aws ssm start-session --target %h "
         "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
@@ -106,8 +120,7 @@ def get_connection_argv(
         "StrictHostKeyChecking=accept-new",
         f"{user}@{instance_id}",
     ]
-    if key_path:
-        ssh_args[1:1] = ["-i", key_path]
+    ssh_args[1:1] = ["-i", key_path]
 
     for fwd in forwards:
         ssh_args[1:1] = ["-L", fwd]
@@ -133,15 +146,7 @@ def get_connection_argv(
     "-i",
     "identity_file",
     default=None,
-    help="Path to SSH private key.",
-)
-@click.option(
-    "--key",
-    "-k",
-    "key_name",
-    default="main-key",
-    show_default=True,
-    help="Desk-managed key name (from desk key create). Resolves to ~/.config/desk/keys/<name>.pem",
+    help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
 @click.option(
     "--region",
@@ -176,35 +181,42 @@ def get_connection_argv(
     multiple=True,
     help="Port forward in SSH -L format: [local_port:]remote_host:remote_port. Can be repeated.",
 )
+@click.option(
+    "--key-timeout",
+    default=300,
+    show_default=True,
+    help="Seconds to keep the injected SSH key in authorized_keys before it is removed.",
+)
 def connect(
     workstation: str,
     user: str,
     identity_file: str | None,
-    key_name: str | None,
     region: str | None,
     profile: str | None,
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
+    key_timeout: int,
 ) -> None:
     """Connect to a workstation via SSH over SSM tunnel.
 
+    Injects your public key into the instance's authorized_keys via SSM (then
+    removes it after --key-timeout). Uses ~/.ssh/id_ed25519 or id_rsa by default; -i to override.
+
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
     Requires the Session Manager plugin and SSH client to be installed.
-
-    The instance must have an SSH key associated. Use -i for key path or --key for desk-managed keys.
     """
     ssh_args = get_connection_argv(
         workstation=workstation,
         user=user,
         identity_file=identity_file,
-        key_name=key_name,
         region=region,
         profile=profile,
         wait=wait,
         wait_timeout=wait_timeout,
         forwards=forwards,
         remote_command=None,
+        key_timeout=key_timeout,
     )
     log.info("exec ssh user=%s", user)
     try:

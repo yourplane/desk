@@ -30,10 +30,10 @@ def test_desk_up_help() -> None:
     output = _output(result)
     assert "Create a workstation and connect to it" in output
     assert "main" in output
-    assert "main-key" in output
     assert "--forward" in output or "-L" in output
 
 
+@patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
 @patch("desk.commands.up.connect.connect")
 @patch("desk.commands.up.set_shutdown_tag")
 @patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
@@ -47,6 +47,7 @@ def test_desk_up_starts_stopped_instance(
     mock_compute: object,
     mock_set_tag: object,
     mock_connect: object,
+    _mock_key: object,
 ) -> None:
     """desk up starts a stopped instance instead of creating."""
     from desk.aws import Workstation
@@ -67,6 +68,7 @@ def test_desk_up_starts_stopped_instance(
     mock_connect.assert_called_once()
 
 
+@patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
 @patch("desk.commands.up.connect.connect")
 @patch("desk.commands.up.set_shutdown_tag")
 @patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
@@ -82,6 +84,7 @@ def test_desk_up_waits_for_stopping_instance(
     mock_compute: object,
     mock_set_tag: object,
     mock_connect: object,
+    _mock_key: object,
 ) -> None:
     """desk up waits for stopping instance to stop, then starts it."""
     from desk.aws import Workstation
@@ -103,6 +106,37 @@ def test_desk_up_waits_for_stopping_instance(
     mock_connect.assert_called_once()
 
 
+@patch("desk.commands.up.get_default_private_key_path", return_value=None)
+@patch("desk.commands.up.set_shutdown_tag")
+@patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
+@patch("desk.commands.up.start_instance")
+@patch("desk.commands.up.list_workstations")
+@patch("desk.commands.up.resolve_workstation")
+def test_desk_up_skips_connect_when_no_ssh_key(
+    mock_resolve: object,
+    mock_list: object,
+    mock_start: object,
+    _mock_compute: object,
+    _mock_set_tag: object,
+    mock_get_key: object,
+) -> None:
+    """desk up skips connect and prints instructions when no default SSH key."""
+    from desk.aws import Workstation
+
+    mock_resolve.side_effect = ValueError("not found")
+    mock_list.return_value = [
+        Workstation(instance_id="i-stopped", name="main", state="stopped"),
+    ]
+    mock_start.return_value = "i-stopped"
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up", "--name", "main"])
+
+    assert result.exit_code == 0
+    assert "No SSH key found" in result.output
+    assert "desk connect main" in result.output
+
+
 def test_desk_create_help() -> None:
     """desk create --help succeeds and shows usage."""
     result = _run_desk("create", "--help")
@@ -110,36 +144,6 @@ def test_desk_create_help() -> None:
     output = _output(result)
     assert "Create a new workstation instance" in output
     assert "--name" in output
-    assert "main-key" in output
-
-
-@patch("desk.commands.create.run_instance")
-@patch("desk.commands.create.get_latest_ubuntu_ami")
-@patch("desk.commands.create.get_desk_vpc_outputs")
-@patch("desk.commands.create.list_ec2_key_pairs")
-@patch("desk.commands.create.list_workstations")
-def test_desk_create_aborts_when_main_key_missing_and_declined(
-    mock_list_workstations: object,
-    mock_list_keys: object,
-    mock_vpc: object,
-    mock_ami: object,
-    mock_run: object,
-) -> None:
-    """desk create prompts to create main-key when missing; aborts if user declines."""
-    mock_list_workstations.return_value = []
-    mock_list_keys.return_value = set()
-    mock_vpc.return_value = type("V", (), {
-        "private_subnet_ids": ["subnet-1"],
-        "security_group_id": "sg-1",
-        "instance_profile_name": "profile-1",
-    })()
-    mock_ami.return_value = "ami-123"
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["create"], input="n\n")
-
-    assert result.exit_code != 0
-    mock_run.assert_not_called()
 
 
 @patch("desk.commands.create.list_workstations")
@@ -200,11 +204,9 @@ def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: obj
 @patch("desk.commands.create.run_instance")
 @patch("desk.commands.create.get_latest_ubuntu_ami")
 @patch("desk.commands.create.get_desk_vpc_outputs")
-@patch("desk.commands.create.list_ec2_key_pairs")
 @patch("desk.commands.create.list_workstations")
 def test_desk_create_allows_duplicate_name_when_terminated(
     mock_list_workstations: object,
-    mock_list_keys: object,
     mock_vpc: object,
     mock_ami: object,
     mock_run: object,
@@ -217,7 +219,6 @@ def test_desk_create_allows_duplicate_name_when_terminated(
     mock_list_workstations.return_value = [
         Workstation(instance_id="i-old", name="main", state="terminated"),
     ]
-    mock_list_keys.return_value = {"main-key"}
     mock_vpc.return_value = type("V", (), {
         "private_subnet_ids": ["subnet-1"],
         "security_group_id": "sg-1",
@@ -245,230 +246,6 @@ def test_desk_help() -> None:
     assert "list" in output
     assert "stop" in output
     assert "connect" in output
-    assert "key" in output
-
-
-def test_desk_key_help() -> None:
-    """desk key --help and desk key create --help succeed."""
-    result = _run_desk("key", "--help")
-    assert result.returncode == 0
-    output = _output(result)
-    assert "Manage SSH keys" in output
-    assert "create" in output
-
-    result = _run_desk("key", "create", "--help")
-    assert result.returncode == 0
-    output = _output(result)
-    assert "Create a new key pair" in output
-
-
-@patch("desk.commands.key.get_key_path")
-@patch("desk.commands.key.get_desk_keys_dir")
-@patch("desk.commands.key.create_key_pair")
-def test_desk_key_create_success(mock_create: object, mock_keys_dir: object, mock_key_path: object, tmp_path) -> None:
-    """desk key create creates key and saves to desk keys dir."""
-    keys_dir = tmp_path / "keys"
-    key_file = keys_dir / "my-key.pem"
-    mock_keys_dir.return_value = str(keys_dir)
-    mock_key_path.return_value = str(key_file)
-    mock_create.return_value = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n"
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "create", "my-key"])
-
-    assert result.exit_code == 0
-    mock_create.assert_called_once_with(key_name="my-key", region=None, profile=None)
-    assert "Created key 'my-key'" in result.output
-    assert key_file.exists()
-
-
-@patch("desk.commands.key.get_key_path")
-@patch("desk.commands.key.create_key_pair")
-def test_desk_key_create_local_exists(mock_create: object, mock_key_path: object, tmp_path) -> None:
-    """desk key create fails when local key file already exists."""
-    existing = tmp_path / "my-key.pem"
-    existing.write_text("existing")
-    mock_key_path.return_value = str(existing)
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "create", "my-key"])
-
-    assert result.exit_code != 0
-    assert "already exists" in result.output
-    mock_create.assert_not_called()
-
-
-@patch("desk.commands.key.get_key_path")
-@patch("desk.commands.key.create_key_pair")
-def test_desk_key_create_aws_duplicate(
-    mock_create: object, mock_key_path: object, tmp_path
-) -> None:
-    """desk key create shows friendly error when key exists in AWS."""
-    from botocore.exceptions import ClientError
-
-    # Key doesn't exist locally
-    mock_key_path.return_value = str(tmp_path / "nonexistent.pem")
-    mock_create.side_effect = ClientError(
-        {"Error": {"Code": "InvalidKeyPair.Duplicate", "Message": "already exists"}},
-        "CreateKeyPair",
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "create", "my-key"])
-
-    assert result.exit_code != 0
-    assert "already exists in AWS" in result.output
-
-
-@patch("desk.commands.key.list_ec2_key_pairs")
-@patch("desk.commands.key.list_local_keys")
-def test_desk_key_list_empty(mock_local: object, mock_remote: object) -> None:
-    """desk key list shows message when no keys."""
-    mock_local.return_value = set()
-    mock_remote.return_value = set()
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "list"])
-    assert result.exit_code == 0
-    assert "No keys found" in result.output
-
-
-@patch("desk.commands.key.list_ec2_key_pairs")
-@patch("desk.commands.key.list_local_keys")
-def test_desk_key_list_shows_local_and_remote(
-    mock_local: object, mock_remote: object
-) -> None:
-    """desk key list shows keys with local/remote indicators."""
-    mock_local.return_value = {"my-key", "local-only"}
-    mock_remote.return_value = {"my-key", "remote-only"}
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "list"])
-    assert result.exit_code == 0
-    assert "NAME" in result.output
-    assert "LOCAL" in result.output
-    assert "REMOTE" in result.output
-    assert "my-key" in result.output
-    assert "local-only" in result.output
-    assert "remote-only" in result.output
-    # my-key has both, local-only has local only, remote-only has remote only
-    assert "yes" in result.output
-    assert "-" in result.output
-
-
-def test_desk_key_delete_help() -> None:
-    """desk key delete --help succeeds."""
-    result = _run_desk("key", "delete", "--help")
-    assert result.returncode == 0
-    output = _output(result)
-    assert "Delete a key pair" in output
-    assert "--force" in output
-    assert "--yes" in output
-
-
-@patch("desk.commands.key.delete_key_pair")
-@patch("desk.commands.key.get_running_workstations_using_key")
-@patch("desk.commands.key.list_ec2_key_pairs")
-@patch("desk.commands.key.get_key_path")
-def test_desk_key_delete_success(
-    mock_key_path: object,
-    mock_remote_keys: object,
-    mock_running: object,
-    mock_delete: object,
-    tmp_path,
-) -> None:
-    """desk key delete removes local file and AWS key."""
-    key_path = tmp_path / "my-key.pem"
-    key_path.write_text("key material")
-    mock_key_path.return_value = str(key_path)
-    mock_remote_keys.return_value = {"my-key"}
-    mock_running.return_value = []
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "delete", "my-key", "--yes"])
-
-    assert result.exit_code == 0
-    assert not key_path.exists()
-    mock_delete.assert_called_once_with(key_name="my-key", region=None, profile=None)
-
-
-@patch("desk.commands.key.list_ec2_key_pairs")
-@patch("desk.commands.key.get_key_path")
-def test_desk_key_delete_not_found(mock_key_path: object, mock_remote_keys: object, tmp_path) -> None:
-    """desk key delete fails when key does not exist."""
-    mock_key_path.return_value = str(tmp_path / "nonexistent.pem")
-    mock_remote_keys.return_value = set()
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "delete", "unknown"])
-
-    assert result.exit_code != 0
-    assert "not found" in result.output
-
-
-@patch("desk.commands.key.delete_key_pair")
-@patch("desk.commands.key.get_running_workstations_using_key")
-@patch("desk.commands.key.list_ec2_key_pairs")
-@patch("desk.commands.key.get_key_path")
-def test_desk_key_delete_aborts_when_not_confirmed(
-    mock_key_path: object, mock_remote_keys: object, mock_running: object, mock_delete: object
-) -> None:
-    """desk key delete aborts when user declines confirmation."""
-    mock_key_path.return_value = "/path/to/my-key.pem"
-    mock_remote_keys.return_value = {"my-key"}
-    mock_running.return_value = []
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "delete", "my-key"], input="n\n")
-
-    assert result.exit_code != 0
-    mock_delete.assert_not_called()
-
-
-@patch("desk.commands.key.delete_key_pair")
-@patch("desk.commands.key.get_running_workstations_using_key")
-@patch("desk.commands.key.list_ec2_key_pairs")
-@patch("desk.commands.key.get_key_path")
-def test_desk_key_delete_refuses_when_in_use(
-    mock_key_path: object,
-    mock_remote_keys: object,
-    mock_running: object,
-    mock_delete: object,
-) -> None:
-    """desk key delete fails when key is used by running workstation."""
-    mock_key_path.return_value = "/path/to/my-key.pem"
-    mock_remote_keys.return_value = {"my-key"}
-    mock_running.return_value = ["i-abc123"]
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "delete", "my-key"])
-
-    assert result.exit_code != 0
-    assert "used by running" in result.output
-    mock_delete.assert_not_called()
-
-
-@patch("desk.commands.key.delete_key_pair")
-@patch("desk.commands.key.get_running_workstations_using_key")
-@patch("desk.commands.key.list_ec2_key_pairs")
-@patch("desk.commands.key.get_key_path")
-def test_desk_key_delete_force_bypasses_in_use_check(
-    mock_key_path: object,
-    mock_remote_keys: object,
-    mock_running: object,
-    mock_delete: object,
-    tmp_path,
-) -> None:
-    """desk key delete --force deletes even when key is in use."""
-    key_path = tmp_path / "my-key.pem"
-    key_path.write_text("key material")
-    mock_key_path.return_value = str(key_path)
-    mock_remote_keys.return_value = {"my-key"}
-    mock_running.return_value = ["i-abc123"]
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["key", "delete", "my-key", "--force", "--yes"])
-
-    assert result.exit_code == 0
-    mock_delete.assert_called_once()
 
 
 def test_desk_ami_help() -> None:
@@ -836,26 +613,129 @@ def test_desk_connect_help() -> None:
     assert "--forward" in output or "-L" in output
 
 
+def test_desk_keygen_help() -> None:
+    """desk keygen --help succeeds."""
+    result = _run_desk("keygen", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "Generate an SSH key" in output
+    assert "ed25519" in output
+    assert "--force" in output
+
+
+@patch("desk.commands.keygen.subprocess.run")
+def test_desk_keygen_creates_key(mock_run: object, tmp_path) -> None:
+    """desk keygen -f PATH creates key and prints public key."""
+    key_path = tmp_path / "id_ed25519"
+    pub_path = tmp_path / "id_ed25519.pub"
+    pub_content = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample user@host"
+
+    def run_side_effect(*args: object, **kwargs: object) -> object:
+        # Simulate ssh-keygen creating the files
+        key_path.write_text("private")
+        pub_path.write_text(pub_content + "\n")
+        from subprocess import CompletedProcess
+        return CompletedProcess(args[0] if args else [], 0, stdout="", stderr="")
+
+    mock_run.side_effect = run_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["keygen", "-f", str(key_path)])
+
+    assert result.exit_code == 0
+    assert f"Created {key_path}" in result.output
+    assert "Public key:" in result.output
+    assert pub_content in result.output
+    mock_run.assert_called_once()
+    call_args = mock_run.call_args[0][0]
+    assert "ssh-keygen" in call_args
+    assert "-t" in call_args and "ed25519" in call_args
+    assert "-f" in call_args and str(key_path) in call_args
+    assert "-N" in call_args and "" in call_args
+
+
+def test_desk_keygen_refuses_overwrite(tmp_path) -> None:
+    """desk keygen fails when key exists and --force not given."""
+    key_path = tmp_path / "id_ed25519"
+    key_path.write_text("existing")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["keygen", "-f", str(key_path)])
+
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    assert "force" in result.output.lower()
+
+
+@patch("desk.commands.keygen.subprocess.run")
+def test_desk_keygen_force_overwrite(mock_run: object, tmp_path) -> None:
+    """desk keygen --force overwrites existing key."""
+    key_path = tmp_path / "id_ed25519"
+    pub_path = tmp_path / "id_ed25519.pub"
+    key_path.write_text("old")
+    pub_content = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAInew user@host"
+
+    def run_side_effect(*args: object, **kwargs: object) -> object:
+        key_path.write_text("new")
+        pub_path.write_text(pub_content + "\n")
+        from subprocess import CompletedProcess
+        return CompletedProcess(args[0] if args else [], 0, stdout="", stderr="")
+
+    mock_run.side_effect = run_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["keygen", "-f", str(key_path), "--force"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    call_args = mock_run.call_args[0][0]
+    assert "-t" in call_args and "ed25519" in call_args
+
+
+@patch("desk.commands.keygen.subprocess.run")
+def test_desk_keygen_type_rsa(mock_run: object, tmp_path) -> None:
+    """desk keygen --type rsa passes -b 4096 to ssh-keygen."""
+    key_path = tmp_path / "id_rsa"
+    pub_path = tmp_path / "id_rsa.pub"
+    pub_path.write_text("ssh-rsa AAAAB3... user@host\n")
+
+    mock_run.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["keygen", "-f", str(key_path), "--type", "rsa"])
+
+    assert result.exit_code == 0
+    call_args = mock_run.call_args[0][0]
+    assert "ed25519" not in call_args
+    assert "-t" in call_args and "rsa" in call_args
+    assert "-b" in call_args and "4096" in call_args
+
+
+@patch("desk.commands.connect.add_temporary_ssh_key")
+@patch("desk.commands.connect.get_public_key_content")
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_key_path")
+@patch("desk.commands.connect.get_default_private_key_path")
 def test_desk_connect_resolves_and_execs_ssh(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    mock_get_public_key: object,
+    mock_add_key: object,
     tmp_path,
 ) -> None:
-    """desk connect resolves workstation and execs ssh with ProxyCommand."""
+    """desk connect injects key via SSM, then execs ssh with ProxyCommand."""
     mock_resolve.return_value = "i-abc123"
     mock_ssm.return_value = True  # SSM ready, skip wait
-    # execvp replaces process - simulate it raising so we don't actually exec
+    mock_get_public_key.return_value = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 test"
+    mock_add_key.return_value = "cmd-123"
     mock_execvp.side_effect = OSError(2, "No such file or directory")
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max"])
@@ -869,28 +749,34 @@ def test_desk_connect_resolves_and_execs_ssh(
     assert "ubuntu@i-abc123" in args
 
 
+@patch("desk.commands.connect.add_temporary_ssh_key")
+@patch("desk.commands.connect.get_public_key_content")
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_key_path")
+@patch("desk.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_key(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    mock_get_public_key: object,
+    mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk connect --key uses desk-managed key path."""
     mock_resolve.return_value = "i-abc123"
     mock_ssm.return_value = True
+    mock_get_public_key.return_value = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 test"
+    mock_add_key.return_value = "cmd-123"
     mock_execvp.side_effect = OSError(2, "No such file")
 
     key_file = tmp_path / "my-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["connect", "max", "--key", "my-key"])
+    result = runner.invoke(cli, ["connect", "max", "-i", str(key_file)])
 
     args = mock_execvp.call_args[0][1]
     assert "-i" in args
@@ -898,25 +784,29 @@ def test_desk_connect_with_key(
     assert args[idx + 1] == str(key_file)
 
 
-@patch("desk.commands.connect.get_key_path")
-def test_desk_connect_key_not_found(mock_get_key_path: object) -> None:
-    """desk connect --key fails when key file does not exist."""
-    mock_get_key_path.return_value = "/nonexistent/my-key.pem"
+@patch("desk.commands.connect.get_default_private_key_path")
+def test_desk_connect_key_not_found(mock_get_default_key: object) -> None:
+    """desk connect fails when default key file does not exist."""
+    mock_get_default_key.return_value = "/nonexistent/my-key.pem"
     runner = CliRunner()
-    result = runner.invoke(cli, ["connect", "max", "--key", "my-key"])
+    result = runner.invoke(cli, ["connect", "max"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
 
+@patch("desk.commands.connect.add_temporary_ssh_key")
+@patch("desk.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
 @patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_key_path")
+@patch("desk.commands.connect.get_default_private_key_path")
 def test_desk_connect_waits_for_ssm_then_connects(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_execvp: object,
     mock_is_ssm_ready: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk connect waits when SSM not ready, then proceeds."""
@@ -926,7 +816,7 @@ def test_desk_connect_waits_for_ssm_then_connects(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max", "--wait-timeout", "10"])
@@ -935,14 +825,14 @@ def test_desk_connect_waits_for_ssm_then_connects(
 
 
 @patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_key_path")
+@patch("desk.commands.connect.get_default_private_key_path")
 def test_desk_connect_not_found(
-    mock_get_key_path: object, mock_resolve: object, tmp_path
+    mock_get_default_key: object, mock_resolve: object, tmp_path
 ) -> None:
     """desk connect with unknown workstation shows error."""
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     mock_resolve.side_effect = ValueError("Workstation 'x' not found")
     runner = CliRunner()
@@ -951,15 +841,19 @@ def test_desk_connect_not_found(
     assert "not found" in result.output
 
 
+@patch("desk.commands.connect.add_temporary_ssh_key")
+@patch("desk.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_key_path")
+@patch("desk.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_port_forward(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk connect --forward adds -L flag to ssh."""
@@ -969,7 +863,7 @@ def test_desk_connect_with_port_forward(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max", "-L", "8080:localhost:80"])
@@ -981,15 +875,19 @@ def test_desk_connect_with_port_forward(
     assert args[idx + 1] == "8080:localhost:80"
 
 
+@patch("desk.commands.connect.add_temporary_ssh_key")
+@patch("desk.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
 @patch("desk.commands.connect.os.execvp")
 @patch("desk.commands.connect.is_ssm_ready")
 @patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_key_path")
+@patch("desk.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_multiple_port_forwards(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk connect with multiple --forward options adds all -L flags."""
@@ -999,7 +897,7 @@ def test_desk_connect_with_multiple_port_forwards(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1643,15 +1541,19 @@ def test_desk_scp_help() -> None:
     assert "--recursive" in output or "-r" in output
 
 
+@patch("desk.commands.scp.add_temporary_ssh_key")
+@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
 @patch("desk.commands.scp.os.execvp")
 @patch("desk.commands.scp.is_ssm_ready")
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_upload(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk scp uploads local file to remote."""
@@ -1661,7 +1563,7 @@ def test_desk_scp_upload(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt"])
@@ -1675,15 +1577,19 @@ def test_desk_scp_upload(
     assert "ubuntu@i-abc123:~/remote.txt" in args
 
 
+@patch("desk.commands.scp.add_temporary_ssh_key")
+@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
 @patch("desk.commands.scp.os.execvp")
 @patch("desk.commands.scp.is_ssm_ready")
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_download(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk scp downloads remote file to local."""
@@ -1693,7 +1599,7 @@ def test_desk_scp_download(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["scp", ":~/remote.txt", "./local.txt"])
@@ -1704,15 +1610,19 @@ def test_desk_scp_download(
     assert "./local.txt" in args
 
 
+@patch("desk.commands.scp.add_temporary_ssh_key")
+@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
 @patch("desk.commands.scp.os.execvp")
 @patch("desk.commands.scp.is_ssm_ready")
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_with_workstation_prefix(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk scp with workstation:path format."""
@@ -1722,7 +1632,7 @@ def test_desk_scp_with_workstation_prefix(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["scp", "main:/etc/hosts", "./hosts", "-w", "main"])
@@ -1733,15 +1643,19 @@ def test_desk_scp_with_workstation_prefix(
     assert "./hosts" in args
 
 
+@patch("desk.commands.scp.add_temporary_ssh_key")
+@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
 @patch("desk.commands.scp.os.execvp")
 @patch("desk.commands.scp.is_ssm_ready")
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_recursive(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk scp --recursive adds -r flag."""
@@ -1751,7 +1665,7 @@ def test_desk_scp_recursive(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["scp", "-r", "./local-dir", ":~/remote-dir"])
@@ -1763,28 +1677,32 @@ def test_desk_scp_recursive(
     assert "-r" in args
 
 
+@patch("desk.commands.scp.add_temporary_ssh_key")
+@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
 @patch("desk.commands.scp.os.execvp")
 @patch("desk.commands.scp.is_ssm_ready")
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_with_custom_key(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
-    """desk scp --key uses desk-managed key path."""
+    """desk scp -i uses given identity file."""
     mock_resolve.return_value = "i-abc123"
     mock_ssm.return_value = True
     mock_execvp.side_effect = OSError(2, "No such file or directory")
 
     key_file = tmp_path / "my-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--key", "my-key"])
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "-i", str(key_file)])
 
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
@@ -1793,25 +1711,25 @@ def test_desk_scp_with_custom_key(
     assert args[idx + 1] == str(key_file)
 
 
-@patch("desk.commands.scp.get_key_path")
-def test_desk_scp_key_not_found(mock_get_key_path: object) -> None:
-    """desk scp --key fails when key file does not exist."""
-    mock_get_key_path.return_value = "/nonexistent/my-key.pem"
+@patch("desk.commands.scp.get_default_private_key_path")
+def test_desk_scp_key_not_found(mock_get_default_key: object) -> None:
+    """desk scp fails when default key file does not exist."""
+    mock_get_default_key.return_value = "/nonexistent/my-key.pem"
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--key", "my-key"])
+    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
 
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_workstation_not_found(
-    mock_get_key_path: object, mock_resolve: object, tmp_path
+    mock_get_default_key: object, mock_resolve: object, tmp_path
 ) -> None:
     """desk scp with unknown workstation shows error."""
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
     runner = CliRunner()
@@ -1820,15 +1738,19 @@ def test_desk_scp_workstation_not_found(
     assert "not found" in result.output
 
 
+@patch("desk.commands.scp.add_temporary_ssh_key")
+@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
 @patch("desk.commands.scp.is_ssm_ready")
 @patch("desk.commands.scp.os.execvp")
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_waits_for_ssm_then_proceeds(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_execvp: object,
     mock_is_ssm_ready: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk scp waits when SSM not ready, then proceeds."""
@@ -1838,7 +1760,7 @@ def test_desk_scp_waits_for_ssm_then_proceeds(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--wait-timeout", "10"])
@@ -1846,15 +1768,19 @@ def test_desk_scp_waits_for_ssm_then_proceeds(
     mock_execvp.assert_called_once()
 
 
+@patch("desk.commands.scp.add_temporary_ssh_key")
+@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
 @patch("desk.commands.scp.os.execvp")
 @patch("desk.commands.scp.is_ssm_ready")
 @patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_key_path")
+@patch("desk.commands.scp.get_default_private_key_path")
 def test_desk_scp_with_custom_user(
-    mock_get_key_path: object,
+    mock_get_default_key: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
     tmp_path,
 ) -> None:
     """desk scp --user uses custom username."""
@@ -1864,7 +1790,7 @@ def test_desk_scp_with_custom_user(
 
     key_file = tmp_path / "main-key.pem"
     key_file.write_text("key")
-    mock_get_key_path.return_value = str(key_file)
+    mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--user", "admin"])
@@ -2013,11 +1939,9 @@ def test_desk_start_shutdown_zero_skips_tag(
 @patch("desk.commands.create.run_instance")
 @patch("desk.commands.create.get_latest_ubuntu_ami")
 @patch("desk.commands.create.get_desk_vpc_outputs")
-@patch("desk.commands.create.list_ec2_key_pairs")
 @patch("desk.commands.create.list_workstations")
 def test_desk_create_sets_shutdown_tag(
     mock_list_workstations: object,
-    mock_list_keys: object,
     mock_vpc: object,
     mock_ami: object,
     mock_run: object,
@@ -2026,7 +1950,6 @@ def test_desk_create_sets_shutdown_tag(
 ) -> None:
     """desk create sets a shutdown tag on the new instance."""
     mock_list_workstations.return_value = []
-    mock_list_keys.return_value = {"main-key"}
     mock_vpc.return_value = type("V", (), {
         "private_subnet_ids": ["subnet-1"],
         "security_group_id": "sg-1",
@@ -2049,11 +1972,9 @@ def test_desk_create_sets_shutdown_tag(
 @patch("desk.commands.create.run_instance")
 @patch("desk.commands.create.get_latest_ubuntu_ami")
 @patch("desk.commands.create.get_desk_vpc_outputs")
-@patch("desk.commands.create.list_ec2_key_pairs")
 @patch("desk.commands.create.list_workstations")
 def test_desk_create_shutdown_zero_skips_tag(
     mock_list_workstations: object,
-    mock_list_keys: object,
     mock_vpc: object,
     mock_ami: object,
     mock_run: object,
@@ -2061,7 +1982,6 @@ def test_desk_create_shutdown_zero_skips_tag(
 ) -> None:
     """desk create --shutdown 0 does not set a shutdown tag."""
     mock_list_workstations.return_value = []
-    mock_list_keys.return_value = {"main-key"}
     mock_vpc.return_value = type("V", (), {
         "private_subnet_ids": ["subnet-1"],
         "security_group_id": "sg-1",
@@ -2194,6 +2114,7 @@ def test_desk_auto_stop_workstation_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
+@patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
 @patch("desk.commands.up.connect.connect")
 @patch("desk.commands.up.set_shutdown_tag")
 @patch("desk.commands.up.compute_shutdown_at")
@@ -2207,6 +2128,7 @@ def test_desk_up_sets_shutdown_tag_on_start(
     mock_compute: object,
     mock_set_tag: object,
     mock_connect: object,
+    _mock_key: object,
 ) -> None:
     """desk up sets shutdown tag when starting a stopped instance."""
     from desk.aws import Workstation

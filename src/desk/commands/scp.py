@@ -8,9 +8,9 @@ import time
 
 import click
 
-from desk.aws import is_ssm_ready, resolve_workstation
+from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
 from desk.config import get_default_profile, get_default_region
-from desk.keys import get_key_path
+from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
 
 log = get_logger("scp")
@@ -84,15 +84,7 @@ def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) ->
     "-i",
     "identity_file",
     default=None,
-    help="Path to SSH private key.",
-)
-@click.option(
-    "--key",
-    "-k",
-    "key_name",
-    default="main-key",
-    show_default=True,
-    help="Desk-managed key name (from desk key create). Resolves to ~/.config/desk/keys/<name>.pem",
+    help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
 @click.option(
     "--region",
@@ -133,7 +125,6 @@ def scp(
     workstation: str,
     user: str,
     identity_file: str | None,
-    key_name: str | None,
     region: str | None,
     profile: str | None,
     wait: bool,
@@ -164,18 +155,13 @@ def scp(
         profile,
     )
 
-    # Resolve identity: -i takes precedence over --key
-    if identity_file:
-        key_path = identity_file
-    elif key_name:
-        key_path = get_key_path(key_name)
-        if not os.path.exists(key_path):
-            raise click.ClickException(
-                f"Key '{key_name}' not found at {key_path}. "
-                "Create it with: desk key create " + key_name
-            )
-    else:
-        key_path = None
+    key_path = identity_file or get_default_private_key_path()
+    if not key_path:
+        raise click.ClickException(
+            "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa) or use -i PATH."
+        )
+    if not os.path.exists(key_path):
+        raise click.ClickException(f"Key not found at {key_path}.")
 
     # If source or destination is "workstation_name:path", use that workstation
     for path in (source, destination):
@@ -229,6 +215,20 @@ def scp(
     if profile:
         os.environ["AWS_PROFILE"] = profile
 
+    try:
+        public_key = get_public_key_content(key_path)
+    except (FileNotFoundError, RuntimeError) as e:
+        raise click.ClickException(str(e)) from e
+    add_temporary_ssh_key(
+        instance_id,
+        user=user,
+        public_key_content=public_key,
+        timeout_seconds=300,
+        region=region,
+        profile=profile,
+    )
+    time.sleep(1.5)
+
     # Parse source and destination paths
     scp_source = _parse_scp_path(source, workstation, user, instance_id)
     scp_dest = _parse_scp_path(destination, workstation, user, instance_id)
@@ -246,8 +246,7 @@ def scp(
         "StrictHostKeyChecking=accept-new",
     ]
 
-    if key_path:
-        scp_args.extend(["-i", key_path])
+    scp_args.extend(["-i", key_path])
 
     if recursive:
         scp_args.append("-r")

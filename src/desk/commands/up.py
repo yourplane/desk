@@ -18,6 +18,7 @@ from desk.aws import (
 )
 from desk.commands import connect, create
 from desk.config import get_default_profile, get_default_region
+from desk.keys import get_default_private_key_path
 
 
 @click.command("up")
@@ -27,14 +28,6 @@ from desk.config import get_default_profile, get_default_region
     default="main",
     show_default=True,
     help="Workstation name (used for create and connect).",
-)
-@click.option(
-    "--key",
-    "-k",
-    "key_name",
-    default="main-key",
-    show_default=True,
-    help="EC2 key pair name for create and SSH for connect.",
 )
 @click.option(
     "--instance-type",
@@ -106,7 +99,6 @@ from desk.config import get_default_profile, get_default_region
 )
 def up(
     name: str,
-    key_name: str,
     instance_type: str,
     ami: str | None,
     stack: str,
@@ -122,7 +114,7 @@ def up(
 
     If a workstation with the target name already exists (running or pending),
     skips create and connects. If stopped or stopping, starts and connects.
-    Otherwise creates then connects. Uses the same defaults (main, main-key).
+    Otherwise creates then connects.
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
@@ -180,7 +172,6 @@ def up(
                 name=name,
                 instance_type=instance_type,
                 ami=ami,
-                key_name=key_name,
                 stack=stack,
                 region=region,
                 profile=profile,
@@ -189,12 +180,20 @@ def up(
     else:
         click.echo(f"Workstation '{name}' already exists. Connecting...")
 
+    key_path = get_default_private_key_path()
+    if not key_path:
+        click.echo(
+            "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa), then run:",
+            err=True,
+        )
+        click.echo(f"  desk connect {name}", err=True)
+        return
+
     ctx.invoke(
         connect.connect,
         workstation=name,
         user=user,
         identity_file=None,
-        key_name=key_name,
         region=region,
         profile=profile,
         wait=wait,

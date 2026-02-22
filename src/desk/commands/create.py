@@ -2,25 +2,19 @@
 
 from __future__ import annotations
 
-import os
-
 import click
-from botocore.exceptions import ClientError
 
 from desk.aws import (
     DeskVpcOutputs,
     compute_shutdown_at,
-    create_key_pair,
     get_desk_vpc_outputs,
     get_latest_ubuntu_ami,
-    list_ec2_key_pairs,
     list_workstations,
     parse_duration,
     run_instance,
     set_shutdown_tag,
 )
 from desk.config import get_default_profile, get_default_region
-from desk.keys import get_desk_keys_dir, get_key_path
 
 
 @click.command("create")
@@ -43,14 +37,6 @@ from desk.keys import get_desk_keys_dir, get_key_path
     "-a",
     default=None,
     help="AMI ID. Default: latest Ubuntu 24.04 LTS.",
-)
-@click.option(
-    "--key",
-    "-k",
-    "key_name",
-    default="main-key",
-    show_default=True,
-    help="EC2 key pair name for SSH access (required for desk connect).",
 )
 @click.option(
     "--stack",
@@ -85,7 +71,6 @@ def create(
     name: str,
     instance_type: str,
     ami: str | None,
-    key_name: str | None,
     stack: str,
     region: str | None,
     profile: str | None,
@@ -128,31 +113,6 @@ def create(
         click.echo("Looking up latest Ubuntu 24.04 LTS AMI...")
         ami = get_latest_ubuntu_ami(region=region, profile=profile)
 
-    # Ensure key exists (prompt to create main-key if missing)
-    if key_name and key_name not in list_ec2_key_pairs(region=region, profile=profile):
-        if not click.confirm(f"Key '{key_name}' does not exist. Create it?"):
-            raise click.Abort()
-        key_path = get_key_path(key_name)
-        if os.path.exists(key_path):
-            raise click.ClickException(
-                f"Key '{key_name}' exists locally at {key_path} but not in AWS. "
-                f"Remove the local file or use a different key name."
-            )
-        try:
-            key_material = create_key_pair(key_name=key_name, region=region, profile=profile)
-        except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "InvalidKeyPair.Duplicate":
-                pass  # Created by another process, continue
-            else:
-                raise
-        else:
-            keys_dir = get_desk_keys_dir()
-            os.makedirs(keys_dir, mode=0o700, exist_ok=True)
-            with open(key_path, "w") as f:
-                f.write(key_material)
-            os.chmod(key_path, 0o600)
-            click.secho(f"Created key '{key_name}'", fg="green")
-
     # Use first private subnet
     subnet_id = vpc_outputs.private_subnet_ids[0]
 
@@ -164,7 +124,7 @@ def create(
         security_group_ids=[vpc_outputs.security_group_id],
         iam_instance_profile_name=vpc_outputs.instance_profile_name,
         name=name,
-        key_name=key_name,
+        key_name=None,
         region=region,
         profile=profile,
     )
