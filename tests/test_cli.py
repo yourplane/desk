@@ -2445,7 +2445,7 @@ def test_desk_tab_list_shows_session_and_windows(
     mock_send: object,
     mock_get_inv: object,
 ) -> None:
-    """desk tab list shows session line and windows when present."""
+    """desk tab list --windows shows session line and windows when present."""
     mock_resolve.return_value = "i-abc123"
     mock_send.return_value = "cmd-1"
     mock_get_inv.return_value = type(
@@ -2460,13 +2460,46 @@ def test_desk_tab_list_shows_session_and_windows(
     )()
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["tab", "list", "main"])
+    result = runner.invoke(cli, ["tab", "list", "main", "--windows"])
 
     assert result.exit_code == 0
     assert "desk-main" in result.output
     assert "Windows:" in result.output
     assert "0:" in result.output
     assert "bash" in result.output
+
+
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk.commands.tab.resolve_workstation")
+def test_desk_tab_list_default_no_winlist_call(
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_send: object,
+    mock_get_inv: object,
+) -> None:
+    """desk tab list without --windows only runs screen -ls, no winlist (avoids popup)."""
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {
+            "stdout": "12345.desk-main\t(Detached)\n",
+            "stderr": "",
+            "status": "Success",
+            "exit_code": 0,
+        },
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "list", "main"])
+
+    assert result.exit_code == 0
+    assert "desk-main" in result.output
+    assert "Windows:" not in result.output
+    assert mock_send.call_count == 1  # only screen -ls, no winlist
 
 
 @patch("desk.commands.tab.get_command_invocation")

@@ -220,9 +220,17 @@ def tab_connect(
 
 @tab_group.command("list")
 @click.argument("workstation", required=True)
+@click.option(
+    "--windows",
+    "-w",
+    is_flag=True,
+    default=False,
+    help="Query and show window list (can trigger screen message on older screen).",
+)
 @_common_tab_options
 def tab_list(
     workstation: str,
+    windows: bool,
     region: str | None,
     profile: str | None,
     wait: bool,
@@ -247,10 +255,10 @@ def tab_list(
             )
 
     session = _screen_session_name(workstation)
-    # List sessions matching desk-* and try to get window list for our session
+    # List sessions: screen -ls only (winlist needs a specific session id when multiple exist)
     stdout, stderr, status, _ = _run_remote_command(
         instance_id,
-        f"screen -ls 2>/dev/null; screen -S {session} -Q winlist 2>/dev/null || true",
+        "screen -ls 2>/dev/null",
         region=region,
         profile=profile,
     )
@@ -258,30 +266,52 @@ def tab_list(
     if stderr:
         click.echo(stderr, err=True)
 
-    # Parse screen -ls output for desk-* sessions
+    # Parse screen -ls: collect all lines that match this desk session (like screen -ls shows all)
     lines = (stdout or "").strip().splitlines()
-    session_line = None
+    session_lines: list[str] = []
     for line in lines:
-        if session in line and "No Sockets found" not in line:
-            session_line = line.strip()
-            break
         if "No Sockets found" in line:
             break
+        if session in line:
+            session_lines.append(line.strip())
 
-    if not session_line:
+    if not session_lines:
         click.echo(f"No screen session '{session}' on {workstation}.")
         click.echo(f"Run 'desk tab connect {workstation}' to create one.")
         return
 
-    click.echo(session_line)
+    for session_line in session_lines:
+        click.echo(session_line)
 
-    # winlist output (if supported): "0\tbash" "1\tvim" per line or tab-separated
-    winlist = [l for l in lines if re.match(r"^\d+\t", l)]
-    if winlist:
-        click.echo("Windows:")
-        for w in winlist:
-            idx, title = w.split("\t", 1)
-            click.echo(f"  {idx}: {title or '(unnamed)'}")
+    # Only run winlist when requested: on older screen it writes "-X: unknown command 'winlist'"
+    # to the session display, which pops up when the user is attached to that session.
+    if not windows:
+        return
+
+    session_id = session_lines[0].split()[0]
+    winlist_stdout, winlist_stderr, _, _ = _run_remote_command(
+        instance_id,
+        f"screen -S {session_id} -Q winlist 2>&1 || true",
+        region=region,
+        profile=profile,
+    )
+    combined = (winlist_stdout or "") + (winlist_stderr or "")
+    if "winlist" in combined.lower() and ("unknown" in combined.lower() or "-X" in combined):
+        pass
+    else:
+        winlist_lines = combined.strip().splitlines()
+        winlist = [
+            l
+            for l in winlist_lines
+            if re.match(r"^\d+\s+", l) and "Socket" not in l
+        ]
+        if winlist:
+            click.echo("Windows:")
+            for w in winlist:
+                parts = w.split(None, 1)
+                idx = parts[0]
+                title = parts[1] if len(parts) > 1 else ""
+                click.echo(f"  {idx}: {title or '(unnamed)'}")
 
 
 @tab_group.command("create")
@@ -377,7 +407,11 @@ def tab_close(
             region=region,
             profile=profile,
         )
-        winlist = [l for l in (stdout or "").strip().splitlines() if re.match(r"^\d+\t", l)]
+        winlist = [
+            l
+            for l in (stdout or "").strip().splitlines()
+            if re.match(r"^\d+\s+", l) and "Socket" not in l
+        ]
         if len(winlist) > 1:
             raise click.ClickException(
                 f"Multiple tabs ({len(winlist)}); specify which to close: "
