@@ -253,7 +253,6 @@ def ami_build(
         "create",
         "--name", workstation_name,
         "--instance-type", instance_type,
-        "--shutdown", "0",
     ]
     if base_ami:
         create_args.extend(["--ami", base_ami])
