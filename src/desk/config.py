@@ -20,7 +20,7 @@ def _load_config() -> ConfigParser:
     path = _get_config_path()
     if os.path.isfile(path):
         try:
-            parser.read(path)
+            parser.read(path, encoding="utf-8")
         except Exception:
             pass
     return parser
