@@ -111,10 +111,10 @@ chmod 600 "$TOKEN_FILE"
 info "Token written to $TOKEN_FILE"
 
 # Set global credential helper so all git commands use this token for github.com
-HELPER="$SCRIPT_DIR/git-credential-helper.sh"
-[[ -x "$HELPER" ]] || err "Credential helper not found or not executable: $HELPER"
-git config --global credential.https://github.com.helper "!$HELPER"
+# Inline helper reads from the same path we wrote the token to (baked in so GIT_AUTH_TOKEN_FILE is respected)
+CRED_HELPER="!f() { [ -r \"$TOKEN_FILE\" ] || exit 1; echo \"username=x-access-token\"; echo \"password=\$(cat \"$TOKEN_FILE\")\"; }; f"
+git config --global credential.https://github.com.helper "$CRED_HELPER"
 info "Git global credential helper set for https://github.com"
 
 info "Done. Git will use the token for HTTPS operations to GitHub (e.g. clone, pull, push)."
-info "Token expires in about 1 hour; re-run this script to refresh, or use git-credential-refresh-daemon.sh for automatic refresh."
+info "Token expires in about 1 hour; re-run this script to refresh."
