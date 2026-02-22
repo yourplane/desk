@@ -376,6 +376,18 @@ def test_desk_ami_build_invalid_config(tmp_path: object) -> None:
     out = _output(result)
     assert "config" in out.lower() or "copy" in out.lower() or "run" in out.lower() or "error" in out.lower()
 
+    path.write_text('{"copy": [], "run": []}')
+    result = _run_desk("ami", "build", str(path))
+    assert result.returncode != 0
+    out = _output(result)
+    assert "ami_name" in out.lower()
+
+    path.write_text('{"copy": [], "run": [], "ami_name": "x", "workstation_name": "builder"}')
+    result = _run_desk("ami", "build", str(path))
+    assert result.returncode != 0
+    out = _output(result)
+    assert "workstation_name" in out.lower()
+
 
 def test_desk_ami_create_help() -> None:
     """desk ami create --help succeeds."""

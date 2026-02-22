@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import secrets
 import subprocess
 import sys
 import time
@@ -20,6 +22,7 @@ from desk.aws import (
     list_amis,
     resolve_workstation,
     stop_instance,
+    terminate_instance,
     wait_for_ami_available,
     wait_for_instance_state,
     wait_for_ssm_ready,
@@ -51,6 +54,26 @@ def _load_build_config(path: str) -> dict[str, Any]:
                 f"Config 'copy[{i}]' must be an object with 'source' and 'dest'."
             )
     return data
+
+
+def _builder_name(ami_name: str) -> str:
+    """Generate a unique builder instance name from the target AMI name."""
+    base = ami_name.lower().strip()
+    base = re.sub(r"[^a-z0-9]+", "-", base)
+    base = base.strip("-") or "ami-builder"
+    base = base[: 240]  # leave room for "-" + 8 hex chars
+    return f"{base}-{secrets.token_hex(4)}"
+
+
+def _versioned_ami_name(ami_name: str) -> str:
+    """Append a timestamp to the AMI name so repeated builds do not collide."""
+    # AWS AMI names are limited to 128 characters
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    max_base = 128 - len(timestamp) - 1  # 1 for the hyphen
+    base = ami_name.strip()
+    if len(base) > max_base:
+        base = base[:max_base]
+    return f"{base}-{timestamp}"
 
 
 def _run_desk(
@@ -192,25 +215,34 @@ def ami_build(
 
     CONFIG_FILE is a JSON file with:
       base_ami (optional): AMI ID to start from (default: latest Ubuntu 24.04)
-      workstation_name (optional): name for the builder instance (default: ami-builder)
       instance_type (optional): e.g. t3.medium (default: t3.medium)
       copy: list of { \"source\": \"local-path\", \"dest\": \"remote-path\", \"recursive\": optional }
       run: list of commands or script paths to execute on the instance (--follow)
-      ami_name (optional): name for the created AMI (default: workstation_name-timestamp)
+      ami_name: base name for the created AMI (a timestamp is appended so reruns do not collide)
 
-    Reuses desk create, desk scp, desk run, and desk ami create. The builder instance
-    is left running; use 'desk kill <workstation_name>' to remove it when done.
+    The builder instance name is auto-generated from ami_name plus random characters so multiple
+    builds can run in parallel. The final AMI name is ami_name with a -YYYYMMDD-HHMMSS suffix so
+    you can rerun the same recipe without duplicate-name errors. On success the builder is
+    terminated; on failure it is left running for debugging.
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
 
     config = _load_build_config(config_file)
     base_ami = config.get("base_ami")
-    workstation_name = config.get("workstation_name", "ami-builder")
     instance_type = config.get("instance_type", "t3.medium")
     copy_list = config.get("copy") or []
     run_list = config.get("run") or []
     ami_name = config.get("ami_name")
+    if not ami_name:
+        raise click.ClickException("Config must specify 'ami_name'.")
+    if "workstation_name" in config:
+        raise click.ClickException(
+            "Config must not specify 'workstation_name'; it is auto-generated from ami_name."
+        )
+    if "key" in config:
+        raise click.ClickException("Config must not specify 'key'.")
+    workstation_name = _builder_name(ami_name)
 
     click.echo(f"Building AMI from config: {config_file}")
     click.echo(f"  Workstation: {workstation_name}")
@@ -295,22 +327,23 @@ def ami_build(
     click.echo()
 
     # 4. Create AMI
+    versioned_name = _versioned_ami_name(ami_name)
     click.echo("Step 4/4: Creating AMI from builder...")
+    click.echo(f"  AMI name: {versioned_name}")
     ami_create_args = [
         "ami", "create",
         workstation_name,
+        "--name", versioned_name,
         "--no-wait" if no_wait else "--wait",
     ]
-    if ami_name:
-        ami_create_args.extend(["--name", ami_name])
     result = _run_desk(ami_create_args, region, profile)
     if result.returncode != 0:
         raise click.ClickException("desk ami create failed.")
 
     click.echo()
+    click.echo("Terminating builder instance...")
+    terminate_instance(instance_id, region=region, profile=profile)
     click.secho("AMI build complete.", fg="green", bold=True)
-    click.echo(f"Builder instance '{workstation_name}' is still running.")
-    click.echo(f"Remove it when done: desk kill {workstation_name}")
 
 
 @ami_group.command("create")
