@@ -5,9 +5,9 @@
 # git's global credential helper so all git operations to GitHub use that token.
 #
 # The token is written to ~/.config/git-auth/github-token and credential.https://github.com.helper
-# is set to this directory's git-credential-helper.sh. GitHub App tokens expire
+# is set to an inline helper that reads that file. GitHub App tokens expire
 # (typically after 1 hour); re-run this script to refresh, or use
-# git-credential-refresh-daemon.sh for automatic refresh.
+# git-credential-refresh-daemon.sh to keep the token updated in the background.
 #
 # Usage:
 #   GITHUB_KEY_SECRET_NAME=my-github-app ./set-git-credentials-from-secret.sh

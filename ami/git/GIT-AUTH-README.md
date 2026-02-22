@@ -1,6 +1,6 @@
 # Git credentials with AWS Secrets Manager
 
-Two scripts in `ami/git/` manage GitHub App credentials via a single AWS Secrets Manager secret (app id, installation id, and private key).
+Scripts in `ami/git/` manage GitHub App credentials via a single AWS Secrets Manager secret (app id, installation id, and private key).
 
 ## 1. Create the secret
 
@@ -44,10 +44,43 @@ The script writes the token to the token file and sets `credential.https://githu
 
 **Token expiry:** GitHub App installation tokens expire (typically after 1 hour). Re-run the script to refresh.
 
+## 3. Keep credentials refreshed (daemon)
+
+**`git-credential-refresh-daemon.sh`** — Runs in a loop: fetches a new token and writes it to the token file (same path as step 2), so git always has a valid token without re-running the one-shot script.
+
+```bash
+GITHUB_KEY_SECRET_NAME=my-github-app ./git-credential-refresh-daemon.sh
+```
+
+Runs in the foreground; use Ctrl+C to stop. For background or startup, run it inside **screen** or **tmux**, or install the systemd user service below.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_KEY_SECRET_NAME` | Yes | Same as set-git-credentials-from-secret.sh |
+| `GIT_AUTH_TOKEN_FILE` | No | Same default as step 2 |
+| `GIT_AUTH_REFRESH_INTERVAL_SECONDS` | No | Seconds between refreshes (default: 1800 = 30 min) |
+| `AWS_REGION`, `AWS_PROFILE` | No | Passed through to the one-shot script |
+
+### Run on startup (systemd user)
+
+1. Copy and edit the unit file:
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cp ami/git/git-credential-refresh.service ~/.config/systemd/user/
+   # Edit: set GITHUB_KEY_SECRET_NAME and the ExecStart path to your ami/git directory.
+   ```
+2. Enable and start:
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable --now git-credential-refresh.service
+   ```
+
+Logs: `journalctl --user -u git-credential-refresh.service -f`
+
 ## AWS permissions
 
 - **create-github-app-secret.sh:** `secretsmanager:CreateSecret`, `secretsmanager:PutSecretValue` (and `DescribeSecret` to detect existing secret).
-- **set-git-credentials-from-secret.sh:** `secretsmanager:GetSecretValue`.
+- **set-git-credentials-from-secret.sh** and **git-credential-refresh-daemon.sh:** `secretsmanager:GetSecretValue`.
 
 ## Security
 
