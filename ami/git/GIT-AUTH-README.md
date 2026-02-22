@@ -14,6 +14,16 @@ To store **app id**, **installation id**, and **private key** in a single Secret
 
 Optional: `--region`, `--profile`. Requires `aws` CLI and `python3`. Creates the secret if it does not exist, or updates it if it does.
 
+## Set global git credentials from secret
+
+To pull **app id**, **installation id**, and **private key** from a single secret, obtain a GitHub installation token, and set git’s **global** credential helper so all git commands (in any terminal) use that token for `https://github.com`:
+
+```bash
+GITHUB_KEY_SECRET_NAME=my-github-app ./set-git-credentials-from-secret.sh
+```
+
+The script writes the token to `~/.config/git-auth/github-token` and sets `credential.https://github.com.helper` to use `ami/git/git-credential-helper.sh`. GitHub App tokens expire (typically after 1 hour); re-run the script to refresh, or use the credential refresh daemon for automatic refresh.
+
 ## Requirements
 
 - **AWS CLI** configured (credentials and region) with permission to `secretsmanager:GetSecretValue` (and `create-secret`/`put-secret-value` if using `create-github-app-secret.sh`)
