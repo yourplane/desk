@@ -98,7 +98,7 @@ def test_config_path_uses_desk_config_env(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_config_path_default_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default path is XDG_CONFIG_HOME/desk/config or ~/.config/desk/config."""
+    """Default path is XDG_CONFIG_HOME/desk/config.ini or ~/.config/desk/config.ini."""
     monkeypatch.delenv("DESK_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg/config")
-    assert _get_config_path() == "/xdg/config/desk/config"
+    assert _get_config_path() == "/xdg/config/desk/config.ini"

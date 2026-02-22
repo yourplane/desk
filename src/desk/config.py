@@ -7,11 +7,11 @@ from configparser import ConfigParser
 
 
 def _get_config_path() -> str:
-    """Path to desk config file (e.g. ~/.config/desk/config)."""
+    """Path to desk config file (e.g. ~/.config/desk/config.ini)."""
     if path := os.environ.get("DESK_CONFIG"):
         return path
     config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return os.path.join(config_home, "desk", "config")
+    return os.path.join(config_home, "desk", "config.ini")
 
 
 def _load_config() -> ConfigParser:
