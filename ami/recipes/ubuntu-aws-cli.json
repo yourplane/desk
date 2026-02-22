@@ -1,9 +1,0 @@
-{
-  "ami_name": "ubuntu-aws-cli",
-  "copy": [
-    { "source": "../aws/install-aws-cli.sh", "dest": "/home/ubuntu/install-aws-cli.sh" }
-  ],
-  "run": [
-    "sudo bash /home/ubuntu/install-aws-cli.sh"
-  ]
-}

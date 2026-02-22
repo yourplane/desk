@@ -7,7 +7,12 @@ import tempfile
 
 import pytest
 
-from desk.config import get_default_profile, get_default_region, _get_config_path
+from desk.config import (
+    get_default_ami_prefix,
+    get_default_profile,
+    get_default_region,
+    _get_config_path,
+)
 
 
 def test_get_default_region_env_takes_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,3 +107,42 @@ def test_config_path_default_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DESK_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg/config")
     assert _get_config_path() == "/xdg/config/desk/config.ini"
+
+
+def test_get_default_ami_prefix_env_takes_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DESK_AMI_PREFIX env overrides config file."""
+    monkeypatch.setenv("DESK_AMI_PREFIX", "my-desk-ami")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[defaults]\nami_prefix = config-prefix\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_default_ami_prefix() == "my-desk-ami"
+    finally:
+        os.unlink(path)
+
+
+def test_get_default_ami_prefix_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Config file ami_prefix used when env is not set."""
+    monkeypatch.delenv("DESK_AMI_PREFIX", raising=False)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[defaults]\nami_prefix = default-desk-ami\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_default_ami_prefix() == "default-desk-ami"
+    finally:
+        os.unlink(path)
+
+
+def test_get_default_ami_prefix_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ami_prefix when env and config are absent."""
+    monkeypatch.delenv("DESK_AMI_PREFIX", raising=False)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[defaults]\nregion = us-east-1\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_default_ami_prefix() is None
+    finally:
+        os.unlink(path)

@@ -40,7 +40,7 @@ from desk.keys import get_default_private_key_path
     "--ami",
     "-a",
     default=None,
-    help="AMI ID. Default: latest Ubuntu 24.04 LTS.",
+    help="AMI ID. Default: latest AMI matching config ami_prefix, or latest Ubuntu 24.04 LTS.",
 )
 @click.option(
     "--stack",

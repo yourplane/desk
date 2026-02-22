@@ -15,6 +15,7 @@ from desk.aws import (
     get_ami_state,
     get_desk_vpc_outputs,
     get_instance_state,
+    get_latest_ami_by_name_prefix,
     get_latest_ubuntu_ami,
     get_running_workstations_using_key,
     is_ssm_ready,
@@ -108,6 +109,43 @@ def test_get_latest_ubuntu_ami_none_found(mock_session: MagicMock) -> None:
 
     with pytest.raises(RuntimeError, match="No Ubuntu .* AMI found"):
         get_latest_ubuntu_ami()
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_latest_ami_by_name_prefix_success(mock_session: MagicMock) -> None:
+    """get_latest_ami_by_name_prefix returns newest AMI whose name starts with prefix."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {"ImageId": "ami-old", "Name": "default-desk-ami-20240101-120000", "CreationDate": "2024-01-01"},
+            {"ImageId": "ami-new", "Name": "default-desk-ami-20240601-120000", "CreationDate": "2024-06-01"},
+            {"ImageId": "ami-other", "Name": "other-ami", "CreationDate": "2024-05-01"},
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_latest_ami_by_name_prefix("default-desk-ami")
+
+    assert result == "ami-new"
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"], Filters=[{"Name": "state", "Values": ["available"]}]
+    )
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_latest_ami_by_name_prefix_none_found(mock_session: MagicMock) -> None:
+    """get_latest_ami_by_name_prefix returns None when no AMI name matches prefix."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {"ImageId": "ami-other", "Name": "other-ami", "CreationDate": "2024-01-01"},
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_latest_ami_by_name_prefix("default-desk-ami")
+
+    assert result is None
 
 
 @patch("desk.aws.boto3.Session")

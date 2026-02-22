@@ -1,0 +1,11 @@
+{
+  "ami_name": "default-desk-ami",
+  "copy": [
+    { "source": "../aws/install-aws-cli.sh", "dest": "/home/ubuntu/install-aws-cli.sh" },
+    { "source": "../git", "dest": "/home/ubuntu/desk-git", "recursive": true }
+  ],
+  "run": [
+    "sudo bash /home/ubuntu/install-aws-cli.sh",
+    "sudo -u ubuntu HOME=/home/ubuntu bash /home/ubuntu/desk-git/install-git-credential-refresh-service.sh"
+  ]
+}

@@ -46,3 +46,14 @@ def get_default_profile() -> str | None:
     if config.has_section("defaults") and config.has_option("defaults", "profile"):
         return config.get("defaults", "profile").strip() or None
     return None
+
+
+def get_default_ami_prefix() -> str | None:
+    """Default AMI name prefix: env (DESK_AMI_PREFIX) then config file. Used when creating a workstation without --ami."""
+    value = os.environ.get("DESK_AMI_PREFIX")
+    if value:
+        return value.strip() or None
+    config = _load_config()
+    if config.has_section("defaults") and config.has_option("defaults", "ami_prefix"):
+        return config.get("defaults", "ami_prefix").strip() or None
+    return None

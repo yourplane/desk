@@ -120,6 +120,26 @@ def get_latest_ubuntu_ami(
     return images[0]["ImageId"]
 
 
+def get_latest_ami_by_name_prefix(
+    prefix: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Get the latest owned AMI whose name starts with the given prefix. Returns None if no match."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    response = ec2.describe_images(Owners=["self"], Filters=[{"Name": "state", "Values": ["available"]}])
+    images = [
+        img
+        for img in response.get("Images", [])
+        if (img.get("Name") or "").startswith(prefix)
+    ]
+    if not images:
+        return None
+    images.sort(key=lambda x: x.get("CreationDate", ""), reverse=True)
+    return images[0]["ImageId"]
+
+
 def run_instance(
     *,
     ami_id: str,

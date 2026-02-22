@@ -8,13 +8,14 @@ from desk.aws import (
     DeskVpcOutputs,
     compute_shutdown_at,
     get_desk_vpc_outputs,
+    get_latest_ami_by_name_prefix,
     get_latest_ubuntu_ami,
     list_workstations,
     parse_duration,
     run_instance,
     set_shutdown_tag,
 )
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_default_ami_prefix, get_default_profile, get_default_region
 
 
 @click.command("create")
@@ -36,7 +37,7 @@ from desk.config import get_default_profile, get_default_region
     "--ami",
     "-a",
     default=None,
-    help="AMI ID. Default: latest Ubuntu 24.04 LTS.",
+    help="AMI ID. Default: latest AMI matching config ami_prefix, or latest Ubuntu 24.04 LTS.",
 )
 @click.option(
     "--stack",
@@ -110,8 +111,15 @@ def create(
     if ami:
         click.echo(f"Using specified AMI: {ami}")
     else:
-        click.echo("Looking up latest Ubuntu 24.04 LTS AMI...")
-        ami = get_latest_ubuntu_ami(region=region, profile=profile)
+        ami_prefix = get_default_ami_prefix()
+        if ami_prefix:
+            click.echo(f"Looking up latest AMI with name prefix '{ami_prefix}'...")
+            ami = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
+        else:
+            ami = None
+        if not ami:
+            click.echo("Looking up latest Ubuntu 24.04 LTS AMI...")
+            ami = get_latest_ubuntu_ami(region=region, profile=profile)
 
     # Use first private subnet
     subnet_id = vpc_outputs.private_subnet_ids[0]
