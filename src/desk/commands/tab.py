@@ -85,6 +85,42 @@ def _shell_quote(s: str) -> str:
     return f"'{escaped}'"
 
 
+# Delimiter for list output (session_id, state, cwd, cmd) - unlikely in paths/cmdline
+_LIST_SEP = "\x01"
+
+
+def _list_sessions_with_details_command(session_prefix: str) -> str:
+    """Build a remote bash command that lists each window with its cwd and command.
+    Uses only process tree (pgrep -P) and /proc — no screen -Q windows, so the
+    attached session never gets a message painted at the bottom.
+    Output: session_id, state, window_index, window_title, cwd, cmd (sep \\x01)
+    """
+    prefix_quoted = _shell_quote(session_prefix)
+    return (
+        f"session_prefix={prefix_quoted}; sep=$(printf '\\\\x01'); "
+        "while IFS= read -r line; do "
+        '[[ "$line" =~ No\\ Sockets ]] && break; '
+        '[[ "$line" != *"$session_prefix"* ]] && continue; '
+        "session_id=$(echo \"$line\" | awk '{print $1}'); "
+        "state=$(echo \"$line\" | cut -f2-); "
+        'pid="${session_id%%.*}"; '
+        "children_list=$(pgrep -P $pid 2>/dev/null | sort -n); "
+        "widx=0; "
+        "while IFS= read -r child_pid; do "
+        '[[ -z "$child_pid" ]] && continue; '
+        "cwd=''; cmd=''; "
+        "if [[ -d /proc/$child_pid ]] 2>/dev/null; then "
+        "cwd=$(readlink /proc/$child_pid/cwd 2>/dev/null); "
+        "cmd=$(cat /proc/$child_pid/cmdline 2>/dev/null | tr '\\0' ' '); cmd=\"${cmd:0:80}\"; "
+        "wtitle=$(echo \"$cmd\" | awk '{print $1}'); [[ -z \"$wtitle\" ]] && wtitle='-'; "
+        "fi; "
+        'printf "%s${sep}%s${sep}%s${sep}%s${sep}%s${sep}%s\n" "$session_id" "$state" "$widx" "$wtitle" "$cwd" "$cmd"; '
+        "widx=$((widx+1)); "
+        "done <<< \"$children_list\"; "
+        "done < <(screen -ls 2>/dev/null)"
+    )
+
+
 def _common_tab_options(f):
     """Add region, profile, wait options (workstation is always a required positional)."""
     f = click.option(
@@ -269,7 +305,7 @@ def tab_connect(
     "-w",
     is_flag=True,
     default=False,
-    help="Query and show window list (can trigger screen message on older screen).",
+    help="Show window list (from process tree; no screen message).",
 )
 @_common_tab_options
 def tab_list(
@@ -303,10 +339,10 @@ def tab_list(
             )
 
     session = _screen_session_name(workstation)
-    # List sessions: screen -ls only (winlist needs a specific session id when multiple exist)
+    list_cmd = _list_sessions_with_details_command(session)
     stdout, stderr, status, _ = _run_remote_command(
         instance_id,
-        "screen -ls 2>/dev/null",
+        list_cmd,
         region=region,
         profile=profile,
     )
@@ -314,57 +350,87 @@ def tab_list(
     if stderr:
         click.echo(stderr, err=True)
 
-    # Parse screen -ls: collect all lines that match this desk session (like screen -ls shows all)
+    # Parse: session_id, state, window_index, window_title, cwd, cmd (6 fields)
     lines = (stdout or "").strip().splitlines()
-    session_lines: list[str] = []
+    rows: list[tuple[str, str, str, str, str, str]] = []
     for line in lines:
-        if "No Sockets found" in line:
-            break
-        if session in line:
-            session_lines.append(line.strip())
+        if _LIST_SEP not in line:
+            continue
+        parts = line.split(_LIST_SEP, 5)
+        session_id = (parts[0] if len(parts) > 0 else "").strip()
+        state = (parts[1] if len(parts) > 1 else "").strip()
+        win_idx = (parts[2] if len(parts) > 2 else "").strip() or "0"
+        win_title = (parts[3] if len(parts) > 3 else "").strip() or "-"
+        cwd = (parts[4] if len(parts) > 4 else "").strip() or "-"
+        cmd = (parts[5] if len(parts) > 5 else "").strip() or "-"
+        if session_id:
+            rows.append((session_id, state, win_idx, win_title, cwd, cmd))
 
-    if not session_lines:
+    # Fallback: old 4-field format (session, state, cwd, cmd) -> treat as single window 0
+    if not rows and stdout:
+        for line in (stdout or "").strip().splitlines():
+            if _LIST_SEP not in line:
+                continue
+            parts = line.split(_LIST_SEP, 3)
+            if len(parts) >= 2:
+                session_id = (parts[0] or "").strip()
+                state = (parts[1] or "").strip()
+                cwd = (parts[2] if len(parts) > 2 else "").strip() or "-"
+                cmd = (parts[3] if len(parts) > 3 else "").strip() or "-"
+                if session_id:
+                    rows.append((session_id, state, "0", "-", cwd, cmd))
+                    break
+
+    # Fallback: plain screen -ls output (no details) from original stdout
+    if not rows and stdout and session in (stdout or ""):
+        for line in (stdout or "").strip().splitlines():
+            if "No Sockets found" in line:
+                break
+            if session in line:
+                parts = line.strip().split(None, 1)
+                session_id = parts[0]
+                state = parts[1] if len(parts) > 1 else ""
+                rows.append((session_id, state, "0", "-", "-", "-"))
+
+    # Fallback: run plain screen -ls when detailed script produced nothing
+    if not rows:
+        simple_stdout, _, _, _ = _run_remote_command(
+            instance_id,
+            "screen -ls 2>/dev/null",
+            region=region,
+            profile=profile,
+        )
+        for line in (simple_stdout or "").strip().splitlines():
+            if "No Sockets found" in line:
+                break
+            if session in line:
+                parts = line.strip().split(None, 1)
+                session_id = parts[0]
+                state = parts[1] if len(parts) > 1 else ""
+                rows.append((session_id, state, "0", "-", "-", "-"))
+
+    if not rows:
         click.echo(f"No screen sessions on {workstation}.")
         click.echo(f"Run 'desk tab connect {workstation}' to create one.")
         return
 
-    for session_line in session_lines:
-        # Session id is first token (e.g. 18847.desk-main); rest is state
-        parts = session_line.split(None, 1)
-        session_id = parts[0]
-        state = parts[1] if len(parts) > 1 else ""
+    # Group by session for tree display (session_id -> (state, [(win_idx, win_title, cwd, cmd), ...]))
+    by_session: dict[str, tuple[str, list[tuple[str, str, str, str]]]] = {}
+    for session_id, state, win_idx, win_title, cwd, cmd in rows:
+        if session_id not in by_session:
+            by_session[session_id] = (state, [])
+        by_session[session_id][1].append((win_idx, win_title, cwd, cmd))
+
+    # Tree: session (level 1), then one line per window (level 2) with all info
+    for session_id, (state, windows) in by_session.items():
         click.echo(f"{session_id}  {state}")
+        for i, (win_idx, win_title, cwd, cmd) in enumerate(windows):
+            is_last = i == len(windows) - 1
+            branch = "└─ " if is_last else "├─ "
+            win_label = f"{win_idx}  {win_title}".strip() if win_title and win_title != "-" else win_idx
+            cmd_display = cmd if len(cmd) <= 50 else cmd[:48] + ".."
+            click.echo(f"  {branch}{win_label}   {cwd}   {cmd_display}")
     click.echo(f"Use 'desk tab connect {workstation} <session>' to attach, 'desk tab close {workstation} <session>' to close.")
-
-    # Only run winlist when requested: on older screen it writes "-X: unknown command 'winlist'"
-    # to the session display, which pops up when the user is attached to that session.
-    if not windows:
-        return
-
-    session_id = session_lines[0].split()[0]
-    winlist_stdout, winlist_stderr, _, _ = _run_remote_command(
-        instance_id,
-        f"screen -S {session_id} -Q winlist 2>&1 || true",
-        region=region,
-        profile=profile,
-    )
-    combined = (winlist_stdout or "") + (winlist_stderr or "")
-    if "winlist" in combined.lower() and ("unknown" in combined.lower() or "-X" in combined):
-        pass
-    else:
-        winlist_lines = combined.strip().splitlines()
-        winlist = [
-            l
-            for l in winlist_lines
-            if re.match(r"^\d+\s+", l) and "Socket" not in l
-        ]
-        if winlist:
-            click.echo("Windows:")
-            for w in winlist:
-                parts = w.split(None, 1)
-                idx = parts[0]
-                title = parts[1] if len(parts) > 1 else ""
-                click.echo(f"  {idx}: {title or '(unnamed)'}")
 
 
 @tab_group.command("create")

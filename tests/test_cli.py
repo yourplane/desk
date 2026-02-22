@@ -2424,14 +2424,18 @@ def test_desk_tab_list_shows_session_and_windows(
     mock_send: object,
     mock_get_inv: object,
 ) -> None:
-    """desk tab list --windows shows session line and windows when present."""
+    """desk tab list shows one row per window with cwd and command."""
     mock_resolve.return_value = "i-abc123"
     mock_send.return_value = "cmd-1"
+    # Two windows: 0 bash, 1 vim (session_id, state, win_idx, win_title, cwd, cmd)
     mock_get_inv.return_value = type(
         "Result",
         (),
         {
-            "stdout": "12345.desk-main\t(Detached)\n0\tbash\n1\tvim\n",
+            "stdout": (
+                "12345.desk-main\x01(Detached)\x010\x01bash\x01/home/ubuntu\x01bash\n"
+                "12345.desk-main\x01(Detached)\x011\x01vim\x01/home/ubuntu/proj\x01vim\n"
+            ),
             "stderr": "",
             "status": "Success",
             "exit_code": 0,
@@ -2443,9 +2447,10 @@ def test_desk_tab_list_shows_session_and_windows(
 
     assert result.exit_code == 0
     assert "desk-main" in result.output
-    assert "Windows:" in result.output
-    assert "0:" in result.output
-    assert "bash" in result.output
+    assert "0" in result.output and "bash" in result.output
+    assert "1" in result.output and "vim" in result.output
+    assert "/home/ubuntu/proj" in result.output
+    assert "├─" in result.output and "└─" in result.output
 
 
 @patch("desk.commands.tab.get_command_invocation")
@@ -2458,14 +2463,15 @@ def test_desk_tab_list_default_no_winlist_call(
     mock_send: object,
     mock_get_inv: object,
 ) -> None:
-    """desk tab list without --windows only runs screen -ls, no winlist (avoids popup)."""
+    """desk tab list runs list-with-details script, one row per window."""
     mock_resolve.return_value = "i-abc123"
     mock_send.return_value = "cmd-1"
+    # List script output: session_id, state, win_idx, win_title, cwd, cmd (sep \x01)
     mock_get_inv.return_value = type(
         "Result",
         (),
         {
-            "stdout": "12345.desk-main\t(Detached)\n",
+            "stdout": "12345.desk-main\x01(Detached)\x010\x01bash\x01/home/ubuntu\x01bash\n",
             "stderr": "",
             "status": "Success",
             "exit_code": 0,
@@ -2477,8 +2483,55 @@ def test_desk_tab_list_default_no_winlist_call(
 
     assert result.exit_code == 0
     assert "desk-main" in result.output
-    assert "Windows:" not in result.output
-    assert mock_send.call_count == 1  # only screen -ls, no winlist
+    assert "/home/ubuntu" in result.output
+    assert "bash" in result.output
+    assert "└─" in result.output or "├─" in result.output
+    assert mock_send.call_count == 1
+
+
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk.commands.tab.resolve_workstation")
+def test_desk_tab_list_tree_two_levels_one_line_per_window(
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_send: object,
+    mock_get_inv: object,
+) -> None:
+    """Tab list shows 2-level tree; window info (idx, title, cwd, cmd) on one line.
+    Matches structure from real screen -ls and screen -S ID -Q windows (e.g. 0*&$ bash  1-$ bash).
+    """
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    # Simulate output from remote script for one session, two windows (like screen -Q windows)
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {
+            "stdout": (
+                "1084.desk-main\x01(02/22/26 19:56:26)\t(Attached)\x010\x01bash\x01/home/ubuntu\x01bash\n"
+                "1084.desk-main\x01(02/22/26 19:56:26)\t(Attached)\x011\x01bash\x01/home/ubuntu/proj\x01bash\n"
+            ),
+            "stderr": "",
+            "status": "Success",
+            "exit_code": 0,
+        },
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "list", "main"])
+
+    assert result.exit_code == 0
+    assert "1084.desk-main" in result.output
+    assert "(Attached)" in result.output
+    # Two levels only: session line, then window lines (no extra cwd:/cmd: lines)
+    lines = result.output.strip().split("\n")
+    assert any("1084.desk-main" in l and "Attached" in l for l in lines)
+    window_lines = [l for l in lines if "├─" in l or "└─" in l]
+    assert len(window_lines) == 2
+    assert "cwd:" not in result.output and "cmd:" not in result.output
+    assert "/home/ubuntu" in result.output and "/home/ubuntu/proj" in result.output
 
 
 @patch("desk.commands.tab.get_command_invocation")
