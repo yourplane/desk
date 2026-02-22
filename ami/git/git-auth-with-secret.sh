@@ -71,11 +71,14 @@ AWS_ARGS=()
 info "Fetching secret: $SECRET_NAME"
 SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" "${AWS_ARGS[@]}" --query SecretString --output text 2>/dev/null) || err "Failed to get secret (check AWS credentials and secret name)"
 
-# Unwrap if JSON object (e.g. {"private_key":"-----BEGIN..."} or {"key":"..."})
+# Unwrap if JSON object (e.g. {"private_key":"-----BEGIN...", "app_id":"...", "installation_id":"..."} or {"key":"..."})
 KEY_CONTENT=""
 if echo "$SECRET_JSON" | head -c1 | grep -q '{'; then
   if command -v jq &>/dev/null; then
     KEY_CONTENT=$(echo "$SECRET_JSON" | jq -r '.private_key // .key // .')
+    # If secret contains app_id/installation_id, use them when env vars are not set
+    [[ -z "${GITHUB_APP_ID:-}" ]] && GITHUB_APP_ID=$(echo "$SECRET_JSON" | jq -r '.app_id // empty')
+    [[ -z "${GITHUB_INSTALLATION_ID:-}" ]] && GITHUB_INSTALLATION_ID=$(echo "$SECRET_JSON" | jq -r '.installation_id // empty')
   else
     # Minimal extract: first value that looks like PEM or key
     KEY_CONTENT=$(echo "$SECRET_JSON" | sed -n 's/.*"private_key"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' | sed 's/\\n/\n/g')
