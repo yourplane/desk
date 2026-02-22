@@ -8,16 +8,7 @@ from datetime import datetime, timezone
 import click
 
 from desk.aws import Workstation, list_workstations
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
+from desk.config import get_default_profile, get_default_region
 
 
 def _color_state(state: str) -> str:
@@ -113,8 +104,8 @@ def list_cmd(
     Shows EC2 instances tagged Type=workstation with their instance ID,
     name, and state. Connect with: desk connect <name-or-id>
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     workstations = list_workstations(region=region, profile=profile)
 

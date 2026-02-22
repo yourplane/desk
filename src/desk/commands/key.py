@@ -13,17 +13,8 @@ from desk.aws import (
     get_running_workstations_using_key,
     list_ec2_key_pairs,
 )
+from desk.config import get_default_profile, get_default_region
 from desk.keys import get_desk_keys_dir, get_key_path, list_local_keys
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
 
 
 @click.group("key")
@@ -59,8 +50,8 @@ def key_create(
     ~/.config/desk/keys/<name>.pem. Use with desk create --key and
     desk connect --key.
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     key_path = get_key_path(name)
     if os.path.exists(key_path):
@@ -124,8 +115,8 @@ def key_list(
     Shows which keys exist in the desk keys folder (local) and which
     exist as EC2 key pairs in AWS (remote).
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     local_keys = list_local_keys()
     try:
@@ -196,8 +187,8 @@ def key_delete(
     Removes the local .pem file and the EC2 key pair from AWS.
     Fails if any running workstation uses the key (unless --force).
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     key_path = get_key_path(name)
     local_exists = os.path.exists(key_path)

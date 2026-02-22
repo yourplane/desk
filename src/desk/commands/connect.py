@@ -9,20 +9,11 @@ import time
 import click
 
 from desk.aws import is_ssm_ready, resolve_workstation
+from desk.config import get_default_profile, get_default_region
 from desk.keys import get_key_path
 from desk.log import get_logger
 
 log = get_logger("connect")
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
 
 
 @click.command("connect")
@@ -100,8 +91,8 @@ def connect(
 
     The instance must have an SSH key associated. Use -i for key path or --key for desk-managed keys.
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     log.debug("connect workstation=%s region=%s profile=%s", workstation, region, profile)
 

@@ -15,19 +15,10 @@ from desk.aws import (
     send_ssm_command,
     wait_for_ssm_ready,
 )
+from desk.config import get_default_profile, get_default_region
 from desk.log import get_logger
 
 log = get_logger("run")
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
 
 
 def _shell_quote(s: str) -> str:
@@ -125,8 +116,8 @@ def run(
         desk run /path/to/script.sh --follow
         desk run "whoami" --user ubuntu
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     # Check if script is a local file path
     script_content = script

@@ -13,16 +13,7 @@ from desk.aws import (
     resolve_workstation,
     set_shutdown_tag,
 )
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
+from desk.config import get_default_profile, get_default_region
 
 
 @click.command("auto-stop")
@@ -69,8 +60,8 @@ def auto_stop(
       desk auto-stop dev 2h30m      # set 'dev' to 2h30m from now
       desk auto-stop main --clear   # remove auto-stop timer
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)

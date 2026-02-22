@@ -1,0 +1,7 @@
+; desk config
+; Copy to ~/.config/desk/config (or set DESK_CONFIG to your path).
+; Options can still be overridden by --region/--profile or AWS_REGION/AWS_PROFILE.
+
+[defaults]
+region = us-east-1
+profile = my-aws-profile

@@ -24,16 +24,7 @@ from desk.aws import (
     wait_for_instance_state,
     wait_for_ssm_ready,
 )
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
+from desk.config import get_default_profile, get_default_region
 
 
 @click.group("ami")
@@ -125,8 +116,8 @@ def ami_list(
     By default shows only AMIs created with 'desk ami create'. Use --all to show
     all AMIs you own in this region.
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     amis = list_amis(region=region, profile=profile, managed_only=not show_all)
 
@@ -211,8 +202,8 @@ def ami_build(
     Reuses desk create, desk scp, desk run, and desk ami create. The builder instance
     is left running; use 'desk kill <workstation_name>' to remove it when done.
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     config = _load_build_config(config_file)
     base_ami = config.get("base_ami")
@@ -393,8 +384,8 @@ def ami_create(
         desk ami create main --name my-custom-ami
         desk ami create i-abc123 --no-reboot --no-wait
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     # Resolve workstation - allow any state except terminated
     try:

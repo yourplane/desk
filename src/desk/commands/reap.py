@@ -7,16 +7,7 @@ import os
 import click
 
 from desk.aws import reap_overdue
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
+from desk.config import get_default_profile, get_default_region
 
 
 @click.command("reap")
@@ -50,8 +41,8 @@ def reap(
     Finds running instances with a desk:shutdown-at tag in the past
     and stops them. Use --dry-run to preview without stopping.
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     overdue = reap_overdue(region=region, profile=profile, dry_run=dry_run)
 

@@ -17,6 +17,7 @@ from desk.aws import (
     start_instance,
 )
 from desk.commands import connect, create
+from desk.config import get_default_profile, get_default_region
 
 
 @click.command("up")
@@ -123,6 +124,8 @@ def up(
     skips create and connects. If stopped or stopping, starts and connects.
     Otherwise creates then connects. Uses the same defaults (main, main-key).
     """
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
     ctx = click.get_current_context()
     try:
         resolve_workstation(name, region=region, profile=profile)

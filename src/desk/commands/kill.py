@@ -7,16 +7,7 @@ import os
 import click
 
 from desk.aws import resolve_workstation, terminate_instance
-
-
-def _get_region() -> str | None:
-    """Resolve region from env or config."""
-    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-
-def _get_profile() -> str | None:
-    """Resolve profile from env."""
-    return os.environ.get("AWS_PROFILE")
+from desk.config import get_default_profile, get_default_region
 
 
 @click.command("kill")
@@ -53,8 +44,8 @@ def kill(
 
     This permanently destroys the instance and all data on its root volume.
     """
-    region = region or _get_region()
-    profile = profile or _get_profile()
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
 
     try:
         instance_id = resolve_workstation(
