@@ -2509,14 +2509,14 @@ def test_desk_tab_close_success(
     """desk tab close runs remote screen quit and reports success."""
     mock_resolve.return_value = "i-abc123"
     mock_send.return_value = "cmd-1"
-    # First call: screen -ls (when using short name "main"); second: screen -X quit
+    # First call: screen -ls (validate session); second: screen -X quit
     mock_get_inv.side_effect = [
         type("Result", (), {"stdout": "12345.desk-main\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0})(),
         type("Result", (), {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0})(),
     ]
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["tab", "close", "main"])
+    result = runner.invoke(cli, ["tab", "close", "main", "12345.desk-main"])
 
     assert result.exit_code == 0
     assert "Session 12345.desk-main closed" in result.output

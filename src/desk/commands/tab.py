@@ -334,7 +334,7 @@ def tab_list(
         session_id = parts[0]
         state = parts[1] if len(parts) > 1 else ""
         click.echo(f"{session_id}  {state}")
-    click.echo("Use 'desk tab connect <session>' to attach, 'desk tab close <session>' to close.")
+    click.echo(f"Use 'desk tab connect {workstation} <session>' to attach, 'desk tab close {workstation} <session>' to close.")
 
     # Only run winlist when requested: on older screen it writes "-X: unknown command 'winlist'"
     # to the session display, which pops up when the user is attached to that session.
@@ -417,9 +417,11 @@ def tab_create(
 
 
 @tab_group.command("close")
+@click.argument("workstation", required=True)
 @click.argument("session", required=True)
 @_common_tab_options
 def tab_close(
+    workstation: str,
     session: str,
     region: str | None,
     profile: str | None,
@@ -428,14 +430,12 @@ def tab_close(
 ) -> None:
     """Close a screen session (terminate it).
 
-    SESSION is the session id from 'desk tab list' (e.g. 18847.desk-main), or a
-    workstation name when exactly one session exists for it.
+    WORKSTATION is the name or instance ID (e.g. main). SESSION is the session
+    id from 'desk tab list WORKSTATION' (e.g. 1084.desk-main).
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
-    workstation, full_session_id = _parse_session_arg(session)
     session_name = _screen_session_name(workstation)
-
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
     except ValueError as e:
@@ -450,33 +450,28 @@ def tab_close(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
 
-    if full_session_id is None:
-        # Short name: list sessions and pick one
-        stdout, _, _, _ = _run_remote_command(
-            instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+    # Validate session exists on this workstation
+    stdout, _, _, _ = _run_remote_command(
+        instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+    )
+    lines = (stdout or "").strip().splitlines()
+    session_lines_list = [
+        line.strip()
+        for line in lines
+        if session_name in line and "No Sockets found" not in line
+    ]
+    matching = [s for s in session_lines_list if s.split()[0] == session]
+    if not matching:
+        raise click.ClickException(
+            f"Session '{session}' not found on {workstation}. "
+            f"Use 'desk tab list {workstation}' to see sessions."
         )
-        lines = (stdout or "").strip().splitlines()
-        session_lines_list = [
-            line.strip()
-            for line in lines
-            if session_name in line and "No Sockets found" not in line
-        ]
-        if not session_lines_list:
-            raise click.ClickException(
-                f"No screen session on {workstation}. Use 'desk tab list {workstation}'."
-            )
-        if len(session_lines_list) > 1:
-            raise click.ClickException(
-                f"Multiple sessions on {workstation}; use full session id from "
-                f"'desk tab list {workstation}' (e.g. 18847.desk-main)."
-            )
-        full_session_id = session_lines_list[0].split()[0]
 
-    cmd = f"screen -S {full_session_id} -X quit"
+    cmd = f"screen -S {session} -X quit"
     _, stderr, status, exit_code = _run_remote_command(
         instance_id, cmd, region=region, profile=profile
     )
     if status != "Success" or (exit_code is not None and exit_code != 0):
         click.echo(stderr or "Failed to close session.", err=True)
         raise click.ClickException("tab close failed")
-    click.echo(f"Session {full_session_id} closed.")
+    click.echo(f"Session {session} closed.")
