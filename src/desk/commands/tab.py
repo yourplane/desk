@@ -30,6 +30,20 @@ def _screen_session_name(workstation: str) -> str:
     return f"{SCREEN_SESSION_PREFIX}{workstation}"
 
 
+def _parse_session_arg(session_arg: str) -> tuple[str, str | None]:
+    """Parse SESSION argument: return (workstation, full_session_id or None).
+
+    - Full form like '18847.desk-main' -> ('main', '18847.desk-main')
+    - Short form like 'main' -> ('main', None); attach/create uses desk-main.
+    """
+    if f".{SCREEN_SESSION_PREFIX}" in session_arg:
+        # e.g. 18847.desk-main -> workstation is "main"
+        prefix = f".{SCREEN_SESSION_PREFIX}"
+        workstation = session_arg.split(prefix, 1)[1]
+        return (workstation, session_arg)
+    return (session_arg, None)
+
+
 def _run_remote_command(
     instance_id: str,
     command: str,
@@ -104,24 +118,25 @@ def _common_tab_options(f):
 
 @click.group("tab")
 def tab_group() -> None:
-    """Manage screen sessions (tabs) for persistent work across disconnect/reconnect.
+    """Manage screen sessions for persistent work across disconnect/reconnect.
 
     Uses GNU screen on the remote workstation. Sessions survive SSH disconnects;
-    use 'desk tab connect' to reattach and pick up where you left off.
+    use 'desk tab connect' to reattach. List shows session ids; use that exact
+    value with connect and close.
     """
     pass
 
 
 @tab_group.command("connect")
 @click.argument("workstation", required=True)
-@click.argument("window_index", type=int, required=False)
+@click.argument("session", required=False)
 @click.option(
     "--window",
     "-W",
-    "window_index_opt",
+    "window_index",
     type=int,
     default=None,
-    help="Attach to this window index (0-based). Alternative to positional.",
+    help="Attach to this window index (0-based) within the session.",
 )
 @click.option(
     "--user",
@@ -160,8 +175,8 @@ def tab_group() -> None:
 )
 def tab_connect(
     workstation: str,
+    session: str | None,
     window_index: int | None,
-    window_index_opt: int | None,
     user: str,
     identity_file: str | None,
     region: str | None,
@@ -170,24 +185,63 @@ def tab_connect(
     wait_timeout: int,
     forwards: tuple[str, ...],
 ) -> None:
-    """Attach to the desk screen session (create if missing).
+    """Attach to a screen session (create if missing when SESSION is omitted).
 
-    WORKSTATION is the name or instance ID (e.g. main, foo, i-abc123).
-
-    Runs screen on the remote so your shell and processes survive disconnects.
-    Re-run this command after reconnecting to resume the same session.
-    Optional WINDOW_INDEX or --window N attaches to a specific window (see 'desk tab list').
+    WORKSTATION is the name or instance ID (e.g. main). SESSION is the session id
+    from 'desk tab list WORKSTATION' (e.g. 1084.desk-main); omit to attach to or
+    create the desk session for that workstation.
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
+    session_name = _screen_session_name(workstation)
+    full_session_id = session if session and f".{SCREEN_SESSION_PREFIX}" in session else None
 
-    which_window = window_index_opt if window_index_opt is not None else window_index
-    session = _screen_session_name(workstation)
-    # Attach to session, or create and attach if it doesn't exist
-    if which_window is not None:
-        remote_cmd = f"screen -r {session} -p {which_window} || screen -S {session}"
+    try:
+        instance_id = resolve_workstation(workstation, region=region, profile=profile)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    if wait and not is_ssm_ready(instance_id, region=region, profile=profile):
+        click.echo(f"Waiting for SSM agent on {instance_id}...", err=True)
+        if not wait_for_ssm_ready(
+            instance_id, region=region, profile=profile, timeout=wait_timeout
+        ):
+            raise click.ClickException(
+                f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
+            )
+
+    if full_session_id is not None:
+        # Attach to exact session id (must exist)
+        stdout, stderr, _, _ = _run_remote_command(
+            instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+        )
+        lines = (stdout or "").strip().splitlines()
+        session_lines_list = [
+            line.strip()
+            for line in lines
+            if session_name in line and "No Sockets found" not in line
+        ]
+        matching = [s for s in session_lines_list if s.split()[0] == full_session_id]
+        if not matching:
+            raise click.ClickException(
+                f"Session '{full_session_id}' not found on {workstation}. "
+                f"Use 'desk tab list {workstation}' to see sessions."
+            )
+        attach_id = full_session_id
     else:
-        remote_cmd = f"screen -r {session} || screen -S {session}"
+        # Workstation short name: attach to desk-{workstation} or create
+        attach_id = session_name
+
+    # Use -x (multiuser) so we can attach even when session is already attached
+    if full_session_id is not None:
+        if window_index is not None:
+            remote_cmd = f"screen -x {attach_id} -p {window_index}"
+        else:
+            remote_cmd = f"screen -x {attach_id}"
+    else:
+        if window_index is not None:
+            remote_cmd = f"screen -x {attach_id} -p {window_index} || screen -S {attach_id}"
+        else:
+            remote_cmd = f"screen -x {attach_id} || screen -S {attach_id}"
 
     argv = get_connection_argv(
         workstation=workstation,
@@ -200,7 +254,7 @@ def tab_connect(
         forwards=forwards,
         remote_command=remote_cmd,
     )
-    log.info("exec ssh with screen session=%s", session)
+    log.info("exec ssh with screen session=%s", attach_id)
     try:
         os.execvp("ssh", argv)
     except OSError as e:
@@ -226,7 +280,11 @@ def tab_list(
     wait: bool,
     wait_timeout: int,
 ) -> None:
-    """List screen sessions (and windows) for WORKSTATION."""
+    """List screen sessions for WORKSTATION.
+
+    Each line shows a session id; use that exact value with 'desk tab connect'
+    and 'desk tab close'.
+    """
     region = region or get_default_region()
     profile = profile or get_default_profile()
 
@@ -266,12 +324,17 @@ def tab_list(
             session_lines.append(line.strip())
 
     if not session_lines:
-        click.echo(f"No screen session '{session}' on {workstation}.")
+        click.echo(f"No screen sessions on {workstation}.")
         click.echo(f"Run 'desk tab connect {workstation}' to create one.")
         return
 
     for session_line in session_lines:
-        click.echo(session_line)
+        # Session id is first token (e.g. 18847.desk-main); rest is state
+        parts = session_line.split(None, 1)
+        session_id = parts[0]
+        state = parts[1] if len(parts) > 1 else ""
+        click.echo(f"{session_id}  {state}")
+    click.echo("Use 'desk tab connect <session>' to attach, 'desk tab close <session>' to close.")
 
     # Only run winlist when requested: on older screen it writes "-X: unknown command 'winlist'"
     # to the session display, which pops up when the user is attached to that session.
@@ -354,24 +417,24 @@ def tab_create(
 
 
 @tab_group.command("close")
-@click.argument("workstation", required=True)
-@click.argument("window_index", type=int, required=False)
+@click.argument("session", required=True)
 @_common_tab_options
 def tab_close(
-    workstation: str,
-    window_index: int | None,
+    session: str,
     region: str | None,
     profile: str | None,
     wait: bool,
     wait_timeout: int,
 ) -> None:
-    """Close a window in the desk screen session.
+    """Close a screen session (terminate it).
 
-    WORKSTATION is required. WINDOW_INDEX (0-based) is required when there are
-    multiple tabs; omit it to close the only tab. See 'desk tab list WORKSTATION'.
+    SESSION is the session id from 'desk tab list' (e.g. 18847.desk-main), or a
+    workstation name when exactly one session exists for it.
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
+    workstation, full_session_id = _parse_session_arg(session)
+    session_name = _screen_session_name(workstation)
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
@@ -387,36 +450,33 @@ def tab_close(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
 
-    session = _screen_session_name(workstation)
-
-    if window_index is None:
-        # Require window index when multiple tabs exist; if winlist unavailable, try closing 0
+    if full_session_id is None:
+        # Short name: list sessions and pick one
         stdout, _, _, _ = _run_remote_command(
-            instance_id,
-            f"screen -S {session} -Q winlist 2>/dev/null || true",
-            region=region,
-            profile=profile,
+            instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
         )
-        winlist = [
-            l
-            for l in (stdout or "").strip().splitlines()
-            if re.match(r"^\d+\s+", l) and "Socket" not in l
+        lines = (stdout or "").strip().splitlines()
+        session_lines_list = [
+            line.strip()
+            for line in lines
+            if session_name in line and "No Sockets found" not in line
         ]
-        if len(winlist) > 1:
+        if not session_lines_list:
             raise click.ClickException(
-                f"Multiple tabs ({len(winlist)}); specify which to close: "
-                f"desk tab close {workstation} <0-based index>. "
-                f"Use 'desk tab list {workstation}' to see windows."
+                f"No screen session on {workstation}. Use 'desk tab list {workstation}'."
             )
-        # One tab or winlist empty (e.g. unsupported): close window 0
-        window_index = 0
+        if len(session_lines_list) > 1:
+            raise click.ClickException(
+                f"Multiple sessions on {workstation}; use full session id from "
+                f"'desk tab list {workstation}' (e.g. 18847.desk-main)."
+            )
+        full_session_id = session_lines_list[0].split()[0]
 
-    # screen -S name -X -p N kill
-    cmd = f"screen -S {session} -X -p {window_index} kill"
+    cmd = f"screen -S {full_session_id} -X quit"
     _, stderr, status, exit_code = _run_remote_command(
         instance_id, cmd, region=region, profile=profile
     )
     if status != "Success" or (exit_code is not None and exit_code != 0):
-        click.echo(stderr or "Failed to close window.", err=True)
+        click.echo(stderr or "Failed to close session.", err=True)
         raise click.ClickException("tab close failed")
-    click.echo(f"Window {window_index} closed.")
+    click.echo(f"Session {full_session_id} closed.")
