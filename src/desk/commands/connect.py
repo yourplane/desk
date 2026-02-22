@@ -16,6 +16,109 @@ from desk.log import get_logger
 log = get_logger("connect")
 
 
+def get_connection_argv(
+    workstation: str,
+    user: str,
+    identity_file: str | None,
+    key_name: str | None,
+    region: str | None,
+    profile: str | None,
+    wait: bool,
+    wait_timeout: int,
+    forwards: tuple[str, ...],
+    remote_command: str | None = None,
+) -> list[str]:
+    """Resolve workstation, wait for SSM, set AWS env, and build SSH argv.
+
+    Caller can pass remote_command to run a command instead of a shell (e.g. screen).
+    Returns argv suitable for os.execvp("ssh", argv).
+    """
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
+
+    log.debug("get_connection_argv workstation=%s region=%s profile=%s", workstation, region, profile)
+
+    if identity_file:
+        key_path = identity_file
+    elif key_name:
+        key_path = get_key_path(key_name)
+        if not os.path.exists(key_path):
+            raise click.ClickException(
+                f"Key '{key_name}' not found at {key_path}. "
+                "Create it with: desk key create " + key_name
+            )
+    else:
+        key_path = None
+
+    try:
+        instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        log.info("resolved %s -> %s", workstation, instance_id)
+    except ValueError as e:
+        log.debug("resolve failed workstation=%s error=%s", workstation, e)
+        raise click.UsageError(str(e)) from e
+
+    ssm_ready = is_ssm_ready(instance_id, region=region, profile=profile)
+    log.debug("initial is_ssm_ready=%s", ssm_ready)
+    if wait and not ssm_ready:
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        idx = 0
+        deadline = time.monotonic() + wait_timeout
+        err = sys.stderr
+        log.info("waiting for SSM ready instance_id=%s timeout=%ds", instance_id, wait_timeout)
+        while time.monotonic() < deadline:
+            if is_ssm_ready(instance_id, region=region, profile=profile):
+                elapsed = time.monotonic() - (deadline - wait_timeout)
+                log.info("SSM ready after %.1fs", elapsed)
+                err.write("\r" + " " * 50 + "\r")
+                err.flush()
+                break
+            char = spinner[idx % len(spinner)]
+            err.write(f"\r{char} Waiting for instance to be ready... ")
+            err.flush()
+            idx += 1
+            if idx % 10 == 0:
+                log.debug("SSM wait poll %d elapsed=%.1fs", idx, time.monotonic() - (deadline - wait_timeout))
+            time.sleep(0.5)
+        else:
+            err.write("\n")
+            err.flush()
+            log.warning("SSM wait timed out instance_id=%s", instance_id)
+            raise click.ClickException(
+                f"Instance {instance_id} did not become ready within {wait_timeout}s. "
+                "Check that the instance is running and has the SSM agent."
+            )
+
+    if region:
+        os.environ["AWS_REGION"] = region
+    if profile:
+        os.environ["AWS_PROFILE"] = profile
+
+    proxy_cmd = (
+        "sh -c \"aws ssm start-session --target %h "
+        "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
+    )
+
+    ssh_args = [
+        "ssh",
+        "-o",
+        f"ProxyCommand={proxy_cmd}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        f"{user}@{instance_id}",
+    ]
+    if key_path:
+        ssh_args[1:1] = ["-i", key_path]
+
+    for fwd in forwards:
+        ssh_args[1:1] = ["-L", fwd]
+
+    if remote_command:
+        ssh_args.insert(-1, "-t")  # Force TTY so remote command (e.g. screen) gets a terminal
+        ssh_args.append(remote_command)
+
+    return ssh_args
+
+
 @click.command("connect")
 @click.argument("workstation", default="main")
 @click.option(
@@ -91,91 +194,19 @@ def connect(
 
     The instance must have an SSH key associated. Use -i for key path or --key for desk-managed keys.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
-
-    log.debug("connect workstation=%s region=%s profile=%s", workstation, region, profile)
-
-    # Resolve identity: -i takes precedence over --key
-    if identity_file:
-        key_path = identity_file
-    elif key_name:
-        key_path = get_key_path(key_name)
-        if not os.path.exists(key_path):
-            raise click.ClickException(
-                f"Key '{key_name}' not found at {key_path}. "
-                "Create it with: desk key create " + key_name
-            )
-    else:
-        key_path = None
-
-    try:
-        instance_id = resolve_workstation(workstation, region=region, profile=profile)
-        log.info("resolved %s -> %s", workstation, instance_id)
-    except ValueError as e:
-        log.debug("resolve failed workstation=%s error=%s", workstation, e)
-        raise click.UsageError(str(e)) from e
-
-    # Wait for SSM agent if not yet ready
-    ssm_ready = is_ssm_ready(instance_id, region=region, profile=profile)
-    log.debug("initial is_ssm_ready=%s", ssm_ready)
-    if wait and not ssm_ready:
-        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-        idx = 0
-        deadline = time.monotonic() + wait_timeout
-        err = sys.stderr
-        log.info("waiting for SSM ready instance_id=%s timeout=%ds", instance_id, wait_timeout)
-        while time.monotonic() < deadline:
-            if is_ssm_ready(instance_id, region=region, profile=profile):
-                elapsed = time.monotonic() - (deadline - wait_timeout)
-                log.info("SSM ready after %.1fs", elapsed)
-                err.write("\r" + " " * 50 + "\r")
-                err.flush()
-                break
-            char = spinner[idx % len(spinner)]
-            err.write(f"\r{char} Waiting for instance to be ready... ")
-            err.flush()
-            idx += 1
-            if idx % 10 == 0:
-                log.debug("SSM wait poll %d elapsed=%.1fs", idx, time.monotonic() - (deadline - wait_timeout))
-            time.sleep(0.5)
-        else:
-            err.write("\n")
-            err.flush()
-            log.warning("SSM wait timed out instance_id=%s", instance_id)
-            raise click.ClickException(
-                f"Instance {instance_id} did not become ready within {wait_timeout}s. "
-                "Check that the instance is running and has the SSM agent."
-            )
-
-    # Set AWS env so ProxyCommand inherits them
-    if region:
-        os.environ["AWS_REGION"] = region
-    if profile:
-        os.environ["AWS_PROFILE"] = profile
-
-    proxy_cmd = (
-        "sh -c \"aws ssm start-session --target %h "
-        "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
+    ssh_args = get_connection_argv(
+        workstation=workstation,
+        user=user,
+        identity_file=identity_file,
+        key_name=key_name,
+        region=region,
+        profile=profile,
+        wait=wait,
+        wait_timeout=wait_timeout,
+        forwards=forwards,
+        remote_command=None,
     )
-
-    ssh_args = [
-        "ssh",
-        "-o",
-        f"ProxyCommand={proxy_cmd}",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        f"{user}@{instance_id}",
-    ]
-    if key_path:
-        ssh_args[1:1] = ["-i", key_path]
-
-    # Add port forwards
-    for fwd in forwards:
-        ssh_args[1:1] = ["-L", fwd]
-
-    log.info("exec ssh user=%s instance_id=%s", user, instance_id)
-    # Replace our process with ssh for proper terminal handling
+    log.info("exec ssh user=%s", user)
     try:
         os.execvp("ssh", ssh_args)
     except OSError as e:
