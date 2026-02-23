@@ -350,7 +350,7 @@ def test_desk_ami_build_help() -> None:
     assert result.returncode == 0
     output = _output(result)
     assert "CONFIG_FILE" in output
-    assert "base_ami" in output or "copy" in output
+    assert "copy" in output
     assert "desk create" in output or "create" in output
 
 

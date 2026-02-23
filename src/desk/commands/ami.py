@@ -215,8 +215,8 @@ def ami_build(
     """Build an AMI from a config file: create instance, copy files, run scripts, then ami create.
 
     CONFIG_FILE is a JSON file with:
-      base_ami (optional): AMI ID to start from (default: latest Ubuntu 24.04)
-      instance_type (optional): e.g. t3.medium (default: t3.medium)
+      instance_type (optional): e.g. t3.medium (default: t3.medium).
+      The builder always starts from the latest Ubuntu 24.04 LTS AMI (config default/ami_prefix is not used).
       copy: list of { \"source\": \"local-path\", \"dest\": \"remote-path\", \"recursive\": optional }
       run: list of commands or script paths to execute on the instance (--follow)
       ami_name: base name for the created AMI (a timestamp is appended so reruns do not collide)
@@ -230,7 +230,10 @@ def ami_build(
     profile = profile or get_default_profile()
 
     config = _load_build_config(config_file)
-    base_ami = config.get("base_ami")
+    if "base_ami" in config:
+        raise click.ClickException(
+            "Builder always uses latest Ubuntu 24.04; 'base_ami' is not allowed in recipes."
+        )
     instance_type = config.get("instance_type", "t3.medium")
     copy_list = config.get("copy") or []
     run_list = config.get("run") or []
@@ -249,19 +252,18 @@ def ami_build(
     click.echo(f"  Workstation: {workstation_name}")
     click.echo()
 
-    # 1. Create instance from base AMI (always use Ubuntu for builder unless recipe sets base_ami)
+    # 1. Create instance from Ubuntu (never use config default/ami_prefix for builder)
+    builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
     create_args = [
         "create",
         "--name", workstation_name,
         "--instance-type", instance_type,
+        "--ami", builder_ami,
     ]
-    if base_ami:
-        create_args.extend(["--ami", base_ami])
-    else:
-        builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
-        create_args.extend(["--ami", builder_ami])
+    # Clear ami prefix so create never falls back to config default
+    create_env = {"DESK_AMI_PREFIX": ""}
     click.echo("Step 1/4: Creating builder instance...")
-    result = _run_desk(create_args, region, profile)
+    result = _run_desk(create_args, region, profile, env=create_env)
     if result.returncode != 0:
         raise click.ClickException("desk create failed.")
 
