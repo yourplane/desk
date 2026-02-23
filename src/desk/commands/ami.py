@@ -18,6 +18,7 @@ from desk.aws import (
     create_ami,
     get_ami_state,
     get_instance_state,
+    get_latest_ubuntu_ami,
     is_ssm_ready,
     list_amis,
     resolve_workstation,
@@ -248,7 +249,7 @@ def ami_build(
     click.echo(f"  Workstation: {workstation_name}")
     click.echo()
 
-    # 1. Create instance from base AMI
+    # 1. Create instance from base AMI (always use Ubuntu for builder unless recipe sets base_ami)
     create_args = [
         "create",
         "--name", workstation_name,
@@ -256,6 +257,9 @@ def ami_build(
     ]
     if base_ami:
         create_args.extend(["--ami", base_ami])
+    else:
+        builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
+        create_args.extend(["--ami", builder_ami])
     click.echo("Step 1/4: Creating builder instance...")
     result = _run_desk(create_args, region, profile)
     if result.returncode != 0:
