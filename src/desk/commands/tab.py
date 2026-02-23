@@ -45,9 +45,20 @@ def _screen_session_name(workstation: str) -> str:
     return f"{SCREEN_SESSION_PREFIX}{workstation}"
 
 
-def _new_session_name(workstation: str) -> str:
-    """Unique session name for a new session (desk-{workstation}-{timestamp_ms})."""
-    return f"{_screen_session_name(workstation)}-{int(time.time() * 1000)}"
+def _short_session_suffix() -> str:
+    """Short unique suffix for auto-generated session names (hex ms timestamp, 11 chars)."""
+    return hex(int(time.time() * 1000))[2:]
+
+
+def _new_session_name(workstation: str, name: str | None = None) -> str:
+    """Session name for a new session: just the name or short suffix (no prefix)."""
+    if name is not None:
+        # Sanitize for screen: alphanumeric, hyphen, underscore only
+        sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-")
+        if not sanitized:
+            sanitized = _short_session_suffix()
+        return sanitized
+    return _short_session_suffix()
 
 
 def _parse_session_arg(session_arg: str) -> tuple[str, str | None]:
@@ -59,8 +70,12 @@ def _parse_session_arg(session_arg: str) -> tuple[str, str | None]:
     if f".{SCREEN_SESSION_PREFIX}" in session_arg:
         prefix = f".{SCREEN_SESSION_PREFIX}"
         suffix = session_arg.split(prefix, 1)[1]
-        # desk-main-1737654321 -> workstation "main"; desk-my-ws-1737654321 -> "my-ws"
-        if suffix and "-" in suffix and suffix.split("-")[-1].isdigit():
+        # desk-main-1737654321 or desk-main-194a1f2f5f8 -> workstation "main"
+        last = suffix.split("-")[-1] if suffix else ""
+        is_numeric_suffix = last.isdigit() or (
+            len(last) >= 6 and all(c in "0123456789aAbBcCdDeEfF" for c in last)
+        )
+        if suffix and "-" in suffix and is_numeric_suffix:
             workstation = "-".join(suffix.split("-")[:-1])
         else:
             workstation = suffix
@@ -262,17 +277,21 @@ def tab_connect(
     """Attach to an existing screen session.
 
     WORKSTATION is the name or instance ID (e.g. main). SESSION is the session id
-    from 'desk tab list WORKSTATION' (e.g. 1084.desk-main); omit to attach to the
-    desk session for that workstation. Use 'desk tab create WORKSTATION' to create
-    a session first.
+    or name from 'desk tab list WORKSTATION' (e.g. 1084.foo-tab or foo-tab); omit
+    to attach to the most recent session. Use 'desk tab create WORKSTATION' to
+    create a session first.
     """
     t0 = time.perf_counter()
     _verbose_echo(verbose, "start tab connect")
 
     region = region or get_default_region()
     profile = profile or get_default_profile()
-    session_name = _screen_session_name(workstation)
-    full_session_id = session if session and f".{SCREEN_SESSION_PREFIX}" in session else None
+    # Full session id is pid.name (e.g. 23434.foo-tab)
+    full_session_id = (
+        session
+        if session and "." in session and session.split(".")[0].isdigit()
+        else None
+    )
 
     t1 = time.perf_counter()
     _verbose_echo(verbose, "resolving workstation", t1 - t0)
@@ -296,27 +315,58 @@ def tab_connect(
     elif wait:
         _verbose_echo(verbose, "SSM already ready", time.perf_counter() - t0)
 
-    # Build remote command. Avoid SSM round-trip: run screen -ls over SSH, not via SSM.
+    stdout, stderr, _, _ = _run_remote_command(
+        instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+    )
+    lines = (stdout or "").strip().splitlines()
+    session_lines_list = [
+        line.strip()
+        for line in lines
+        if "No Sockets found" not in line and line.strip() and "." in (line.strip().split()[0] or "")
+    ]
+
     if full_session_id is not None:
+        matching = [s for s in session_lines_list if s.split()[0] == full_session_id]
+        if not matching:
+            raise click.ClickException(
+                f"Session '{full_session_id}' not found on {workstation}. "
+                f"Use 'desk tab list {workstation}' to see sessions."
+            )
         attach_id = full_session_id
-        if window_index is not None:
-            remote_cmd = f"screen -x {_shell_quote(attach_id)} -p {window_index}"
-        else:
-            remote_cmd = f"screen -x {_shell_quote(attach_id)}"
+    elif session:
+        # Session name (e.g. foo-tab): find session id whose name part matches
+        matching = [
+            s for s in session_lines_list
+            if s.split()[0].split(".", 1)[-1] == session
+        ]
+        if not matching:
+            raise click.ClickException(
+                f"Session '{session}' not found on {workstation}. "
+                f"Use 'desk tab list {workstation}' to see sessions."
+            )
+        attach_id = matching[0].split()[0]
     else:
-        # Pick most recent desk-{workstation}* session on the remote (one SSH, no SSM)
-        awk_n = _shell_quote(session_name)
-        err_msg = f"No screen session on {workstation}. Run desk tab create {workstation}."
-        inner = (
-            f"sid=$(screen -ls 2>/dev/null | awk -v n={awk_n} '$0~n && $1~/^[0-9]+\\./ {{print $1}}' | sort -t- -k3 -nr | head -1); "
-            f'[ -z "$sid" ] && {{ echo {_shell_quote(err_msg)} >&2; exit 1; }}; '
-        )
-        if window_index is not None:
-            inner += f'exec screen -x "$sid" -p {window_index}'
-        else:
-            inner += 'exec screen -x "$sid"'
-        remote_cmd = f"bash -c {_shell_quote(inner)}"
-        attach_id = f"{session_name} (pick on remote)"
+        # No session: attach to most recent (highest pid)
+        if not session_lines_list:
+            raise click.ClickException(
+                f"No screen session on {workstation}. "
+                f"Run 'desk tab create {workstation}' to create one."
+            )
+        session_ids = [line.split()[0] for line in session_lines_list if line.split()]
+
+        def _session_pid(sid: str) -> int:
+            if "." in sid and sid.split(".")[0].isdigit():
+                return int(sid.split(".")[0])
+            return 0
+
+        session_ids.sort(key=_session_pid, reverse=True)
+        attach_id = session_ids[0]
+
+    # Use -x (multiuser) so we can attach even when session is already attached
+    if window_index is not None:
+        remote_cmd = f"screen -x {_shell_quote(attach_id)} -p {window_index}"
+    else:
+        remote_cmd = f"screen -x {_shell_quote(attach_id)}"
 
     t2 = time.perf_counter()
     _verbose_echo(verbose, "building SSH argv (get_connection_argv)", t2 - t0)
@@ -513,15 +563,21 @@ def tab_list(
 
 @tab_group.command("create")
 @click.argument("workstation", required=True)
+@click.argument("name", required=False)
 @_common_tab_options
 def tab_create(
     workstation: str,
+    name: str | None,
     region: str | None,
     profile: str | None,
     wait: bool,
     wait_timeout: int,
 ) -> None:
-    """Create the desk screen session. Use 'desk tab connect WORKSTATION' to attach."""
+    """Create the desk screen session. Use 'desk tab connect WORKSTATION' to attach.
+
+    WORKSTATION is the name or instance ID (e.g. main). NAME is an optional tab
+    name; if omitted, a short unique name is generated.
+    """
     region = region or get_default_region()
     profile = profile or get_default_profile()
 
@@ -540,7 +596,7 @@ def tab_create(
             )
 
     # Unique name so each create is a new session (not a new window in an existing session)
-    session = _new_session_name(workstation)
+    session = _new_session_name(workstation, name=name)
     user = "ubuntu"
     # Run from home. Start initial window with TERM/size set and a login shell so when the user
     # attaches via SSH they get colors and correct layout (SSM has no TTY so plain screen -dmS
@@ -595,7 +651,7 @@ def tab_close(
     """Close a screen session (terminate it).
 
     WORKSTATION is the name or instance ID (e.g. main). SESSION is the session
-    id from 'desk tab list WORKSTATION' (e.g. 1084.desk-main).
+    id or name from 'desk tab list WORKSTATION' (e.g. 1084.foo-tab or foo-tab).
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
@@ -613,7 +669,7 @@ def tab_close(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
 
-    # Validate session exists on this instance
+    # Validate session exists on this instance; resolve short name to full id
     stdout, _, _, _ = _run_remote_command(
         instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
     )
@@ -623,7 +679,15 @@ def tab_close(
         for line in lines
         if "No Sockets found" not in line and line.strip().split() and "." in (line.strip().split()[0] or "")
     ]
-    matching = [s for s in session_lines_list if s.split()[0] == session]
+    if "." in session and session.split(".")[0].isdigit():
+        matching = [s for s in session_lines_list if s.split()[0] == session]
+    else:
+        matching = [
+            s for s in session_lines_list
+            if s.split()[0].split(".", 1)[-1] == session
+        ]
+        if matching:
+            session = matching[0].split()[0]
     if not matching:
         raise click.ClickException(
             f"Session '{session}' not found on {workstation}. "
