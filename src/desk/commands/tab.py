@@ -558,7 +558,26 @@ def tab_create(
     if exit_code is not None and exit_code != 0:
         click.echo(stderr or "Failed to create session.", err=True)
         raise click.ClickException("tab create failed")
-    click.echo(f"Session created. Use 'desk tab connect {workstation}' to attach.")
+    # Get full session id (e.g. 18426.desk-main-1771812751954) for the suggested connect command
+    ls_stdout, _, _, _ = _run_remote_command(
+        instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+    )
+    full_session_id = None
+    for line in (ls_stdout or "").strip().splitlines():
+        if "No Sockets found" in line:
+            break
+        if session in line:
+            parts = line.strip().split()
+            if parts and "." in parts[0]:
+                full_session_id = parts[0]
+                break
+    if full_session_id:
+        click.echo(
+            f"Session created: {session}. "
+            f"Use 'desk tab connect {workstation} {full_session_id}' to attach."
+        )
+    else:
+        click.echo(f"Session created: {session}. Use 'desk tab connect {workstation}' to attach.")
 
 
 @tab_group.command("close")

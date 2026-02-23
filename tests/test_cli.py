@@ -2586,27 +2586,39 @@ def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
 @patch("desk.commands.tab.send_ssm_command")
 @patch("desk.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk.commands.tab.resolve_workstation")
+@patch("desk.commands.tab._new_session_name", return_value="desk-main-1234567890123")
 def test_desk_tab_create_success(
+    mock_new_session: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_send: object,
     mock_get_inv: object,
 ) -> None:
-    """desk tab create runs remote screen command and reports success."""
+    """desk tab create runs remote screen command and reports success with connect hint."""
     mock_resolve.return_value = "i-abc123"
     mock_send.return_value = "cmd-1"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0},
-    )()
+    # First call: create success; second: screen -ls with session so we suggest full id
+    mock_get_inv.side_effect = [
+        type("Result", (), {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0})(),
+        type(
+            "Result",
+            (),
+            {
+                "stdout": "  18426.desk-main-1234567890123\t(Detached)\n",
+                "stderr": "",
+                "status": "Success",
+                "exit_code": 0,
+            },
+        )(),
+    ]
 
     runner = CliRunner()
     result = runner.invoke(cli, ["tab", "create", "main"])
 
     assert result.exit_code == 0
-    assert "Session created" in result.output
-    mock_send.assert_called_once()
+    assert "Session created: desk-main-1234567890123" in result.output
+    assert "desk tab connect main 18426.desk-main-1234567890123" in result.output
+    assert mock_send.call_count == 2
 
 
 @patch("desk.commands.tab.get_command_invocation")
