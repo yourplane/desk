@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from typing import Callable
 
 import click
 
@@ -27,6 +28,7 @@ def get_connection_argv(
     forwards: tuple[str, ...],
     remote_command: str | None = None,
     key_timeout: int = 300,
+    verbose_callback: Callable[[str, float | None], None] | None = None,
 ) -> list[str]:
     """Resolve workstation, wait for SSM, inject public key via SSM, set AWS env, build SSH argv.
 
@@ -34,7 +36,12 @@ def get_connection_argv(
     (then remove it after key_timeout seconds). Uses identity_file if given, else default
     SSH key (~/.ssh/id_ed25519 or id_rsa). Caller can pass remote_command for e.g. screen.
     Returns argv suitable for os.execvp("ssh", argv).
+    verbose_callback(message, elapsed_sec) is called at each step when provided (e.g. for -v).
     """
+    def vb(msg: str, elapsed: float | None = None) -> None:
+        if verbose_callback:
+            verbose_callback(msg, elapsed)
+
     region = region or get_default_region()
     profile = profile or get_default_profile()
 
@@ -48,15 +55,21 @@ def get_connection_argv(
     if not os.path.exists(key_path):
         raise click.ClickException(f"Key not found at {key_path}.")
 
+    vb("get_connection_argv: resolve workstation")
+    t0 = time.perf_counter()
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
         log.info("resolved %s -> %s", workstation, instance_id)
     except ValueError as e:
         log.debug("resolve failed workstation=%s error=%s", workstation, e)
         raise click.UsageError(str(e)) from e
+    vb("get_connection_argv: resolved", time.perf_counter() - t0)
 
+    vb("get_connection_argv: is_ssm_ready")
+    t1 = time.perf_counter()
     ssm_ready = is_ssm_ready(instance_id, region=region, profile=profile)
     log.debug("initial is_ssm_ready=%s", ssm_ready)
+    vb("get_connection_argv: is_ssm_ready done", time.perf_counter() - t1)
     if wait and not ssm_ready:
         spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         idx = 0
@@ -91,12 +104,18 @@ def get_connection_argv(
     if profile:
         os.environ["AWS_PROFILE"] = profile
 
+    vb("get_connection_argv: get_public_key_content")
+    t2 = time.perf_counter()
     try:
         public_key = get_public_key_content(key_path)
     except (FileNotFoundError, RuntimeError) as e:
         raise click.ClickException(str(e)) from e
+    vb("get_connection_argv: get_public_key_content done", time.perf_counter() - t2)
 
+    key_settle_sleep = 0.5
     log.info("adding temporary SSH key to %s for %ds", instance_id, key_timeout)
+    vb("get_connection_argv: add_temporary_ssh_key (SSM)")
+    t3 = time.perf_counter()
     add_temporary_ssh_key(
         instance_id,
         user=user,
@@ -105,7 +124,10 @@ def get_connection_argv(
         region=region,
         profile=profile,
     )
-    time.sleep(1.5)
+    vb("get_connection_argv: add_temporary_ssh_key done", time.perf_counter() - t3)
+    vb(f"get_connection_argv: sleep {key_settle_sleep}s (key settle)")
+    time.sleep(key_settle_sleep)
+    vb("get_connection_argv: sleep done", key_settle_sleep)
 
     proxy_cmd = (
         "sh -c \"aws ssm start-session --target %h "
