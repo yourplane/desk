@@ -133,7 +133,7 @@ def get_connection_argv(
 
 
 @click.command("connect")
-@click.argument("workstation", default="main")
+@click.argument("workstation")
 @click.option(
     "--user",
     "-u",

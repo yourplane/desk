@@ -22,13 +22,7 @@ from desk.keys import get_default_private_key_path
 
 
 @click.command("up")
-@click.option(
-    "--name",
-    "-n",
-    default="main",
-    show_default=True,
-    help="Workstation name (used for create and connect).",
-)
+@click.argument("workstation")
 @click.option(
     "--instance-type",
     "-t",
@@ -98,7 +92,7 @@ from desk.keys import get_default_private_key_path
     help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable).",
 )
 def up(
-    name: str,
+    workstation: str,
     instance_type: str,
     ami: str | None,
     stack: str,
@@ -120,7 +114,7 @@ def up(
     profile = profile or get_default_profile()
     ctx = click.get_current_context()
     try:
-        resolve_workstation(name, region=region, profile=profile)
+        resolve_workstation(workstation, region=region, profile=profile)
     except ValueError as e:
         if "not found" not in str(e).lower():
             raise click.UsageError(str(e)) from e
@@ -130,7 +124,7 @@ def up(
             w for w in list_workstations(
                 region=region, profile=profile, states=["stopped", "stopping"]
             )
-            if w.name == name
+            if w.name == workstation
         ]
         if stopped:
             ws = stopped[0]
@@ -169,7 +163,7 @@ def up(
             # No existing workstation at all, create it
             ctx.invoke(
                 create.create,
-                name=name,
+                workstation=workstation,
                 instance_type=instance_type,
                 ami=ami,
                 stack=stack,
@@ -178,7 +172,7 @@ def up(
                 shutdown_after=shutdown_after,
             )
     else:
-        click.echo(f"Workstation '{name}' already exists. Connecting...")
+        click.echo(f"Workstation '{workstation}' already exists. Connecting...")
 
     key_path = get_default_private_key_path()
     if not key_path:
@@ -186,12 +180,12 @@ def up(
             "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa), then run:",
             err=True,
         )
-        click.echo(f"  desk connect {name}", err=True)
+        click.echo(f"  desk connect {workstation}", err=True)
         return
 
     ctx.invoke(
         connect.connect,
-        workstation=name,
+        workstation=workstation,
         user=user,
         identity_file=None,
         region=region,

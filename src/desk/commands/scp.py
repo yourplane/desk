@@ -63,15 +63,9 @@ def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) ->
 
 
 @click.command("scp")
+@click.argument("workstation")
 @click.argument("source")
 @click.argument("destination")
-@click.option(
-    "--workstation",
-    "-w",
-    default="main",
-    show_default=True,
-    help="Workstation name or instance ID.",
-)
 @click.option(
     "--user",
     "-u",
@@ -120,9 +114,9 @@ def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) ->
     help="Recursively copy directories.",
 )
 def scp(
+    workstation: str,
     source: str,
     destination: str,
-    workstation: str,
     user: str,
     identity_file: str | None,
     region: str | None,
@@ -138,10 +132,10 @@ def scp(
 
     \b
     Examples:
-      desk scp ./local-file.txt :~/remote-file.txt      # Upload to home dir
-      desk scp :~/remote-file.txt ./local-file.txt      # Download from home dir
-      desk scp -r ./local-dir :~/remote-dir             # Upload directory recursively
-      desk scp main:/etc/hosts ./hosts                  # Download from specific workstation
+      desk scp main ./local-file.txt :~/remote-file.txt      # Upload to home dir
+      desk scp main :~/remote-file.txt ./local-file.txt     # Download from home dir
+      desk scp main -r ./local-dir :~/remote-dir            # Upload directory recursively
+      desk scp main :/etc/hosts ./hosts                     # Download from remote path
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()

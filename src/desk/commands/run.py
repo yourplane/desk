@@ -32,14 +32,8 @@ def _shell_quote(s: str) -> str:
 
 
 @click.command("run")
+@click.argument("workstation")
 @click.argument("script")
-@click.option(
-    "--workstation",
-    "-w",
-    default="main",
-    show_default=True,
-    help="Workstation name or instance ID.",
-)
 @click.option(
     "--user",
     "-u",
@@ -88,8 +82,8 @@ def _shell_quote(s: str) -> str:
     help="Timeout for the command execution in seconds.",
 )
 def run(
-    script: str,
     workstation: str,
+    script: str,
     user: str | None,
     follow: bool,
     region: str | None,
@@ -110,11 +104,11 @@ def run(
     Examples:
 
     \b
-        desk run "echo hello"
-        desk run "apt update && apt upgrade -y" --follow
-        desk run ./deploy.sh -w my-workstation -f
-        desk run /path/to/script.sh --follow
-        desk run "whoami" --user ubuntu
+        desk run main "echo hello"
+        desk run main "apt update && apt upgrade -y" --follow
+        desk run my-workstation ./deploy.sh -f
+        desk run main /path/to/script.sh --follow
+        desk run main "whoami" --user ubuntu
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()

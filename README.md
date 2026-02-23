@@ -50,21 +50,21 @@ No SSH key setup required: workstations are created without EC2 key pairs. When 
 **Create and connect (recommended):**
 
 ```bash
-# Create if needed, then SSH (default workstation: main)
-desk up
+# Create if needed, then SSH (workstation name is required)
+desk up main
 
 # Custom name
-desk up --name dev
+desk up dev
 ```
 
 **Create a workstation:**
 
 ```bash
-# Default name: main (no EC2 key pair; connect uses key injection)
-desk create
+# Workstation name is required (no EC2 key pair; connect uses key injection)
+desk create main
 
 # Custom options
-desk create --name my-box --instance-type t3.large
+desk create my-box --instance-type t3.large
 ```
 
 **Connect (SSH over SSM):**
@@ -72,16 +72,13 @@ desk create --name my-box --instance-type t3.large
 Desk temporarily adds your **public** key to the instance's `authorized_keys` via SSM (then removes it after `--key-timeout`, default 300s). It uses ~/.ssh/id_ed25519 or ~/.ssh/id_rsa by default, or the key at `-i PATH`.
 
 ```bash
-# Defaults: workstation=main, key=~/.ssh/id_ed25519 or id_rsa
-desk connect
-
-# By name or instance ID
+# Workstation name or instance ID is required; key=~/.ssh/id_ed25519 or id_rsa by default
 desk connect main
 desk connect i-0abc123def456
 
 # Custom identity file
-desk connect -i ~/.ssh/my-key
-desk connect --key-timeout 60   # remove injected key after 60s
+desk connect main -i ~/.ssh/my-key
+desk connect main --key-timeout 60   # remove injected key after 60s
 ```
 
 **List workstations:**

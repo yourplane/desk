@@ -19,13 +19,7 @@ from desk.config import get_default_ami_prefix, get_default_profile, get_default
 
 
 @click.command("create")
-@click.option(
-    "--name",
-    "-n",
-    default="main",
-    show_default=True,
-    help="Name for the workstation (used as EC2 Name tag and alias).",
-)
+@click.argument("workstation")
 @click.option(
     "--instance-type",
     "-t",
@@ -69,7 +63,7 @@ from desk.config import get_default_ami_prefix, get_default_profile, get_default
     help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable).",
 )
 def create(
-    name: str,
+    workstation: str,
     instance_type: str,
     ami: str | None,
     stack: str,
@@ -92,12 +86,12 @@ def create(
     existing = list_workstations(region=region, profile=profile)
     duplicates = [
         w for w in existing
-        if w.name == name and w.state != "terminated"
+        if w.name == workstation and w.state != "terminated"
     ]
     if duplicates:
         states = ", ".join(f"{w.instance_id} ({w.state})" for w in duplicates)
         raise click.ClickException(
-            f"Workstation named '{name}' already exists: {states}. "
+            f"Workstation named '{workstation}' already exists: {states}. "
             "Use a different name or terminate the existing workstation first."
         )
 
@@ -124,14 +118,14 @@ def create(
     # Use first private subnet
     subnet_id = vpc_outputs.private_subnet_ids[0]
 
-    click.echo(f"Launching instance '{name}' ({instance_type})...")
+    click.echo(f"Launching instance '{workstation}' ({instance_type})...")
     instance_id = run_instance(
         ami_id=ami,
         instance_type=instance_type,
         subnet_id=subnet_id,
         security_group_ids=[vpc_outputs.security_group_id],
         iam_instance_profile_name=vpc_outputs.instance_profile_name,
-        name=name,
+        name=workstation,
         key_name=None,
         region=region,
         profile=profile,
@@ -146,9 +140,9 @@ def create(
     click.secho("Workstation created successfully!", fg="green", bold=True)
     click.echo()
     click.echo(f"  Instance ID:  {instance_id}")
-    click.echo(f"  Name:        {name}")
+    click.echo(f"  Name:        {workstation}")
     click.echo(f"  State:       pending (initializing)")
     click.echo()
     click.echo("Connect once the instance is running:")
-    click.echo(f"  desk connect {name}")
+    click.echo(f"  desk connect {workstation}")
     click.echo(f"  desk connect {instance_id}")

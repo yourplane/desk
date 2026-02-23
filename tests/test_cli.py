@@ -29,7 +29,7 @@ def test_desk_up_help() -> None:
     assert result.returncode == 0
     output = _output(result)
     assert "Create a workstation and connect to it" in output
-    assert "main" in output
+    assert "WORKSTATION" in output
     assert "--forward" in output or "-L" in output
 
 
@@ -59,7 +59,7 @@ def test_desk_up_starts_stopped_instance(
     mock_start.return_value = "i-stopped"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["up", "--name", "main"])
+    result = runner.invoke(cli, ["up", "main"])
 
     assert result.exit_code == 0
     mock_start.assert_called_once_with("i-stopped", region=None, profile=None)
@@ -98,7 +98,7 @@ def test_desk_up_waits_for_stopping_instance(
     mock_start.return_value = "i-stopping"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["up", "--name", "main"])
+    result = runner.invoke(cli, ["up", "main"])
 
     assert result.exit_code == 0
     assert mock_get_state.call_count >= 1
@@ -130,7 +130,7 @@ def test_desk_up_skips_connect_when_no_ssh_key(
     mock_start.return_value = "i-stopped"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["up", "--name", "main"])
+    result = runner.invoke(cli, ["up", "main"])
 
     assert result.exit_code == 0
     assert "No SSH key found" in result.output
@@ -143,7 +143,7 @@ def test_desk_create_help() -> None:
     assert result.returncode == 0
     output = _output(result)
     assert "Create a new workstation instance" in output
-    assert "--name" in output
+    assert "WORKSTATION" in output
 
 
 @patch("desk.commands.create.list_workstations")
@@ -156,7 +156,7 @@ def test_desk_create_rejects_duplicate_name_running(mock_list_workstations: obje
     ]
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["create", "--name", "main"])
+    result = runner.invoke(cli, ["create", "main"])
 
     assert result.exit_code != 0
     assert "already exists" in result.output
@@ -174,7 +174,7 @@ def test_desk_create_rejects_duplicate_name_stopped(mock_list_workstations: obje
     ]
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["create", "--name", "myws"])
+    result = runner.invoke(cli, ["create", "myws"])
 
     assert result.exit_code != 0
     assert "already exists" in result.output
@@ -192,7 +192,7 @@ def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: obj
     ]
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["create", "--name", "myws"])
+    result = runner.invoke(cli, ["create", "myws"])
 
     assert result.exit_code != 0
     assert "already exists" in result.output
@@ -228,7 +228,7 @@ def test_desk_create_allows_duplicate_name_when_terminated(
     mock_run.return_value = "i-new123"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["create", "--name", "main"])
+    result = runner.invoke(cli, ["create", "main"])
 
     assert result.exit_code == 0
     mock_run.assert_called_once()
@@ -1110,9 +1110,9 @@ def test_desk_run_help() -> None:
     assert result.returncode == 0
     output = _output(result)
     assert "Run a script on a workstation via SSM" in output
+    assert "WORKSTATION" in output
     assert "SCRIPT" in output
     assert "--follow" in output
-    assert "--workstation" in output
 
 
 @patch("desk.commands.run.get_command_invocation")
@@ -1140,7 +1140,7 @@ def test_desk_run_sends_command(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo hello", "-w", "main"])
+    result = runner.invoke(cli, ["run", "main", "echo hello"])
 
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with("main", region=None, profile=None)
@@ -1192,7 +1192,7 @@ def test_desk_run_follow_tails_output(
     ]
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo hello", "--follow"])
+    result = runner.invoke(cli, ["run", "main", "echo hello", "--follow"])
 
     assert result.exit_code == 0
     # Output should contain the streamed lines
@@ -1237,7 +1237,7 @@ def test_desk_run_follow_shows_stderr(
     ]
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "bad-command", "--follow"])
+    result = runner.invoke(cli, ["run", "main", "bad-command", "--follow"])
 
     assert result.exit_code == 1
     # stderr output should be in the combined output
@@ -1255,7 +1255,7 @@ def test_desk_run_not_ssm_ready_no_wait(
     mock_ssm_ready.return_value = False
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo hello", "--no-wait"])
+    result = runner.invoke(cli, ["run", "main", "echo hello", "--no-wait"])
 
     assert result.exit_code != 0
     assert "not SSM-ready" in result.output
@@ -1275,7 +1275,7 @@ def test_desk_run_waits_for_ssm(
     mock_wait.return_value = False  # Timeout
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo hello", "--wait-timeout", "5"])
+    result = runner.invoke(cli, ["run", "main", "echo hello", "--wait-timeout", "5"])
 
     assert result.exit_code != 0
     mock_wait.assert_called_once()
@@ -1288,7 +1288,7 @@ def test_desk_run_workstation_not_found(mock_resolve: object) -> None:
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo hello", "-w", "unknown"])
+    result = runner.invoke(cli, ["run", "unknown", "echo hello"])
 
     assert result.exit_code != 0
     assert "not found" in result.output
@@ -1319,7 +1319,7 @@ def test_desk_run_immediate_completion(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo done"])
+    result = runner.invoke(cli, ["run", "main", "echo done"])
 
     assert result.exit_code == 0
     assert "done" in result.output
@@ -1350,7 +1350,7 @@ def test_desk_run_command_failure_exits_nonzero(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "exit 1"])
+    result = runner.invoke(cli, ["run", "main", "exit 1"])
 
     assert result.exit_code != 0
     assert "failed" in result.output.lower()
@@ -1386,7 +1386,7 @@ def test_desk_run_reads_local_script_file(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", str(script_file)])
+    result = runner.invoke(cli, ["run", "main", str(script_file)])
 
     assert result.exit_code == 0
     mock_send.assert_called_once()
@@ -1422,7 +1422,7 @@ def test_desk_run_inline_command_not_treated_as_file(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo hello && date"])
+    result = runner.invoke(cli, ["run", "main", "echo hello && date"])
 
     assert result.exit_code == 0
     mock_send.assert_called_once()
@@ -1457,7 +1457,7 @@ def test_desk_run_as_user(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "whoami", "--user", "ubuntu"])
+    result = runner.invoke(cli, ["run", "main", "whoami", "--user", "ubuntu"])
 
     assert result.exit_code == 0
     mock_send.assert_called_once()
@@ -1492,7 +1492,7 @@ def test_desk_run_as_user_with_quotes(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "echo 'hello world'", "-u", "ubuntu"])
+    result = runner.invoke(cli, ["run", "main", "echo 'hello world'", "-u", "ubuntu"])
 
     assert result.exit_code == 0
     mock_send.assert_called_once()
@@ -1532,7 +1532,7 @@ def test_desk_run_as_user_with_script_file(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", str(script_file), "--user", "ubuntu"])
+    result = runner.invoke(cli, ["run", "main", str(script_file), "--user", "ubuntu"])
 
     assert result.exit_code == 0
     mock_send.assert_called_once()
@@ -1578,7 +1578,7 @@ def test_desk_scp_upload(
     mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt"])
+    result = runner.invoke(cli, ["scp", "main", "./local.txt", ":~/remote.txt"])
 
     mock_resolve.assert_called_once_with("main", region=None, profile=None)
     mock_execvp.assert_called_once()
@@ -1614,7 +1614,7 @@ def test_desk_scp_download(
     mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", ":~/remote.txt", "./local.txt"])
+    result = runner.invoke(cli, ["scp", "main", ":~/remote.txt", "./local.txt"])
 
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
@@ -1647,7 +1647,7 @@ def test_desk_scp_with_workstation_prefix(
     mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "main:/etc/hosts", "./hosts", "-w", "main"])
+    result = runner.invoke(cli, ["scp", "main", "main:/etc/hosts", "./hosts"])
 
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
@@ -1680,7 +1680,7 @@ def test_desk_scp_recursive(
     mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "-r", "./local-dir", ":~/remote-dir"])
+    result = runner.invoke(cli, ["scp", "main", "-r", "./local-dir", ":~/remote-dir"])
 
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
@@ -1714,7 +1714,7 @@ def test_desk_scp_with_custom_key(
     mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "-i", str(key_file)])
+    result = runner.invoke(cli, ["scp", "main", "./local.txt", ":~/remote.txt", "-i", str(key_file)])
 
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
@@ -1728,7 +1728,7 @@ def test_desk_scp_key_not_found(mock_get_default_key: object) -> None:
     """desk scp fails when default key file does not exist."""
     mock_get_default_key.return_value = "/nonexistent/my-key.pem"
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt"])
+    result = runner.invoke(cli, ["scp", "main", "./local.txt", ":~/remote.txt"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
@@ -1745,7 +1745,7 @@ def test_desk_scp_workstation_not_found(
 
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "-w", "unknown"])
+    result = runner.invoke(cli, ["scp", "unknown", "./local.txt", ":~/remote.txt"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
@@ -1775,7 +1775,7 @@ def test_desk_scp_waits_for_ssm_then_proceeds(
     mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--wait-timeout", "10"])
+    result = runner.invoke(cli, ["scp", "main", "./local.txt", ":~/remote.txt", "--wait-timeout", "10"])
     assert mock_is_ssm_ready.call_count == 3
     mock_execvp.assert_called_once()
 
@@ -1805,7 +1805,7 @@ def test_desk_scp_with_custom_user(
     mock_get_default_key.return_value = str(key_file)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["scp", "./local.txt", ":~/remote.txt", "--user", "admin"])
+    result = runner.invoke(cli, ["scp", "main", "./local.txt", ":~/remote.txt", "--user", "admin"])
 
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
@@ -1972,7 +1972,7 @@ def test_desk_create_sets_shutdown_tag(
     mock_compute.return_value = "2026-02-07T20:00:00Z"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["create", "--name", "main"])
+    result = runner.invoke(cli, ["create", "main"])
     assert result.exit_code == 0
     mock_compute.assert_called_once_with(4.0)
     mock_set_tag.assert_called_once_with(
@@ -2003,7 +2003,7 @@ def test_desk_create_shutdown_zero_skips_tag(
     mock_run.return_value = "i-new123"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["create", "--name", "main", "--shutdown", "0"])
+    result = runner.invoke(cli, ["create", "main", "--shutdown", "0"])
     assert result.exit_code == 0
     mock_set_tag.assert_not_called()
 
@@ -2088,12 +2088,12 @@ def test_desk_auto_stop_defaults(
     mock_compute: object,
     mock_set_tag: object,
 ) -> None:
-    """desk auto-stop with no args uses 'main' and 4h."""
+    """desk auto-stop main uses 4h when duration omitted."""
     mock_resolve.return_value = "i-abc123"
     mock_compute.return_value = "2026-02-07T20:00:00Z"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["auto-stop"])
+    result = runner.invoke(cli, ["auto-stop", "main"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with("main", region=None, profile=None)
     mock_compute.assert_called_once_with(4.0)
@@ -2153,7 +2153,7 @@ def test_desk_up_sets_shutdown_tag_on_start(
     mock_compute.return_value = "2026-02-07T20:00:00Z"
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["up", "--name", "main"])
+    result = runner.invoke(cli, ["up", "main"])
     assert result.exit_code == 0
     mock_compute.assert_called_once_with(4.0)
     mock_set_tag.assert_called_once_with(

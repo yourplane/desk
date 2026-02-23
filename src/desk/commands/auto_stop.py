@@ -17,7 +17,7 @@ from desk.config import get_default_profile, get_default_region
 
 
 @click.command("auto-stop")
-@click.argument("workstation", default="main")
+@click.argument("workstation")
 @click.argument("duration", default="4h")
 @click.option(
     "--clear",
@@ -48,13 +48,13 @@ def auto_stop(
 ) -> None:
     """Set or change the auto-stop time on a workstation.
 
-    WORKSTATION is the name or instance ID (default: main).
+    WORKSTATION is the name or instance ID.
     DURATION is how long from now until auto-stop (default: 4h).
     Accepts hours (4h), minutes (30m), or combined (2h30m).
 
     \b
     Examples:
-      desk auto-stop                # reset 'main' to 4h from now
+      desk auto-stop main           # reset 'main' to 4h from now
       desk auto-stop main 8h        # set 'main' to 8h from now
       desk auto-stop main 30m       # set 'main' to 30 min from now
       desk auto-stop dev 2h30m      # set 'dev' to 2h30m from now
