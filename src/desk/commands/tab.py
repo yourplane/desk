@@ -229,11 +229,12 @@ def tab_connect(
     wait_timeout: int,
     forwards: tuple[str, ...],
 ) -> None:
-    """Attach to a screen session (create if missing when SESSION is omitted).
+    """Attach to an existing screen session.
 
     WORKSTATION is the name or instance ID (e.g. main). SESSION is the session id
-    from 'desk tab list WORKSTATION' (e.g. 1084.desk-main); omit to attach to or
-    create the desk session for that workstation.
+    from 'desk tab list WORKSTATION' (e.g. 1084.desk-main); omit to attach to the
+    desk session for that workstation. Use 'desk tab create WORKSTATION' to create
+    a session first.
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
@@ -272,20 +273,28 @@ def tab_connect(
             )
         attach_id = full_session_id
     else:
-        # Workstation short name: attach to desk-{workstation} or create
+        # Workstation short name: attach to existing desk-{workstation} session only
+        stdout, stderr, _, _ = _run_remote_command(
+            instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+        )
+        lines = (stdout or "").strip().splitlines()
+        session_lines_list = [
+            line.strip()
+            for line in lines
+            if session_name in line and "No Sockets found" not in line
+        ]
+        if not session_lines_list:
+            raise click.ClickException(
+                f"No screen session on {workstation}. "
+                f"Run 'desk tab create {workstation}' to create one."
+            )
         attach_id = session_name
 
     # Use -x (multiuser) so we can attach even when session is already attached
-    if full_session_id is not None:
-        if window_index is not None:
-            remote_cmd = f"screen -x {attach_id} -p {window_index}"
-        else:
-            remote_cmd = f"screen -x {attach_id}"
+    if window_index is not None:
+        remote_cmd = f"screen -x {attach_id} -p {window_index}"
     else:
-        if window_index is not None:
-            remote_cmd = f"screen -x {attach_id} -p {window_index} || screen -S {attach_id}"
-        else:
-            remote_cmd = f"screen -x {attach_id} || screen -S {attach_id}"
+        remote_cmd = f"screen -x {attach_id}"
 
     argv = get_connection_argv(
         workstation=workstation,
@@ -419,7 +428,7 @@ def tab_list(
 
     if not rows:
         click.echo(f"No screen sessions on {workstation}.")
-        click.echo(f"Run 'desk tab connect {workstation}' to create one.")
+        click.echo(f"Run 'desk tab create {workstation}' to create one.")
         return
 
     # Group by session for tree display (session_id -> (state, [(win_idx, win_title, cwd, cmd), ...]))
@@ -478,17 +487,15 @@ def tab_list(
 
 @tab_group.command("create")
 @click.argument("workstation", required=True)
-@click.argument("tab_name", required=False)
 @_common_tab_options
 def tab_create(
     workstation: str,
-    tab_name: str | None,
     region: str | None,
     profile: str | None,
     wait: bool,
     wait_timeout: int,
 ) -> None:
-    """Create a new window in the desk screen session. Optional TAB_NAME sets the window title."""
+    """Create the desk screen session. Use 'desk tab connect WORKSTATION' to attach."""
     region = region or get_default_region()
     profile = profile or get_default_profile()
 
@@ -507,22 +514,20 @@ def tab_create(
             )
 
     session = _screen_session_name(workstation)
-    # Add a window (with optional title), or create session if missing
-    if tab_name:
-        cmd = (
-            f"(screen -S {session} -X screen -t {_shell_quote(tab_name)}) "
-            f"|| (screen -dmS {session} && screen -S {session} -X title {_shell_quote(tab_name)})"
-        )
-    else:
-        cmd = f"(screen -S {session} -X screen) || screen -dmS {session}"
-
-    _, stderr, status, exit_code = _run_remote_command(
-        instance_id, cmd, region=region, profile=profile
+    stdout, stderr, status, exit_code = _run_remote_command(
+        instance_id, f"screen -dmS {session}", region=region, profile=profile
     )
-    if status != "Success" or (exit_code is not None and exit_code != 0):
-        click.echo(stderr or "Failed to create window.", err=True)
+    if status != "Success":
+        click.echo(stderr or "Failed to create session.", err=True)
         raise click.ClickException("tab create failed")
-    click.echo(f"New window created. Use 'desk tab connect {workstation}' to attach.")
+    if exit_code is not None and exit_code != 0:
+        # Session already exists (screen returns 1)
+        if "already" in (stderr or "").lower() or "already" in (stdout or "").lower():
+            click.echo(f"Session already exists. Use 'desk tab connect {workstation}' to attach.")
+            return
+        click.echo(stderr or "Failed to create session.", err=True)
+        raise click.ClickException("tab create failed")
+    click.echo(f"Session created. Use 'desk tab connect {workstation}' to attach.")
 
 
 @tab_group.command("close")

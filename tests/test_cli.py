@@ -2320,17 +2320,27 @@ def test_desk_tab_help() -> None:
 
 @patch("desk.commands.tab.os.execvp")
 @patch("desk.commands.tab.get_connection_argv")
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
 @patch("desk.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk.commands.tab.resolve_workstation")
 def test_desk_tab_connect_calls_connection_with_screen(
     mock_resolve: object,
     mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_inv: object,
     mock_get_argv: object,
     mock_execvp: object,
 ) -> None:
     """desk tab connect builds SSH argv with screen attach command and execs."""
     mock_resolve.return_value = "i-abc123"
-    mock_get_argv.return_value = ["ssh", "-o", "ProxyCommand=...", "ubuntu@i-abc123", "screen -x desk-main || screen -S desk-main"]
+    mock_send.return_value = "cmd-1"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {"stdout": "12345.desk-main\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
+    )()
+    mock_get_argv.return_value = ["ssh", "-o", "ProxyCommand=...", "ubuntu@i-abc123", "screen -x desk-main"]
     mock_execvp.side_effect = OSError(2, "No such file")
 
     runner = CliRunner()
@@ -2338,8 +2348,7 @@ def test_desk_tab_connect_calls_connection_with_screen(
 
     mock_get_argv.assert_called_once()
     call_kw = mock_get_argv.call_args[1]
-    assert "screen -x desk-main" in call_kw["remote_command"]
-    assert "screen -S desk-main" in call_kw["remote_command"]
+    assert call_kw["remote_command"] == "screen -x desk-main"
     mock_execvp.assert_called_once_with("ssh", mock_get_argv.return_value)
 
 
@@ -2411,7 +2420,34 @@ def test_desk_tab_list_no_session(
 
     assert result.exit_code == 0
     assert "No screen sessions" in result.output
-    assert "desk tab connect main" in result.output
+    assert "desk tab create main" in result.output
+
+
+@patch("desk.commands.tab.get_command_invocation")
+@patch("desk.commands.tab.send_ssm_command")
+@patch("desk.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk.commands.tab.resolve_workstation")
+def test_desk_tab_connect_fails_when_no_session(
+    mock_resolve: object,
+    mock_ssm_ready: object,
+    mock_send: object,
+    mock_get_inv: object,
+) -> None:
+    """desk tab connect with no session fails and tells user to run tab create."""
+    mock_resolve.return_value = "i-abc123"
+    mock_send.return_value = "cmd-1"
+    mock_get_inv.return_value = type(
+        "Result",
+        (),
+        {"stdout": "No Sockets found in /run/screen.", "stderr": "", "status": "Success", "exit_code": 0},
+    )()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tab", "connect", "main"])
+
+    assert result.exit_code != 0
+    assert "No screen session" in result.output
+    assert "desk tab create main" in result.output
 
 
 @patch("desk.commands.tab.get_command_invocation")
@@ -2594,7 +2630,7 @@ def test_desk_tab_create_success(
     result = runner.invoke(cli, ["tab", "create", "main"])
 
     assert result.exit_code == 0
-    assert "New window created" in result.output
+    assert "Session created" in result.output
     mock_send.assert_called_once()
 
 
