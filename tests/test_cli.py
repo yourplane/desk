@@ -2340,7 +2340,7 @@ def test_desk_tab_connect_calls_connection_with_screen(
         (),
         {"stdout": "12345.desk-main\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
     )()
-    mock_get_argv.return_value = ["ssh", "-o", "ProxyCommand=...", "ubuntu@i-abc123", "screen -x desk-main"]
+    mock_get_argv.return_value = ["ssh", "-o", "ProxyCommand=...", "ubuntu@i-abc123", "screen -x 12345.desk-main"]
     mock_execvp.side_effect = OSError(2, "No such file")
 
     runner = CliRunner()
@@ -2348,7 +2348,7 @@ def test_desk_tab_connect_calls_connection_with_screen(
 
     mock_get_argv.assert_called_once()
     call_kw = mock_get_argv.call_args[1]
-    assert call_kw["remote_command"] == "screen -x desk-main"
+    assert call_kw["remote_command"] == "screen -x 12345.desk-main"
     mock_execvp.assert_called_once_with("ssh", mock_get_argv.return_value)
 
 

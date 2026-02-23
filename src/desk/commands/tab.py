@@ -28,19 +28,29 @@ SCREEN_SESSION_PREFIX = "desk-"
 
 
 def _screen_session_name(workstation: str) -> str:
+    """Base session name for a workstation (used for listing/filtering)."""
     return f"{SCREEN_SESSION_PREFIX}{workstation}"
+
+
+def _new_session_name(workstation: str) -> str:
+    """Unique session name for a new session (desk-{workstation}-{timestamp_ms})."""
+    return f"{_screen_session_name(workstation)}-{int(time.time() * 1000)}"
 
 
 def _parse_session_arg(session_arg: str) -> tuple[str, str | None]:
     """Parse SESSION argument: return (workstation, full_session_id or None).
 
-    - Full form like '18847.desk-main' -> ('main', '18847.desk-main')
-    - Short form like 'main' -> ('main', None); attach/create uses desk-main.
+    - Full form like '18847.desk-main' or '18847.desk-main-1737654321' -> (workstation, full_id)
+    - Short form like 'main' -> ('main', None); attach picks one session for that workstation.
     """
     if f".{SCREEN_SESSION_PREFIX}" in session_arg:
-        # e.g. 18847.desk-main -> workstation is "main"
         prefix = f".{SCREEN_SESSION_PREFIX}"
-        workstation = session_arg.split(prefix, 1)[1]
+        suffix = session_arg.split(prefix, 1)[1]
+        # desk-main-1737654321 -> workstation "main"; desk-my-ws-1737654321 -> "my-ws"
+        if suffix and "-" in suffix and suffix.split("-")[-1].isdigit():
+            workstation = "-".join(suffix.split("-")[:-1])
+        else:
+            workstation = suffix
         return (workstation, session_arg)
     return (session_arg, None)
 
@@ -90,18 +100,17 @@ def _shell_quote(s: str) -> str:
 _LIST_SEP = "\x01"
 
 
-def _list_sessions_with_details_command(session_prefix: str) -> str:
-    """Build a remote bash command that lists each window with its cwd and command.
+def _list_sessions_with_details_command() -> str:
+    """Build a remote bash command that lists all screen sessions and each window.
     Uses only process tree (pgrep -P) and /proc — no screen -Q windows, so the
     attached session never gets a message painted at the bottom.
     Output: session_id, state, window_index, window_title, cwd, cmd (sep \\x01)
     """
-    prefix_quoted = _shell_quote(session_prefix)
     return (
-        f"session_prefix={prefix_quoted}; sep=$(printf '\\\\x01'); "
+        "sep=$(printf '\\\\x01'); "
         "while IFS= read -r line; do "
         '[[ "$line" =~ No\\ Sockets ]] && break; '
-        '[[ "$line" != *"$session_prefix"* ]] && continue; '
+        '[[ ! "$line" =~ ^[[:space:]]*[0-9]+\\. ]] && continue; '
         "session_id=$(echo \"$line\" | awk '{print $1}'); "
         "state=$(echo \"$line\" | cut -f2-); "
         'pid="${session_id%%.*}"; '
@@ -273,7 +282,7 @@ def tab_connect(
             )
         attach_id = full_session_id
     else:
-        # Workstation short name: attach to existing desk-{workstation} session only
+        # Workstation short name: attach to an existing session for this workstation (most recent)
         stdout, stderr, _, _ = _run_remote_command(
             instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
         )
@@ -288,7 +297,15 @@ def tab_connect(
                 f"No screen session on {workstation}. "
                 f"Run 'desk tab create {workstation}' to create one."
             )
-        attach_id = session_name
+        # Parse session ids (first column); pick most recent by timestamp suffix if present
+        session_ids = [line.split()[0] for line in session_lines_list if line.split()]
+        def _session_ts(sid: str) -> int:
+            if "." in sid and "-" in sid:
+                suffix = sid.split("-")[-1]
+                return int(suffix) if suffix.isdigit() else 0
+            return 0
+        session_ids.sort(key=_session_ts, reverse=True)
+        attach_id = session_ids[0]
 
     # Use -x (multiuser) so we can attach even when session is already attached
     if window_index is not None:
@@ -355,8 +372,7 @@ def tab_list(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
 
-    session = _screen_session_name(workstation)
-    list_cmd = _list_sessions_with_details_command(session)
+    list_cmd = _list_sessions_with_details_command()
     stdout, stderr, status, _ = _run_remote_command(
         instance_id,
         list_cmd,
@@ -399,12 +415,12 @@ def tab_list(
                     break
 
     # Fallback: plain screen -ls output (no details) from original stdout
-    if not rows and stdout and session in (stdout or ""):
+    if not rows and stdout:
         for line in (stdout or "").strip().splitlines():
             if "No Sockets found" in line:
                 break
-            if session in line:
-                parts = line.strip().split(None, 1)
+            parts = line.strip().split(None, 1)
+            if parts and parts[0] and "." in parts[0]:
                 session_id = parts[0]
                 state = parts[1] if len(parts) > 1 else ""
                 rows.append((session_id, state, "0", "-", "-", "-"))
@@ -420,8 +436,8 @@ def tab_list(
         for line in (simple_stdout or "").strip().splitlines():
             if "No Sockets found" in line:
                 break
-            if session in line:
-                parts = line.strip().split(None, 1)
+            parts = line.strip().split(None, 1)
+            if parts and parts[0] and "." in parts[0]:
                 session_id = parts[0]
                 state = parts[1] if len(parts) > 1 else ""
                 rows.append((session_id, state, "0", "-", "-", "-"))
@@ -513,18 +529,23 @@ def tab_create(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
 
-    session = _screen_session_name(workstation)
+    # Unique name so each create is a new session (not a new window in an existing session)
+    session = _new_session_name(workstation)
+    user = "ubuntu"
+    # Run from home. Start initial window with TERM/size set and a login shell so when the user
+    # attaches via SSH they get colors and correct layout (SSM has no TTY so plain screen -dmS
+    # would leave the inner shell with TERM=dumb and wrong size).
+    create_cmd = (
+        f"cd /home/{user} && screen -dmS {session} "
+        "bash -c 'export TERM=screen-256color; export COLUMNS=80; export LINES=24; exec bash -l'"
+    )
     stdout, stderr, status, exit_code = _run_remote_command(
-        instance_id, f"screen -dmS {session}", region=region, profile=profile
+        instance_id, create_cmd, region=region, profile=profile, user=user
     )
     if status != "Success":
         click.echo(stderr or "Failed to create session.", err=True)
         raise click.ClickException("tab create failed")
     if exit_code is not None and exit_code != 0:
-        # Session already exists (screen returns 1)
-        if "already" in (stderr or "").lower() or "already" in (stdout or "").lower():
-            click.echo(f"Session already exists. Use 'desk tab connect {workstation}' to attach.")
-            return
         click.echo(stderr or "Failed to create session.", err=True)
         raise click.ClickException("tab create failed")
     click.echo(f"Session created. Use 'desk tab connect {workstation}' to attach.")
@@ -549,7 +570,6 @@ def tab_close(
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
-    session_name = _screen_session_name(workstation)
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
     except ValueError as e:
@@ -564,7 +584,7 @@ def tab_close(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
 
-    # Validate session exists on this workstation
+    # Validate session exists on this instance
     stdout, _, _, _ = _run_remote_command(
         instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
     )
@@ -572,7 +592,7 @@ def tab_close(
     session_lines_list = [
         line.strip()
         for line in lines
-        if session_name in line and "No Sockets found" not in line
+        if "No Sockets found" not in line and line.strip().split() and "." in (line.strip().split()[0] or "")
     ]
     matching = [s for s in session_lines_list if s.split()[0] == session]
     if not matching:
