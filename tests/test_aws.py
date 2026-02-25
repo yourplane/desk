@@ -173,6 +173,12 @@ def test_run_instance_success(mock_session: MagicMock) -> None:
     assert call_kw["ImageId"] == "ami-123"
     assert call_kw["InstanceType"] == "t3.medium"
     assert "workstation" in str(call_kw["TagSpecifications"])
+    bdm = call_kw["BlockDeviceMappings"]
+    assert len(bdm) == 1
+    assert bdm[0]["DeviceName"] == "/dev/sda1"
+    assert bdm[0]["Ebs"]["VolumeSize"] == 32
+    assert bdm[0]["Ebs"]["VolumeType"] == "gp3"
+    assert bdm[0]["Ebs"]["DeleteOnTermination"] is True
 
 
 def test_resolve_workstation_by_id() -> None:

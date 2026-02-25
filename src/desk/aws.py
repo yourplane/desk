@@ -177,6 +177,16 @@ def run_instance(
         "MetadataOptions": {
             "HttpTokens": "optional",
         },
+        "BlockDeviceMappings": [
+            {
+                "DeviceName": "/dev/sda1",
+                "Ebs": {
+                    "VolumeSize": 32,
+                    "VolumeType": "gp3",
+                    "DeleteOnTermination": True,
+                },
+            },
+        ],
     }
     if key_name:
         run_kw["KeyName"] = key_name
