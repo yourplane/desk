@@ -17,6 +17,10 @@
     {
       "source": "../desk/config.ini",
       "dest": "/home/ubuntu/desk-config.ini"
+    },
+    {
+      "source": "../cursor/install-cursor-agent.sh",
+      "dest": "/home/ubuntu/install-cursor-agent.sh"
     }
   ],
   "run": [
@@ -29,6 +33,7 @@
     "sudo -u ubuntu mv /home/ubuntu/update-desk /home/ubuntu/desk/update-desk && sudo -u ubuntu chmod +x /home/ubuntu/desk/update-desk",
     "sudo -u ubuntu bash -c 'echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.bashrc'",
     "sudo -u ubuntu bash -c 'grep -q desk/.tox/py/bin /home/ubuntu/.profile 2>/dev/null || echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.profile'",
-    "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /home/ubuntu/desk-config.ini /home/ubuntu/.config/desk/config.ini'"
+    "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /home/ubuntu/desk-config.ini /home/ubuntu/.config/desk/config.ini'",
+    "sudo bash /home/ubuntu/install-cursor-agent.sh"
   ]
 }

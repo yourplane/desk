@@ -256,7 +256,7 @@ def ami_build(
     builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
     create_args = [
         "create",
-        "--name", workstation_name,
+        workstation_name,
         "--instance-type", instance_type,
         "--ami", builder_ami,
     ]
@@ -299,13 +299,13 @@ def ami_build(
         click.echo(f"Step 3/4: Copy ({i + 1}/{len(copy_list)}): {src} -> {workstation_name}:{dest}")
         scp_args = [
             "scp",
-            "--workstation", workstation_name,
             "--no-wait",
+            workstation_name,
             src,
             f"{workstation_name}:{dest}",
         ]
         if recursive:
-            scp_args.insert(-2, "-r")
+            scp_args.insert(2, "-r")  # after --no-wait, before positionals
         result = _run_desk(scp_args, region, profile, env={"PWD": config_dir})
         if result.returncode != 0:
             raise click.ClickException(f"desk scp failed for {src} -> {dest}.")
@@ -320,9 +320,9 @@ def ami_build(
         click.echo(f"Step 3/4: Run ({i + 1}/{len(run_list)}): {run_cmd}")
         run_args = [
             "run",
-            "--workstation", workstation_name,
             "--follow",
             "--no-wait",
+            workstation_name,
             run_cmd,
         ]
         result = _run_desk(run_args, region, profile)
