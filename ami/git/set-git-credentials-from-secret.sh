@@ -98,7 +98,7 @@ if [[ -z "$TOKEN" ]]; then
     -H "Authorization: Bearer $JWT" \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-    -d '{"permissions":{"contents":"read"}}' | jq -r '.token // empty')
+    -d '{"permissions":{"contents":"write"}}' | jq -r '.token // empty')
 fi
 
 [[ -z "$TOKEN" ]] && err "Failed to get GitHub installation token (check App ID, Installation ID, PEM; install Node/npx for best results)"
