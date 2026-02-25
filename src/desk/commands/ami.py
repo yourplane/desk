@@ -221,6 +221,10 @@ def ami_build(
       run: list of commands or script paths to execute on the instance (--follow)
       ami_name: base name for the created AMI (a timestamp is appended so reruns do not collide)
 
+    To keep the builder home directory clean in the resulting AMI, either copy into a directory
+    outside home (e.g. /tmp/desk-build or /opt/myapp) or add a run command that cleans up home
+    (e.g. \"rm -rf ~/build-artifacts\") before the AMI is created.
+
     The builder instance name is auto-generated from ami_name plus random characters so multiple
     builds can run in parallel. The final AMI name is ami_name with a -YYYYMMDD-HHMMSS suffix so
     you can rerun the same recipe without duplicate-name errors. On success the builder is

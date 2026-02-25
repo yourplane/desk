@@ -34,6 +34,7 @@
     "sudo -u ubuntu bash -c 'echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.bashrc'",
     "sudo -u ubuntu bash -c 'grep -q desk/.tox/py/bin /home/ubuntu/.profile 2>/dev/null || echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.profile'",
     "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /home/ubuntu/desk-config.ini /home/ubuntu/.config/desk/config.ini'",
-    "sudo bash /home/ubuntu/install-cursor-agent.sh"
+    "sudo bash /home/ubuntu/install-cursor-agent.sh",
+    "rm -rf /home/ubuntu/install-aws-cli.sh /home/ubuntu/install-cursor-agent.sh /home/ubuntu/desk-git /home/ubuntu/desk-config.ini"
   ]
 }
