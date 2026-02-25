@@ -636,6 +636,197 @@ def tab_create(
         click.echo(f"Session created: {session}. Use 'desk tab connect {workstation}' to attach.")
 
 
+@tab_group.command("up")
+@click.argument("workstation", required=True)
+@click.argument("tab_name", required=False)
+@click.option(
+    "--window",
+    "-W",
+    "window_index",
+    type=int,
+    default=None,
+    help="Attach to this window index (0-based) within the session.",
+)
+@click.option(
+    "--user",
+    "-u",
+    default="ubuntu",
+    show_default=True,
+    help="SSH username on the instance.",
+)
+@click.option(
+    "--identity",
+    "-i",
+    "identity_file",
+    default=None,
+    help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
+)
+@click.option("--region", "-r", default=None, envvar="AWS_REGION", help="AWS region.")
+@click.option("--profile", "-p", default=None, envvar="AWS_PROFILE", help="AWS profile.")
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait for instance to be SSM-ready if not already.",
+)
+@click.option(
+    "--wait-timeout",
+    default=300,
+    show_default=True,
+    help="Seconds to wait for SSM before failing.",
+)
+@click.option(
+    "--forward",
+    "-L",
+    "forwards",
+    multiple=True,
+    help="Port forward in SSH -L format. Can be repeated.",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Print timestamps and what's happening (to stderr).",
+)
+def tab_up(
+    workstation: str,
+    tab_name: str | None,
+    window_index: int | None,
+    user: str,
+    identity_file: str | None,
+    region: str | None,
+    profile: str | None,
+    wait: bool,
+    wait_timeout: int,
+    forwards: tuple[str, ...],
+    verbose: bool,
+) -> None:
+    """Create a screen session if needed, then connect to it.
+
+    WORKSTATION is the name or instance ID (e.g. main). TAB_NAME is optional;
+    if given, attach to a session with that name or create one with that name.
+    If omitted, attach to the most recent session or create a new one.
+    """
+    t0 = time.perf_counter()
+    _verbose_echo(verbose, "start tab up")
+
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
+
+    t1 = time.perf_counter()
+    _verbose_echo(verbose, "resolving workstation", t1 - t0)
+    try:
+        instance_id = resolve_workstation(workstation, region=region, profile=profile)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    _verbose_echo(verbose, f"resolved to instance {instance_id}", time.perf_counter() - t1)
+
+    if wait and not is_ssm_ready(instance_id, region=region, profile=profile):
+        _verbose_echo(verbose, "SSM not ready, waiting...", time.perf_counter() - t0)
+        click.echo(f"Waiting for SSM agent on {instance_id}...", err=True)
+        t_wait = time.perf_counter()
+        if not wait_for_ssm_ready(
+            instance_id, region=region, profile=profile, timeout=wait_timeout
+        ):
+            raise click.ClickException(
+                f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
+            )
+        _verbose_echo(verbose, "SSM ready", time.perf_counter() - t_wait)
+    elif wait:
+        _verbose_echo(verbose, "SSM already ready", time.perf_counter() - t0)
+
+    stdout, _, _, _ = _run_remote_command(
+        instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+    )
+    lines = (stdout or "").strip().splitlines()
+    session_lines_list = [
+        line.strip()
+        for line in lines
+        if "No Sockets found" not in line and line.strip() and "." in (line.strip().split()[0] or "")
+    ]
+
+    attach_id: str | None = None
+    if tab_name:
+        # Match by session name (part after the dot)
+        matching = [
+            s for s in session_lines_list
+            if s.split()[0].split(".", 1)[-1] == tab_name
+        ]
+        if matching:
+            attach_id = matching[0].split()[0]
+    if attach_id is None and not tab_name and session_lines_list:
+        # No tab name: use most recent session
+        session_ids = [line.split()[0] for line in session_lines_list if line.split()]
+
+        def _session_pid(sid: str) -> int:
+            if "." in sid and sid.split(".")[0].isdigit():
+                return int(sid.split(".")[0])
+            return 0
+
+        session_ids.sort(key=_session_pid, reverse=True)
+        attach_id = session_ids[0]
+
+    if attach_id is None:
+        # Create a new session
+        _verbose_echo(verbose, "no matching session, creating", time.perf_counter() - t0)
+        session = _new_session_name(workstation, name=tab_name)
+        create_cmd = (
+            f"cd /home/{user} && screen -dmS {session} "
+            "bash -c 'export TERM=screen-256color; export COLUMNS=80; export LINES=24; exec bash -l'"
+        )
+        stdout_c, stderr_c, status_c, exit_code_c = _run_remote_command(
+            instance_id, create_cmd, region=region, profile=profile, user=user
+        )
+        if status_c != "Success" or (exit_code_c is not None and exit_code_c != 0):
+            click.echo(stderr_c or "Failed to create session.", err=True)
+            raise click.ClickException("tab up (create) failed")
+        # Get full session id
+        ls_stdout, _, _, _ = _run_remote_command(
+            instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
+        )
+        for line in (ls_stdout or "").strip().splitlines():
+            if "No Sockets found" in line:
+                break
+            if session in line:
+                parts = line.strip().split()
+                if parts and "." in parts[0]:
+                    attach_id = parts[0]
+                    break
+        if attach_id is None:
+            raise click.ClickException("tab up: session created but could not get session id")
+    else:
+        _verbose_echo(verbose, f"using existing session {attach_id}", time.perf_counter() - t0)
+
+    if window_index is not None:
+        remote_cmd = f"screen -x {_shell_quote(attach_id)} -p {window_index}"
+    else:
+        remote_cmd = f"screen -x {_shell_quote(attach_id)}"
+
+    t2 = time.perf_counter()
+    _verbose_echo(verbose, "building SSH argv (get_connection_argv)", t2 - t0)
+    verbose_cb = (lambda msg, el: _verbose_echo(True, msg, el)) if verbose else None
+    argv = get_connection_argv(
+        workstation=workstation,
+        user=user,
+        identity_file=identity_file,
+        region=region,
+        profile=profile,
+        wait=wait,
+        wait_timeout=wait_timeout,
+        forwards=forwards,
+        remote_command=remote_cmd,
+        verbose_callback=verbose_cb,
+    )
+    _verbose_echo(verbose, "exec ssh (replaces this process)", time.perf_counter() - t2)
+    log.info("exec ssh with screen session=%s", attach_id)
+    try:
+        os.execvp("ssh", argv)
+    except OSError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(127)
+
+
 @tab_group.command("close")
 @click.argument("workstation", required=True)
 @click.argument("session", required=True)
