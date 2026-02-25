@@ -35,7 +35,7 @@ def test_desk_up_help() -> None:
 
 
 @patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
-@patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.tab.tab_up")
 @patch("desk.commands.up.set_shutdown_tag")
 @patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
 @patch("desk.commands.up.start_instance")
@@ -47,7 +47,7 @@ def test_desk_up_starts_stopped_instance(
     mock_start: object,
     mock_compute: object,
     mock_set_tag: object,
-    mock_connect: object,
+    mock_tab_up: object,
     _mock_key: object,
 ) -> None:
     """desk up starts a stopped instance instead of creating."""
@@ -66,11 +66,11 @@ def test_desk_up_starts_stopped_instance(
     mock_start.assert_called_once_with("i-stopped", region=None, profile=None)
     assert "stopped" in result.output.lower()
     assert "Starting" in result.output
-    mock_connect.assert_called_once()
+    mock_tab_up.assert_called_once()
 
 
 @patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
-@patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.tab.tab_up")
 @patch("desk.commands.up.set_shutdown_tag")
 @patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
 @patch("desk.commands.up.start_instance")
@@ -84,7 +84,7 @@ def test_desk_up_waits_for_stopping_instance(
     mock_start: object,
     mock_compute: object,
     mock_set_tag: object,
-    mock_connect: object,
+    mock_tab_up: object,
     _mock_key: object,
 ) -> None:
     """desk up waits for stopping instance to stop, then starts it."""
@@ -104,7 +104,7 @@ def test_desk_up_waits_for_stopping_instance(
     assert result.exit_code == 0
     assert mock_get_state.call_count >= 1
     mock_start.assert_called_once_with("i-stopping", region=None, profile=None)
-    mock_connect.assert_called_once()
+    mock_tab_up.assert_called_once()
 
 
 @patch("desk.commands.up.get_default_private_key_path", return_value=None)
@@ -135,7 +135,7 @@ def test_desk_up_skips_connect_when_no_ssh_key(
 
     assert result.exit_code == 0
     assert "No SSH key found" in result.output
-    assert "desk connect main" in result.output
+    assert "desk tab up main" in result.output
 
 
 def test_desk_create_help() -> None:
@@ -2128,7 +2128,7 @@ def test_desk_auto_stop_workstation_not_found(mock_resolve: object) -> None:
 
 
 @patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
-@patch("desk.commands.up.connect.connect")
+@patch("desk.commands.up.tab.tab_up")
 @patch("desk.commands.up.set_shutdown_tag")
 @patch("desk.commands.up.compute_shutdown_at")
 @patch("desk.commands.up.start_instance")
@@ -2140,7 +2140,7 @@ def test_desk_up_sets_shutdown_tag_on_start(
     mock_start: object,
     mock_compute: object,
     mock_set_tag: object,
-    mock_connect: object,
+    mock_tab_up: object,
     _mock_key: object,
 ) -> None:
     """desk up sets shutdown tag when starting a stopped instance."""

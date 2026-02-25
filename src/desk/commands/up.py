@@ -16,13 +16,14 @@ from desk.aws import (
     set_shutdown_tag,
     start_instance,
 )
-from desk.commands import connect, create
+from desk.commands import create, tab
 from desk.config import get_default_profile, get_default_region
 from desk.keys import get_default_private_key_path
 
 
 @click.command("up")
 @click.argument("workstation")
+@click.argument("tab_name", required=False)
 @click.option(
     "--instance-type",
     "-t",
@@ -93,6 +94,7 @@ from desk.keys import get_default_private_key_path
 )
 def up(
     workstation: str,
+    tab_name: str | None,
     instance_type: str,
     ami: str | None,
     stack: str,
@@ -104,11 +106,12 @@ def up(
     forwards: tuple[str, ...],
     shutdown_after: str,
 ) -> None:
-    """Create a workstation and connect to it.
+    """Create a workstation and connect to it via a screen tab.
 
     If a workstation with the target name already exists (running or pending),
-    skips create and connects. If stopped or stopping, starts and connects.
-    Otherwise creates then connects.
+    skips create and runs desk tab up. If stopped or stopping, starts then
+    runs desk tab up. Otherwise creates then runs desk tab up.
+    TAB_NAME defaults to "main" when omitted.
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
@@ -180,12 +183,15 @@ def up(
             "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa), then run:",
             err=True,
         )
-        click.echo(f"  desk connect {workstation}", err=True)
+        tab_arg = f" {tab_name}" if tab_name else ""
+        click.echo(f"  desk tab up {workstation}{tab_arg}", err=True)
         return
 
     ctx.invoke(
-        connect.connect,
+        tab.tab_up,
         workstation=workstation,
+        tab_name=tab_name if tab_name is not None else "main",
+        window_index=None,
         user=user,
         identity_file=None,
         region=region,
@@ -193,4 +199,5 @@ def up(
         wait=wait,
         wait_timeout=wait_timeout,
         forwards=forwards,
+        verbose=False,
     )
