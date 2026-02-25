@@ -1,0 +1,35 @@
+---
+description: Use locally built desk when manually testing or running desk
+alwaysApply: true
+---
+
+# Use Local Desk When Manually Testing or Running
+
+When manually testing or running `desk` (e.g. in a terminal or for ad‑hoc runs), use the **locally built** version instead of the system-installed one.
+
+## Local desk path
+
+```bash
+.tox/py/bin/desk
+```
+
+From the project root, run:
+
+```bash
+.tox/py/bin/desk
+```
+
+Or with an absolute path from elsewhere:
+
+```bash
+/path/to/desk/.tox/py/bin/desk
+```
+
+## Why
+
+- Ensures you're exercising the code in this repo, not a different installation.
+- Matches the environment used by `tox run -e py` and avoids version/env drift.
+
+## Note to self (AI agents)
+
+When the user asks to "run desk", "test desk manually", or similar, invoke `.tox/py/bin/desk` (from the project root), not `desk` from PATH.
