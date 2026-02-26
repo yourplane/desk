@@ -43,18 +43,67 @@ def _load_build_config(path: str) -> dict[str, Any]:
         data = json.load(f)
     if not isinstance(data, dict):
         raise click.ClickException("Config must be a JSON object.")
-    copy_list = data.get("copy")
-    if copy_list is not None and not isinstance(copy_list, list):
-        raise click.ClickException("Config 'copy' must be a list.")
-    run_list = data.get("run")
-    if run_list is not None and not isinstance(run_list, list):
-        raise click.ClickException("Config 'run' must be a list.")
-    for i, item in enumerate(copy_list or []):
-        if not isinstance(item, dict) or "source" not in item or "dest" not in item:
-            raise click.ClickException(
-                f"Config 'copy[{i}]' must be an object with 'source' and 'dest'."
-            )
+    steps = data.get("steps")
+    if steps is not None:
+        if not isinstance(steps, list):
+            raise click.ClickException("Config 'steps' must be a list.")
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise click.ClickException(
+                    f"Config 'steps[{i}]' must be an object (with 'run' or 'copy')."
+                )
+            if "run" in step and "copy" in step:
+                raise click.ClickException(
+                    f"Config 'steps[{i}]' must have either 'run' or 'copy', not both."
+                )
+            if "run" in step:
+                if not isinstance(step["run"], str):
+                    raise click.ClickException(
+                        f"Config 'steps[{i}].run' must be a string."
+                    )
+            elif "copy" in step:
+                c = step["copy"]
+                if not isinstance(c, dict) or "source" not in c or "dest" not in c:
+                    raise click.ClickException(
+                        f"Config 'steps[{i}].copy' must be an object with 'source' and 'dest'."
+                    )
+            else:
+                raise click.ClickException(
+                    f"Config 'steps[{i}]' must have 'run' or 'copy'."
+                )
+    else:
+        # Legacy: separate copy and run lists
+        copy_list = data.get("copy")
+        if copy_list is not None and not isinstance(copy_list, list):
+            raise click.ClickException("Config 'copy' must be a list.")
+        run_list = data.get("run")
+        if run_list is not None and not isinstance(run_list, list):
+            raise click.ClickException("Config 'run' must be a list.")
+        run_before_copy = data.get("run_before_copy")
+        if run_before_copy is not None and not isinstance(run_before_copy, list):
+            raise click.ClickException("Config 'run_before_copy' must be a list.")
+        for i, item in enumerate(copy_list or []):
+            if not isinstance(item, dict) or "source" not in item or "dest" not in item:
+                raise click.ClickException(
+                    f"Config 'copy[{i}]' must be an object with 'source' and 'dest'."
+                )
     return data
+
+
+def _get_build_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return normalized list of steps (each has 'run' or 'copy') from config."""
+    steps = config.get("steps")
+    if steps is not None:
+        return steps
+    # Legacy: run_before_copy, then all copies, then all runs
+    out: list[dict[str, Any]] = []
+    for cmd in config.get("run_before_copy") or []:
+        out.append({"run": cmd})
+    for item in config.get("copy") or []:
+        out.append({"copy": item})
+    for cmd in config.get("run") or []:
+        out.append({"run": cmd})
+    return out
 
 
 def _builder_name(ami_name: str) -> str:
@@ -217,13 +266,13 @@ def ami_build(
     CONFIG_FILE is a JSON file with:
       instance_type (optional): e.g. t3.medium (default: t3.medium).
       The builder always starts from the latest Ubuntu 24.04 LTS AMI (config default/ami_prefix is not used).
-      copy: list of { \"source\": \"local-path\", \"dest\": \"remote-path\", \"recursive\": optional }
-      run: list of commands or script paths to execute on the instance (--follow)
+      steps: list of steps in order; each step is {\"run\": \"cmd\"} or {\"copy\": {\"source\": \"...\", \"dest\": \"...\", \"recursive\": optional}}.
+      Alternatively (legacy) copy + run + optional run_before_copy.
       ami_name: base name for the created AMI (a timestamp is appended so reruns do not collide)
 
-    To keep the builder home directory clean in the resulting AMI, either copy into a directory
-    outside home (e.g. /tmp/desk-build or /opt/myapp) or add a run command that cleans up home
-    (e.g. \"rm -rf ~/build-artifacts\") before the AMI is created.
+    To keep the builder home directory clean, configure the recipe to copy into a staging
+    directory (e.g. /tmp/desk-build), run install scripts from there, and install only final
+    deliverables into home or system paths.
 
     The builder instance name is auto-generated from ami_name plus random characters so multiple
     builds can run in parallel. The final AMI name is ami_name with a -YYYYMMDD-HHMMSS suffix so
@@ -239,8 +288,7 @@ def ami_build(
             "Builder always uses latest Ubuntu 24.04; 'base_ami' is not allowed in recipes."
         )
     instance_type = config.get("instance_type", "t3.medium")
-    copy_list = config.get("copy") or []
-    run_list = config.get("run") or []
+    steps = _get_build_steps(config)
     ami_name = config.get("ami_name")
     if not ami_name:
         raise click.ClickException("Config must specify 'ami_name'.")
@@ -291,47 +339,48 @@ def ami_build(
     click.echo("  Instance ready.")
     click.echo()
 
-    # 3. Copy files and run scripts
+    # 3. Copy files and run scripts (steps can be intermixed)
     config_dir = os.path.dirname(os.path.abspath(config_file))
 
-    for i, item in enumerate(copy_list):
-        src = item["source"]
-        dest = item["dest"]
-        recursive = item.get("recursive", False)
-        if not os.path.isabs(src):
-            src = os.path.normpath(os.path.join(config_dir, src))
-        click.echo(f"Step 3/4: Copy ({i + 1}/{len(copy_list)}): {src} -> {workstation_name}:{dest}")
-        scp_args = [
-            "scp",
-            "--no-wait",
-            workstation_name,
-            src,
-            f"{workstation_name}:{dest}",
-        ]
-        if recursive:
-            scp_args.insert(2, "-r")  # after --no-wait, before positionals
-        result = _run_desk(scp_args, region, profile, env={"PWD": config_dir})
-        if result.returncode != 0:
-            raise click.ClickException(f"desk scp failed for {src} -> {dest}.")
-
-    for i, cmd in enumerate(run_list):
-        # Resolve script path relative to config file dir if it looks like a path
-        run_cmd = cmd
-        if not os.path.isabs(cmd) and ("/" in cmd or cmd.endswith(".sh")):
-            candidate = os.path.normpath(os.path.join(config_dir, cmd))
-            if os.path.isfile(candidate):
-                run_cmd = candidate
-        click.echo(f"Step 3/4: Run ({i + 1}/{len(run_list)}): {run_cmd}")
-        run_args = [
-            "run",
-            "--follow",
-            "--no-wait",
-            workstation_name,
-            run_cmd,
-        ]
-        result = _run_desk(run_args, region, profile)
-        if result.returncode != 0:
-            raise click.ClickException(f"desk run failed for: {run_cmd}")
+    for i, step in enumerate(steps):
+        if "run" in step:
+            cmd = step["run"]
+            run_cmd = cmd
+            if not os.path.isabs(cmd) and ("/" in cmd or cmd.endswith(".sh")):
+                candidate = os.path.normpath(os.path.join(config_dir, cmd))
+                if os.path.isfile(candidate):
+                    run_cmd = candidate
+            click.echo(f"Step 3/4: Run ({i + 1}/{len(steps)}): {run_cmd}")
+            run_args = [
+                "run",
+                "--follow",
+                "--no-wait",
+                workstation_name,
+                run_cmd,
+            ]
+            result = _run_desk(run_args, region, profile)
+            if result.returncode != 0:
+                raise click.ClickException(f"desk run failed for: {run_cmd}")
+        else:
+            item = step["copy"]
+            src = item["source"]
+            dest = item["dest"]
+            recursive = item.get("recursive", False)
+            if not os.path.isabs(src):
+                src = os.path.normpath(os.path.join(config_dir, src))
+            click.echo(f"Step 3/4: Copy ({i + 1}/{len(steps)}): {src} -> {workstation_name}:{dest}")
+            scp_args = [
+                "scp",
+                "--no-wait",
+                workstation_name,
+                src,
+                f"{workstation_name}:{dest}",
+            ]
+            if recursive:
+                scp_args.insert(2, "-r")  # after --no-wait, before positionals
+            result = _run_desk(scp_args, region, profile, env={"PWD": config_dir})
+            if result.returncode != 0:
+                raise click.ClickException(f"desk scp failed for {src} -> {dest}.")
 
     click.echo()
 

@@ -1,45 +1,26 @@
 {
   "ami_name": "default-desk-ami",
-  "copy": [
-    {
-      "source": "../aws/install-aws-cli.sh",
-      "dest": "/home/ubuntu/install-aws-cli.sh"
-    },
-    {
-      "source": "../aws/install-session-manager-plugin.sh",
-      "dest": "/home/ubuntu/install-session-manager-plugin.sh"
-    },
-    {
-      "source": "../git",
-      "dest": "/home/ubuntu/desk-git",
-      "recursive": true
-    },
-    {
-      "source": "../desk/update-desk",
-      "dest": "/home/ubuntu/update-desk"
-    },
-    {
-      "source": "../desk/config.ini",
-      "dest": "/home/ubuntu/desk-config.ini"
-    },
-    {
-      "source": "../cursor/install-cursor-agent.sh",
-      "dest": "/home/ubuntu/install-cursor-agent.sh"
-    }
-  ],
-  "run": [
-    "sudo bash /home/ubuntu/install-aws-cli.sh",
-    "sudo bash /home/ubuntu/install-session-manager-plugin.sh",
-    "sudo -u ubuntu HOME=/home/ubuntu bash /home/ubuntu/desk-git/install-git-credential-refresh-service.sh",
-    "sudo apt-get update -qq && sudo apt-get install -y python3-venv",
-    "sudo -u ubuntu bash -c 'python3 -m venv /home/ubuntu/tox-venv && /home/ubuntu/tox-venv/bin/pip install tox'",
-    "sudo -u ubuntu git clone https://github.com/maxrademacher/desk.git /home/ubuntu/desk",
-    "sudo -u ubuntu bash -c 'export PATH=\"/home/ubuntu/tox-venv/bin:$PATH\"; bash /home/ubuntu/update-desk'",
-    "sudo -u ubuntu mv /home/ubuntu/update-desk /home/ubuntu/desk/update-desk && sudo -u ubuntu chmod +x /home/ubuntu/desk/update-desk",
-    "sudo -u ubuntu bash -c 'echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.bashrc'",
-    "sudo -u ubuntu bash -c 'grep -q desk/.tox/py/bin /home/ubuntu/.profile 2>/dev/null || echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.profile'",
-    "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /home/ubuntu/desk-config.ini /home/ubuntu/.config/desk/config.ini'",
-    "sudo bash /home/ubuntu/install-cursor-agent.sh",
-    "rm -rf /home/ubuntu/install-aws-cli.sh /home/ubuntu/install-cursor-agent.sh /home/ubuntu/desk-git /home/ubuntu/desk-config.ini"
+  "steps": [
+    {"run": "sudo -u ubuntu mkdir -p /tmp/desk-build"},
+    {"copy": {"source": "../aws/install-aws-cli.sh", "dest": "/tmp/desk-build/install-aws-cli.sh"}},
+    {"copy": {"source": "../aws/install-session-manager-plugin.sh", "dest": "/tmp/desk-build/install-session-manager-plugin.sh"}},
+    {"copy": {"source": "../git", "dest": "/tmp/desk-build/desk-git", "recursive": true}},
+    {"copy": {"source": "../desk/update-desk", "dest": "/tmp/desk-build/update-desk"}},
+    {"copy": {"source": "../desk/config.ini", "dest": "/tmp/desk-build/desk-config.ini"}},
+    {"copy": {"source": "../cursor/install-cursor-agent.sh", "dest": "/tmp/desk-build/install-cursor-agent.sh"}},
+    {"run": "sudo bash /tmp/desk-build/install-aws-cli.sh"},
+    {"run": "sudo bash /tmp/desk-build/install-session-manager-plugin.sh"},
+    {"run": "sudo -u ubuntu mkdir -p /home/ubuntu/.local/share/desk && cp -r /tmp/desk-build/desk-git /home/ubuntu/.local/share/desk/git && sudo chown -R ubuntu:ubuntu /home/ubuntu/.local/share/desk"},
+    {"run": "sudo -u ubuntu HOME=/home/ubuntu bash /home/ubuntu/.local/share/desk/git/install-git-credential-refresh-service.sh"},
+    {"run": "sudo apt-get update -qq && sudo apt-get install -y python3-venv"},
+    {"run": "sudo -u ubuntu bash -c 'python3 -m venv /home/ubuntu/tox-venv && /home/ubuntu/tox-venv/bin/pip install tox'"},
+    {"run": "sudo -u ubuntu git clone https://github.com/maxrademacher/desk.git /home/ubuntu/desk"},
+    {"run": "sudo -u ubuntu bash -c 'export PATH=\"/home/ubuntu/tox-venv/bin:$PATH\"; bash /tmp/desk-build/update-desk'"},
+    {"run": "sudo -u ubuntu mv /tmp/desk-build/update-desk /home/ubuntu/desk/update-desk && sudo -u ubuntu chmod +x /home/ubuntu/desk/update-desk"},
+    {"run": "sudo -u ubuntu bash -c 'echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.bashrc'"},
+    {"run": "sudo -u ubuntu bash -c 'grep -q desk/.tox/py/bin /home/ubuntu/.profile 2>/dev/null || echo \"export PATH=\\\"/home/ubuntu/desk/.tox/py/bin:/home/ubuntu/desk:/home/ubuntu/tox-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.profile'"},
+    {"run": "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /tmp/desk-build/desk-config.ini /home/ubuntu/.config/desk/config.ini'"},
+    {"run": "sudo bash /tmp/desk-build/install-cursor-agent.sh"},
+    {"run": "rm -rf /tmp/desk-build"}
   ]
 }
