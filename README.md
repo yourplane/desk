@@ -210,6 +210,55 @@ cd infrastructure
 sam deploy
 ```
 
+### Desk control plane Lambda
+
+The **desk-control** Lambda runs all desk control-plane operations (e.g. `desk list`, `desk start`, `desk stop`, `desk create`, `desk ami list`, `desk tab list`). It does **not** support interactive commands: `desk connect` and `desk scp` are excluded (they require SSH). Invoke it with an event that specifies the command and arguments.
+
+**Build:** From the repo root, `infrastructure/build.sh` copies the desk package into both the reaper and control Lambda directories and runs `sam build` for both templates:
+
+```bash
+./infrastructure/build.sh
+```
+
+This builds:
+- `desk-reaper.yaml` → reaper Lambda
+- `desk-control.yaml` → control plane Lambda
+
+**Deploy the control Lambda:** Build first (so the built template and artifacts are in `.aws-sam/build/`), then deploy using the **built** template so the Lambda package includes all dependencies:
+
+```bash
+./infrastructure/build.sh
+cd infrastructure
+sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
+```
+
+Subsequent deploys (after `samconfig.toml` is updated for the control stack):
+
+```bash
+./infrastructure/build.sh
+cd infrastructure
+sam deploy --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
+```
+
+Note: Deploy the built template (`.aws-sam/build/template.yaml`), not the source `desk-control.yaml`, so the deployed function uses the built artifact that includes the desk package and dependencies.
+
+**Invoke:** Send an event with `argv` (list of CLI args) or `command`/`args`/`options`. Optional `env` sets environment variables (e.g. `AWS_REGION`, `AWS_PROFILE`).
+
+```bash
+# List workstations
+aws lambda invoke --function-name desk-control --payload '{"argv": ["list"]}' out.json && cat out.json
+
+# Start a workstation
+aws lambda invoke --function-name desk-control --payload '{"argv": ["start", "main", "--region", "us-east-1"]}' out.json && cat out.json
+
+# Using command/args/options
+aws lambda invoke --function-name desk-control --payload '{"command": "stop", "args": ["main"], "env": {"AWS_REGION": "us-east-1"}}' out.json && cat out.json
+```
+
+Response shape: `{"exit_code": 0, "stdout": "...", "stderr": "..."}` or `{"error": "..."}` on validation failure.
+
+**Allowed commands:** `list`, `start`, `stop`, `up`, `create`, `kill`, `reap`, `auto-stop`, `run`, `ami` (all subcommands), `tab list`, `tab create`, `tab close`. Not allowed: `connect`, `scp`, `tab connect`, `tab up`, `keygen`.
+
 **Lint CloudFormation:**
 ```bash
 tox run -e lint

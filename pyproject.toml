@@ -40,7 +40,7 @@ commands = pytest tests/ -v
 description = Lint CloudFormation templates with cfn-lint
 skip_install = true
 deps = cfn-lint>=0.90.0
-commands = cfn-lint infrastructure/desk-vpc.yaml infrastructure/desk-reaper.yaml
+commands = cfn-lint infrastructure/desk-vpc.yaml infrastructure/desk-reaper.yaml infrastructure/desk-control.yaml
 """
 
 [tool.pytest.ini_options]
