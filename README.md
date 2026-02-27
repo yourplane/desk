@@ -255,7 +255,7 @@ aws lambda invoke --function-name desk-control --payload '{"argv": ["start", "ma
 aws lambda invoke --function-name desk-control --payload '{"command": "stop", "args": ["main"], "env": {"AWS_REGION": "us-east-1"}}' out.json && cat out.json
 ```
 
-Response shape: `{"exit_code": 0, "stdout": "...", "stderr": "..."}` or `{"error": "..."}` on validation failure.
+Response shape: success `{"result": <data>}` (e.g. `list` → `{"result": {"workstations": [{"instance_id": "...", "name": "...", "state": "...", "shutdown_at": "..."}]}}`); failure `{"error": "..."}`. All responses are JSON; no CLI table output.
 
 **Allowed commands:** `list`, `start`, `stop`, `up`, `create`, `kill`, `reap`, `auto-stop`, `run`, `ami` (all subcommands), `tab list`, `tab create`, `tab close`. Not allowed: `connect`, `scp`, `tab connect`, `tab up`, `keygen`.
 
