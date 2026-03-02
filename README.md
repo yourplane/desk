@@ -128,7 +128,7 @@ tail -f ~/.config/desk/desk.log
 - AWS credentials (profile, env vars, or instance role)
 - [SSM Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
 - SSH client
-- Workstations in a VPC with SSM VPC endpoints (or NAT)
+- Workstations in a VPC with outbound internet via NAT Gateway
 - IAM instance profile with `AmazonSSMManagedInstanceCore` on workstation instances
 
 ### Session Manager plugin
@@ -181,8 +181,7 @@ aws cloudformation deploy \
 The template provides:
 
 - **VPC** with private subnets (2 AZs)
-- **VPC endpoints** for SSM (`ec2messages`, `ssm`, `ssmmessages`) and S3
-- **NAT Gateway** for outbound internet
+- **NAT Gateway** for outbound internet (SSM and S3 traffic use the NAT)
 - **Security group** for workstations (no inbound rules)
 - **IAM instance profile** (`AmazonSSMManagedInstanceCore`)
 
