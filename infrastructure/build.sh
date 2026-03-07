@@ -20,6 +20,11 @@ CONTROL_DIR="$SCRIPT_DIR/control"
 rm -rf "$CONTROL_DIR/desk"
 cp -r "$DESK_SRC" "$CONTROL_DIR/desk"
 
+# AMI pipeline Lambda
+PIPELINE_DIR="$SCRIPT_DIR/ami-pipeline"
+rm -rf "$PIPELINE_DIR/desk"
+cp -r "$DESK_SRC" "$PIPELINE_DIR/desk"
+
 cd "$SCRIPT_DIR"
 sam build --template desk-reaper.yaml "$@"
 sam build --template desk-control.yaml "$@"

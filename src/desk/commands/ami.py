@@ -16,14 +16,20 @@ import click
 
 from desk.aws import (
     create_ami,
+    get_ami_build_status,
     get_ami_state,
+    get_command_invocation,
     get_instance_state,
     get_latest_ubuntu_ami,
     is_ssm_ready,
+    list_ami_builds,
     list_amis,
     resolve_workstation,
+    start_ami_build_execution,
     stop_instance,
     terminate_instance,
+    upload_build_artifact,
+    upload_build_config,
     wait_for_ami_available,
     wait_for_instance_state,
     wait_for_ssm_ready,
@@ -229,6 +235,222 @@ def ami_list(
             f"{a.image_id:<{max_id}}  {a.name:<{max_name}}  "
             f"{a.state:<{max_state}}  {a.creation_date:<{max_date}}  {source}"
         )
+
+
+@click.group("builds")
+def builds_group() -> None:
+    """List and follow cloud-orchestrated AMI builds; start new builds."""
+    pass
+
+
+@builds_group.command("start")
+@click.argument(
+    "config_file",
+    type=click.Path(exists=True),
+)
+@click.option(
+    "--artifact-bucket",
+    required=True,
+    envvar="DESK_ARTIFACT_BUCKET",
+    help="S3 bucket for build config and artifacts (required for cloud build).",
+)
+@click.option(
+    "--state-machine-arn",
+    default=None,
+    envvar="DESK_AMI_BUILD_STATE_MACHINE_ARN",
+    help="Step Function state machine ARN for AMI builds.",
+)
+@click.option(
+    "--follow",
+    "-f",
+    is_flag=True,
+    help="After starting, follow the build until complete.",
+)
+@click.option(
+    "--region",
+    default=None,
+    envvar="AWS_REGION",
+    help="AWS region.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    envvar="AWS_PROFILE",
+    help="AWS profile.",
+)
+def builds_start(
+    config_file: str,
+    artifact_bucket: str,
+    state_machine_arn: str | None,
+    follow: bool,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Start a cloud-orchestrated AMI build (config and artifacts uploaded to S3)."""
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
+
+    if not state_machine_arn:
+        raise click.ClickException(
+            "DESK_AMI_BUILD_STATE_MACHINE_ARN or --state-machine-arn is required for cloud build."
+        )
+
+    config = _load_build_config(config_file)
+    ami_name = config.get("ami_name")
+    if not ami_name:
+        raise click.ClickException("Config must specify 'ami_name'.")
+    steps = _get_build_steps(config)
+    config_dir = os.path.dirname(os.path.abspath(config_file))
+
+    build_id = f"{_builder_name(ami_name)}"
+    with open(config_file) as f:
+        config_json = f.read()
+    upload_build_config(
+        artifact_bucket, build_id, config_json, region=region, profile=profile
+    )
+    for step in steps:
+        if "copy" in step:
+            item = step["copy"]
+            src_key = item["source"]
+            if not os.path.isabs(src_key):
+                src_local = os.path.normpath(os.path.join(config_dir, src_key))
+            else:
+                src_local = src_key
+            upload_build_artifact(
+                artifact_bucket,
+                build_id,
+                src_local,
+                src_key,
+                region=region,
+                profile=profile,
+            )
+
+    execution_arn = start_ami_build_execution(
+        state_machine_arn, build_id, artifact_bucket, region, profile
+    )
+    click.echo(f"Build started: {build_id}")
+    click.echo(f"  Execution: {execution_arn}")
+
+    if follow:
+        _follow_build(build_id, region, profile)
+    else:
+        click.echo(f"  Follow with: desk ami build follow {build_id}")
+
+
+def _follow_build(
+    build_id: str,
+    region: str,
+    profile: str | None,
+    poll_interval: float = 5.0,
+) -> None:
+    """Poll build status and print progress until done or failed."""
+    last_step: str | None = None
+    last_command_id: str | None = None
+    while True:
+        info = get_ami_build_status(build_id, region=region, profile=profile)
+        if info is None:
+            click.echo("Build not found (may not have started yet).")
+            time.sleep(poll_interval)
+            continue
+        if info.current_step and info.current_step != last_step:
+            click.echo(f"  Step: {info.current_step}")
+            last_step = info.current_step
+        if info.command_id and info.command_id != last_command_id:
+            last_command_id = info.command_id
+            inv = get_command_invocation(
+                info.command_id,
+                info.instance_id,
+                region=region,
+                profile=profile,
+            )
+            if inv.stdout:
+                click.echo(inv.stdout.rstrip())
+            if inv.stderr:
+                click.echo(inv.stderr.rstrip(), err=True)
+        if info.status in ("done", "failed"):
+            if info.status == "done" and info.image_id:
+                click.secho(f"AMI build complete: {info.image_id}", fg="green", bold=True)
+            elif info.status == "failed" and info.error:
+                raise click.ClickException(f"Build failed: {info.error}")
+            elif info.status == "failed":
+                raise click.ClickException("Build failed.")
+            return
+        time.sleep(poll_interval)
+
+
+@builds_group.command("list")
+@click.option(
+    "--region",
+    default=None,
+    envvar="AWS_REGION",
+    help="AWS region.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    envvar="AWS_PROFILE",
+    help="AWS profile.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["table", "plain"]),
+    default="table",
+    help="Output format.",
+)
+def builds_list(
+    region: str | None,
+    profile: str | None,
+    output: str,
+) -> None:
+    """List active AMI builds (cloud-orchestrated, builder instances)."""
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
+    builds = list_ami_builds(region=region, profile=profile)
+    if not builds:
+        click.echo("No active AMI builds.")
+        return
+    if output == "plain":
+        for b in builds:
+            click.echo(f"{b.build_id}\t{b.ami_build_name}\t{b.status}\t{b.instance_id}\t{b.current_step or '-'}")
+        return
+    header = f"{'BUILD ID':<40}  {'NAME':<24}  {'STATUS':<12}  {'INSTANCE':<16}  STEP"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for b in builds:
+        step = (b.current_step or "-")[:20]
+        click.echo(f"{b.build_id:<40}  {b.ami_build_name:<24}  {b.status:<12}  {b.instance_id:<16}  {step}")
+
+
+@builds_group.command("follow")
+@click.argument("build_id")
+@click.option(
+    "--region",
+    default=None,
+    envvar="AWS_REGION",
+    help="AWS region.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    envvar="AWS_PROFILE",
+    help="AWS profile.",
+)
+def builds_follow(
+    build_id: str,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Poll and stream progress for an active AMI build until done or failed."""
+    region = region or get_default_region()
+    profile = profile or get_default_profile()
+    _follow_build(build_id, region, profile)
+
+
+ami_group.add_command(builds_group, "builds")
 
 
 @ami_group.command("build")

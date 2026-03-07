@@ -15,6 +15,15 @@ from botocore.exceptions import ClientError
 # Tag key used to store the scheduled shutdown time (ISO 8601 UTC).
 TAG_SHUTDOWN_AT = "desk:shutdown-at"
 
+# AMI build (cloud-orchestrated) instance tags.
+TAG_AMI_BUILD_ID = "desk:ami-build-id"
+TAG_AMI_BUILD_STATUS = "desk:ami-build-status"
+TAG_AMI_BUILD_NAME = "desk:ami-build-name"
+TAG_AMI_BUILD_STEP = "desk:ami-build-step"
+TAG_AMI_BUILD_COMMAND_ID = "desk:ami-build-command-id"
+TAG_AMI_BUILD_IMAGE_ID = "desk:ami-build-image-id"
+TAG_AMI_BUILD_ERROR = "desk:ami-build-error"
+
 
 @dataclass
 class DeskVpcOutputs:
@@ -151,10 +160,20 @@ def run_instance(
     key_name: str | None = None,
     region: str | None = None,
     profile: str | None = None,
+    extra_tags: dict[str, str] | None = None,
 ) -> str:
     """Launch an EC2 instance and return its instance ID."""
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
+
+    tags = [
+        {"Key": "Name", "Value": name},
+        {"Key": "Type", "Value": "workstation"},
+        {"Key": "desk:managed", "Value": "true"},
+    ]
+    if extra_tags:
+        for k, v in extra_tags.items():
+            tags.append({"Key": k, "Value": str(v)})
 
     run_kw: dict = {
         "ImageId": ami_id,
@@ -167,11 +186,7 @@ def run_instance(
         "TagSpecifications": [
             {
                 "ResourceType": "instance",
-                "Tags": [
-                    {"Key": "Name", "Value": name},
-                    {"Key": "Type", "Value": "workstation"},
-                    {"Key": "desk:managed", "Value": "true"},
-                ],
+                "Tags": tags,
             },
         ],
         "MetadataOptions": {
@@ -535,16 +550,6 @@ mv authorized_keys~ authorized_keys
     )
 
 
-@dataclass
-class AmiInfo:
-    """Information about an AMI."""
-
-    image_id: str
-    name: str
-    state: str
-    source_instance_id: str | None = None
-
-
 def create_ami(
     instance_id: str,
     name: str,
@@ -839,3 +844,229 @@ def reap_overdue(
             stop_instance(w.instance_id, region=region, profile=profile)
 
     return overdue
+
+
+# --- AMI build (cloud) ---
+
+
+@dataclass
+class AmiBuildInfo:
+    """Active AMI build (builder instance) info."""
+
+    build_id: str
+    ami_build_name: str
+    status: str
+    instance_id: str
+    current_step: str | None = None
+    command_id: str | None = None
+    image_id: str | None = None
+    error: str | None = None
+
+
+def list_ami_builds(
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[AmiBuildInfo]:
+    """List EC2 instances tagged as AMI builds (desk:ami-build-id)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    filters = [{"Name": f"tag:{TAG_AMI_BUILD_ID}", "Values": ["*"]}]
+    result: list[AmiBuildInfo] = []
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
+        for reservation in page.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+                result.append(
+                    AmiBuildInfo(
+                        build_id=tags.get(TAG_AMI_BUILD_ID, ""),
+                        ami_build_name=tags.get(TAG_AMI_BUILD_NAME, ""),
+                        status=tags.get(TAG_AMI_BUILD_STATUS, "pending"),
+                        instance_id=instance["InstanceId"],
+                        current_step=tags.get(TAG_AMI_BUILD_STEP) or None,
+                        command_id=tags.get(TAG_AMI_BUILD_COMMAND_ID) or None,
+                        image_id=tags.get(TAG_AMI_BUILD_IMAGE_ID) or None,
+                        error=tags.get(TAG_AMI_BUILD_ERROR) or None,
+                    )
+                )
+    return result
+
+
+def get_ami_build_status(
+    build_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> AmiBuildInfo | None:
+    """Get status of an AMI build by build_id. Returns None if not found."""
+    builds = list_ami_builds(region=region, profile=profile)
+    for b in builds:
+        if b.build_id == build_id:
+            return b
+    return None
+
+
+def update_instance_build_tags(
+    instance_id: str,
+    *,
+    status: str | None = None,
+    step: str | None = None,
+    command_id: str | None = None,
+    image_id: str | None = None,
+    error: str | None = None,
+    region: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """Update AMI build tags on an instance. Omit a key to leave it unchanged."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    tags: list[dict] = []
+    if status is not None:
+        tags.append({"Key": TAG_AMI_BUILD_STATUS, "Value": status})
+    if step is not None:
+        tags.append({"Key": TAG_AMI_BUILD_STEP, "Value": step})
+    if command_id is not None:
+        tags.append({"Key": TAG_AMI_BUILD_COMMAND_ID, "Value": command_id})
+    if image_id is not None:
+        tags.append({"Key": TAG_AMI_BUILD_IMAGE_ID, "Value": image_id})
+    if error is not None:
+        tags.append({"Key": TAG_AMI_BUILD_ERROR, "Value": error[:500]})  # tag value limit
+    if not tags:
+        return
+    ec2.create_tags(Resources=[instance_id], Tags=tags)
+    log.debug("update_instance_build_tags instance_id=%s tags=%s", instance_id, [t["Key"] for t in tags])
+
+
+def run_ssm_s3_copy(
+    instance_id: str,
+    s3_uri: str,
+    dest_path: str,
+    *,
+    recursive: bool = False,
+    region: str | None = None,
+    profile: str | None = None,
+    timeout_seconds: int = 600,
+) -> str:
+    """Run aws s3 cp on the instance from s3_uri to dest_path. Returns command_id."""
+    rec = "--recursive" if recursive else ""
+    cmd = f"aws s3 cp {s3_uri} {dest_path} {rec}".strip()
+    return send_ssm_command(
+        instance_id,
+        cmd,
+        region=region,
+        profile=profile,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def wait_for_ssm_command(
+    command_id: str,
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+    timeout: int = 3600,
+    poll_interval: float = 5.0,
+) -> CommandResult:
+    """Poll until SSM command completes. Returns final CommandResult."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = get_command_invocation(
+            command_id, instance_id, region=region, profile=profile
+        )
+        if result.status in ("Success", "Failed", "Cancelled", "TimedOut"):
+            return result
+        time.sleep(poll_interval)
+    result = get_command_invocation(
+        command_id, instance_id, region=region, profile=profile
+    )
+    return result
+
+
+# S3 layout for cloud AMI builds: s3://bucket/desk-ami-builds/<build_id>/config.json
+# and s3://bucket/desk-ami-builds/<build_id>/artifacts/<path>
+AMI_BUILDS_PREFIX = "desk-ami-builds"
+
+
+def upload_build_config(
+    bucket: str,
+    build_id: str,
+    config_json: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Upload build config JSON to S3. Returns s3 URI."""
+    key = f"{AMI_BUILDS_PREFIX}/{build_id}/config.json"
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    s3.put_object(Bucket=bucket, Key=key, Body=config_json.encode("utf-8"))
+    return f"s3://{bucket}/{key}"
+
+
+def upload_build_artifact(
+    bucket: str,
+    build_id: str,
+    local_path: str,
+    s3_key_suffix: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """Upload a file or directory to s3://bucket/desk-ami-builds/<build_id>/artifacts/<s3_key_suffix>."""
+    import os
+
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    key_prefix = f"{AMI_BUILDS_PREFIX}/{build_id}/artifacts/{s3_key_suffix}"
+    if os.path.isfile(local_path):
+        key = key_prefix.lstrip("/")
+        s3.upload_file(local_path, bucket, key)
+    else:
+        for root, _dirs, files in os.walk(local_path):
+            for f in files:
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, local_path)
+                key = f"{key_prefix.rstrip('/')}/{rel}".replace("\\", "/")
+                s3.upload_file(full, bucket, key)
+
+
+def get_build_config_from_s3(
+    bucket: str,
+    build_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> dict:
+    """Download and parse build config JSON from S3."""
+    key = f"{AMI_BUILDS_PREFIX}/{build_id}/config.json"
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    import json
+
+    resp = s3.get_object(Bucket=bucket, Key=key)
+    body = resp["Body"].read().decode("utf-8")
+    return json.loads(body)
+
+
+def start_ami_build_execution(
+    state_machine_arn: str,
+    build_id: str,
+    bucket: str,
+    region: str,
+    profile: str | None = None,
+) -> str:
+    """Start a Step Function execution for an AMI build. Returns execution ARN."""
+    import json
+    import re
+
+    session = boto3.Session(region_name=region, profile_name=profile)
+    sfn = session.client("stepfunctions")
+    input_str = json.dumps(
+        {"build_id": build_id, "bucket": bucket, "region": region}
+    )
+    name = re.sub(r"[^a-zA-Z0-9_-]", "-", build_id)[:80] or "build"
+    resp = sfn.start_execution(
+        stateMachineArn=state_machine_arn,
+        name=name,
+        input=input_str,
+    )
+    return resp["executionArn"]

@@ -5,7 +5,7 @@ import sys
 import click
 
 from desk import __version__
-from desk.commands import ami, auto_stop, connect, create, keygen, kill, list_, reap, run, scp, start, stop, tab, up
+from desk.commands import ami, auto_stop, connect, copy as copy_cmd_module, create, keygen, kill, list_, reap, run, scp, start, stop, tab, up
 
 
 @click.group()
@@ -26,6 +26,7 @@ cli.add_command(kill.kill, "kill")
 cli.add_command(list_.list_cmd, "list")
 cli.add_command(reap.reap, "reap")
 cli.add_command(run.run, "run")
+cli.add_command(copy_cmd_module.copy_cmd, "copy")
 cli.add_command(scp.scp, "scp")
 cli.add_command(start.start, "start")
 cli.add_command(stop.stop, "stop")

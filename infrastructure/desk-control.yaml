@@ -1,18 +1,29 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Lambda that runs desk control-plane commands (list, start, stop, create, ami, tab list/create/close, etc.). Excludes connect and scp.
+Description: Lambda that runs desk control-plane commands (list, start, stop, create, ami, tab, copy, ami builds). Includes AMI build pipeline and artifact bucket.
 
 Resources:
+  AmiBuildBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "desk-ami-builds-${AWS::AccountId}-${AWS::Region}"
+      Tags:
+        - Key: desk:managed
+          Value: "true"
+
   DeskControlFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: desk-control
-      Description: Run desk control-plane operations (list, start, stop, create, ami, tab list/create/close, etc.)
+      Description: Run desk control-plane operations (list, start, stop, create, ami, tab, copy, ami builds start/list/follow)
       Runtime: python3.12
       CodeUri: control/
       Handler: handler.handler
       Timeout: 300
       MemorySize: 256
+      Environment:
+        Variables:
+          DESK_AMI_BUILD_STATE_MACHINE_ARN: !Ref AmiBuildStateMachine
       Policies:
         - Statement:
             - Effect: Allow
@@ -47,12 +58,128 @@ Resources:
               Action:
                 - cloudformation:DescribeStacks
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: !GetAtt AmiBuildStateMachine.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "${AmiBuildBucket.Arn}/*"
       Tags:
         desk:managed: "true"
     Metadata:
       BuildMethod: makefile
 
+  AmiPipelineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: desk-ami-pipeline
+      Description: One step of the AMI build pipeline (invoked by Step Function)
+      Runtime: python3.12
+      CodeUri: ami-pipeline/
+      Handler: handler.handler
+      Timeout: 300
+      MemorySize: 256
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ec2:DescribeInstances
+                - ec2:DescribeInstanceStatus
+                - ec2:DescribeTags
+                - ec2:RunInstances
+                - ec2:TerminateInstances
+                - ec2:CreateImage
+                - ec2:CreateTags
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ssm:SendCommand
+                - ssm:GetCommandInvocation
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  iam:PassedToService: ec2.amazonaws.com
+            - Effect: Allow
+              Action:
+                - cloudformation:DescribeStacks
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${AmiBuildBucket.Arn}/*"
+      Tags:
+        desk:managed: "true"
+    Metadata:
+      BuildMethod: makefile
+
+  AmiPipelineStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+
+  AmiPipelineStateMachinePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: desk-ami-pipeline-invoke
+      Roles:
+        - !Ref AmiPipelineStateMachineRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource: !GetAtt AmiPipelineFunction.Arn
+
+  AmiBuildStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    DependsOn: AmiPipelineStateMachinePolicy
+    Properties:
+      StateMachineName: desk-ami-build
+      RoleArn: !GetAtt AmiPipelineStateMachineRole.Arn
+      DefinitionString: !Sub
+        - |
+          {
+            "StartAt": "PipelineTask",
+            "States": {
+              "PipelineTask": {
+                "Type": "Task",
+                "Resource": "${PipelineLambdaArn}",
+                "Next": "CheckDone"
+              },
+              "CheckDone": {
+                "Type": "Choice",
+                "Choices": [
+                  { "Variable": "$.done", "BooleanEquals": true, "Next": "Success" },
+                  { "Variable": "$.ssm_ready", "BooleanEquals": false, "Next": "WaitForSSM" }
+                ],
+                "Default": "PipelineTask"
+              },
+              "Success": { "Type": "Succeed" },
+              "WaitForSSM": { "Type": "Wait", "Seconds": 15, "Next": "PipelineTask" }
+            }
+          }
+        - PipelineLambdaArn: !GetAtt AmiPipelineFunction.Arn
+
 Outputs:
   DeskControlFunctionArn:
     Description: ARN of the desk-control Lambda function
     Value: !GetAtt DeskControlFunction.Arn
+  AmiBuildBucketName:
+    Description: S3 bucket for AMI build config and artifacts
+    Value: !Ref AmiBuildBucket
+  AmiBuildStateMachineArn:
+    Description: Step Function state machine for AMI builds
+    Value: !Ref AmiBuildStateMachine

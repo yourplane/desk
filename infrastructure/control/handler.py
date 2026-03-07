@@ -7,7 +7,7 @@ from dataclasses import asdict
 # Allowlist: control-plane only. Excludes connect, scp (interactive/SSH).
 CONTROL_PLANE_COMMANDS = frozenset({
     "list", "start", "stop", "up", "create", "kill", "reap", "auto-stop",
-    "run", "ami", "tab",
+    "run", "ami", "tab", "copy",
 })
 TAB_ALLOWED_SUBCOMMANDS = frozenset({"list", "create", "close"})
 
@@ -199,8 +199,8 @@ def _run_command(argv: list, region: str | None, profile: str | None):
         return {"instance_id": instance_id, "shutdown_at": shutdown_at}
 
     if cmd == "ami":
-        if not args or args[0].lower() not in ("list", "create"):
-            raise ValueError("ami requires subcommand: list or create")
+        if not args:
+            raise ValueError("ami requires subcommand: list, create, or builds")
         sub = args[0].lower()
         ami_args = args[1:]
         if sub == "list":
@@ -225,7 +225,97 @@ def _run_command(argv: list, region: str | None, profile: str | None):
                 instance_id, name, no_reboot=no_reboot, region=r, profile=p
             )
             return {"image_id": image_id, "name": name, "instance_id": instance_id}
+        if sub == "builds":
+            from desk.config import get_default_profile, get_default_region
+            if not ami_args or ami_args[0].lower() not in ("start", "list", "follow"):
+                raise ValueError("ami builds requires subcommand: start, list, or follow")
+            builds_sub = ami_args[0].lower()
+            builds_args = ami_args[1:]
+            r = region or get_default_region()
+            p = profile or get_default_profile()
+            if builds_sub == "start":
+                if len(builds_args) < 2:
+                    raise ValueError("ami builds start requires build_id and bucket")
+                build_id, bucket = builds_args[0], builds_args[1]
+                state_machine_arn = os.environ.get("DESK_AMI_BUILD_STATE_MACHINE_ARN")
+                if not state_machine_arn:
+                    raise ValueError("DESK_AMI_BUILD_STATE_MACHINE_ARN not set")
+                from desk.aws import start_ami_build_execution
+                execution_arn = start_ami_build_execution(
+                    state_machine_arn, build_id, bucket, r, profile=p
+                )
+                return {"build_id": build_id, "execution_arn": execution_arn}
+            if builds_sub == "list":
+                from desk.aws import list_ami_builds
+                builds = list_ami_builds(region=r, profile=p)
+                return {"builds": [asdict(b) for b in builds]}
+            if builds_sub == "follow":
+                if not builds_args:
+                    raise ValueError("ami builds follow requires build_id")
+                from desk.aws import get_ami_build_status
+                info = get_ami_build_status(builds_args[0], region=r, profile=p)
+                if info is None:
+                    return {"build_id": builds_args[0], "found": False}
+                return {"build": asdict(info), "found": True}
+            raise ValueError("ami builds subcommand not supported: " + builds_sub)
         raise ValueError("ami subcommand not supported in Lambda: " + sub)
+
+    if cmd == "copy":
+        from desk.aws import (
+            resolve_workstation,
+            run_ssm_s3_copy,
+            wait_for_ssm_command,
+        )
+        from desk.config import get_default_profile, get_default_region
+        if len(args) < 2:
+            raise ValueError("copy requires source and destination")
+        source, dest = args[0], args[1]
+        r = region or get_default_region()
+        p = profile or get_default_profile()
+        recursive = _flag(args, "--recursive") or _flag(args, "-r")
+        # Lambda only supports s3 ↔ workstation (no local paths)
+        def _is_s3(s):
+            return s.startswith("s3://")
+        def _is_ws(s):
+            return ":" in s and not s.startswith("s3:") or s.startswith(":")
+        if not (_is_s3(source) and _is_ws(dest) or _is_ws(source) and _is_s3(dest)):
+            raise ValueError("In Lambda, copy supports only s3://... and workstation:path (one of each)")
+        def _parse_ws(path):
+            if path.startswith(":"):
+                return "", path[1:]
+            n, rest = path.split(":", 1)
+            return n.strip(), rest
+        if _is_s3(source):
+            bucket, key = source[5:].strip("/").split("/", 1) if "/" in source[5:].strip("/") else (source[5:].strip("/"), "")
+            if not key:
+                raise ValueError("copy source S3 URI must be s3://bucket/key")
+            ws_name, dest_path = _parse_ws(dest)
+            if not ws_name:
+                raise ValueError("copy destination must be workstation:path")
+            instance_id = resolve_workstation(ws_name, region=r, profile=p)
+            cmd_id = run_ssm_s3_copy(instance_id, source, dest_path, recursive=recursive, region=r, profile=p)
+            result = wait_for_ssm_command(cmd_id, instance_id, region=r, profile=p, timeout=900)
+            if result.status != "Success" or (result.exit_code is not None and result.exit_code != 0):
+                raise ValueError(result.stderr or result.stdout or "copy failed")
+            return {"instance_id": instance_id, "source": source, "destination": f"{ws_name}:{dest_path}"}
+        else:
+            ws_name, src_path = _parse_ws(source)
+            if not ws_name:
+                raise ValueError("copy source must be workstation:path")
+            parts = dest[5:].strip("/").split("/", 1)
+            bucket = parts[0]
+            key = parts[1] if len(parts) > 1 else ""
+            if not key:
+                raise ValueError("copy destination S3 URI must be s3://bucket/key")
+            s3_uri = dest
+            instance_id = resolve_workstation(ws_name, region=r, profile=p)
+            from desk.aws import send_ssm_command
+            cmd = f"aws s3 cp {src_path} {s3_uri} {'--recursive' if recursive else ''}".strip()
+            cmd_id = send_ssm_command(instance_id, cmd, region=r, profile=p, timeout_seconds=600)
+            result = wait_for_ssm_command(cmd_id, instance_id, region=r, profile=p, timeout=900)
+            if result.status != "Success" or (result.exit_code is not None and result.exit_code != 0):
+                raise ValueError(result.stderr or result.stdout or "copy failed")
+            return {"instance_id": instance_id, "source": f"{ws_name}:{src_path}", "destination": dest}
 
     if cmd == "create":
         from desk.aws import (
