@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable
 
 import click
 
@@ -124,11 +124,12 @@ def _scp_style_remote(workstation_name: str, path: str, user: str, instance_id: 
     return f"{user}@{instance_id}:{path}"
 
 
-def _copy_local_to_workstation(
+def _copy_local_workstation(
     local_path: str,
     workstation_name: str,
     remote_path: str,
     *,
+    to_workstation: bool,
     recursive: bool,
     user: str,
     key_path: str,
@@ -137,7 +138,7 @@ def _copy_local_to_workstation(
     wait: bool,
     wait_timeout: int,
 ) -> None:
-    """Copy from local to workstation via SCP over SSM."""
+    """Copy between local and workstation via SCP over SSM (direction from to_workstation)."""
     instance_id = resolve_workstation(workstation_name, region=region, profile=profile)
     if wait and not is_ssm_ready(instance_id, region=region, profile=profile):
         if not wait_for_ssm_ready(
@@ -176,134 +177,61 @@ def _copy_local_to_workstation(
     ]
     if recursive:
         args.append("-r")
-    args.extend([local_path, remote_str])
+    args.extend([local_path, remote_str] if to_workstation else [remote_str, local_path])
     log.debug("scp %s", args)
     r = subprocess.run(args)
     if r.returncode != 0:
         raise click.ClickException(f"scp failed with exit code {r.returncode}")
 
 
-def _copy_workstation_to_local(
-    workstation_name: str,
-    remote_path: str,
-    local_path: str,
-    *,
-    recursive: bool,
-    user: str,
-    key_path: str,
-    region: str | None,
-    profile: str | None,
-    wait: bool,
-    wait_timeout: int,
-) -> None:
-    """Copy from workstation to local via SCP over SSM."""
-    instance_id = resolve_workstation(workstation_name, region=region, profile=profile)
-    if wait and not is_ssm_ready(instance_id, region=region, profile=profile):
-        if not wait_for_ssm_ready(
-            instance_id, region=region, profile=profile, timeout=wait_timeout
-        ):
-            raise click.ClickException(
-                f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
-            )
-    if region:
-        os.environ["AWS_REGION"] = region
-    if profile:
-        os.environ["AWS_PROFILE"] = profile or ""
-    public_key = get_public_key_content(key_path)
-    add_temporary_ssh_key(
-        instance_id,
-        user=user,
-        public_key_content=public_key,
-        timeout_seconds=300,
-        region=region,
-        profile=profile,
-    )
-    time.sleep(1.5)
-    remote_str = _scp_style_remote(workstation_name, remote_path, user, instance_id)
-    proxy_cmd = (
-        'sh -c "aws ssm start-session --target %h '
-        "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
-    )
-    args = [
-        "scp",
-        "-o",
-        f"ProxyCommand={proxy_cmd}",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-i",
-        key_path,
-    ]
-    if recursive:
-        args.append("-r")
-    args.extend([remote_str, local_path])
-    log.debug("scp %s", args)
-    r = subprocess.run(args)
-    if r.returncode != 0:
-        raise click.ClickException(f"scp failed with exit code {r.returncode}")
-
-
-def _copy_local_to_s3(
+def _copy_local_s3(
     local_path: str,
     bucket: str,
     key: str,
     *,
+    to_s3: bool,
     recursive: bool,
     region: str | None,
     profile: str | None,
 ) -> None:
-    """Upload from local to desk S3 bucket."""
+    """Copy between local and desk S3 bucket (direction from to_s3)."""
     import boto3
 
     session = boto3.Session(region_name=region, profile_name=profile)
     s3 = session.client("s3")
-    if recursive and os.path.isdir(local_path):
-        for root, _dirs, files in os.walk(local_path):
-            for f in files:
-                full = os.path.join(root, f)
-                rel = os.path.relpath(full, local_path)
-                k = f"{key.rstrip('/')}/{rel}" if key else rel
-                s3.upload_file(full, bucket, k)
-                log.debug("upload %s -> s3://%s/%s", full, bucket, k)
+    if to_s3:
+        if recursive and os.path.isdir(local_path):
+            for root, _dirs, files in os.walk(local_path):
+                for f in files:
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, local_path)
+                    k = f"{key.rstrip('/')}/{rel}" if key else rel
+                    s3.upload_file(full, bucket, k)
+                    log.debug("upload %s -> s3://%s/%s", full, bucket, k)
+        else:
+            k = key.rstrip("/") or os.path.basename(local_path)
+            s3.upload_file(local_path, bucket, k)
+            log.debug("upload %s -> s3://%s/%s", local_path, bucket, k)
     else:
-        k = key.rstrip("/") or os.path.basename(local_path)
-        s3.upload_file(local_path, bucket, k)
-        log.debug("upload %s -> s3://%s/%s", local_path, bucket, k)
-
-
-def _copy_s3_to_local(
-    bucket: str,
-    key: str,
-    local_path: str,
-    *,
-    recursive: bool,
-    region: str | None,
-    profile: str | None,
-) -> None:
-    """Download from desk S3 bucket to local."""
-    import boto3
-
-    session = boto3.Session(region_name=region, profile_name=profile)
-    s3 = session.client("s3")
-    if recursive:
-        paginator = s3.get_paginator("list_objects_v2")
-        prefix = key.rstrip("/") + "/" if key else ""
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get("Contents") or []:
-                k = obj["Key"]
-                if k.endswith("/"):
-                    continue
-                rel = k[len(prefix) :] if prefix else k
-                local_file = os.path.join(local_path, rel)
-                os.makedirs(os.path.dirname(local_file), exist_ok=True)
-                s3.download_file(bucket, k, local_file)
-                log.debug("download s3://%s/%s -> %s", bucket, k, local_file)
-    else:
-        # Ensure parent dir exists when local_path includes a path
-        parent = os.path.dirname(local_path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        s3.download_file(bucket, key, local_path)
-        log.debug("download s3://%s/%s -> %s", bucket, key, local_path)
+        if recursive:
+            paginator = s3.get_paginator("list_objects_v2")
+            prefix = key.rstrip("/") + "/" if key else ""
+            for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+                for obj in page.get("Contents") or []:
+                    k = obj["Key"]
+                    if k.endswith("/"):
+                        continue
+                    rel = k[len(prefix) :] if prefix else k
+                    local_file = os.path.join(local_path, rel)
+                    os.makedirs(os.path.dirname(local_file), exist_ok=True)
+                    s3.download_file(bucket, k, local_file)
+                    log.debug("download s3://%s/%s -> %s", bucket, k, local_file)
+        else:
+            parent = os.path.dirname(local_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            s3.download_file(bucket, key, local_path)
+            log.debug("download s3://%s/%s -> %s", bucket, key, local_path)
 
 
 def _run_ssm_command_and_wait(
@@ -344,20 +272,20 @@ def _run_ssm_command_and_wait(
             return
 
 
-def _copy_workstation_to_s3(
+def _copy_workstation_s3(
     workstation_name: str,
     remote_path: str,
     bucket: str,
     key: str,
     *,
+    to_s3: bool,
     recursive: bool,
-    user: str,
     region: str | None,
     profile: str | None,
     wait: bool,
     wait_timeout: int,
 ) -> None:
-    """Copy from workstation to S3 via SSM (aws s3 cp/sync on instance)."""
+    """Copy between workstation and S3 via SSM (direction from to_s3)."""
     instance_id = resolve_workstation(workstation_name, region=region, profile=profile)
     if wait and not is_ssm_ready(instance_id, region=region, profile=profile):
         if not wait_for_ssm_ready(
@@ -367,22 +295,28 @@ def _copy_workstation_to_s3(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
     region_str = region or "us-east-1"
-    dest = f"s3://{bucket}/{key.rstrip('/')}"
-    if recursive:
-        cmd = f"aws s3 sync {remote_path!r} {dest}/ --region {region_str!r}"
+    s3_uri = f"s3://{bucket}/{key.rstrip('/')}"
+    if to_s3:
+        if recursive:
+            cmd = f"aws s3 sync {remote_path!r} {s3_uri}/ --region {region_str!r}"
+        else:
+            cmd = f"aws s3 cp {remote_path!r} {s3_uri} --region {region_str!r}"
     else:
-        cmd = f"aws s3 cp {remote_path!r} {dest} --region {region_str!r}"
+        if recursive:
+            cmd = f"aws s3 sync {s3_uri}/ {remote_path!r} --region {region_str!r}"
+        else:
+            cmd = f"aws s3 cp {s3_uri} {remote_path!r} --region {region_str!r}"
     _run_ssm_command_and_wait(
         instance_id, cmd, region=region, profile=profile
     )
 
 
-def _copy_s3_to_workstation(
-    bucket: str,
-    key: str,
-    workstation_name: str,
-    remote_path: str,
+def _dispatch_copy(
+    src_loc: Location,
+    dest_loc: Location,
     *,
+    bucket: str | None,
+    key_path: str | None,
     recursive: bool,
     user: str,
     region: str | None,
@@ -390,24 +324,64 @@ def _copy_s3_to_workstation(
     wait: bool,
     wait_timeout: int,
 ) -> None:
-    """Copy from S3 to workstation via SSM (aws s3 cp/sync on instance)."""
-    instance_id = resolve_workstation(workstation_name, region=region, profile=profile)
-    if wait and not is_ssm_ready(instance_id, region=region, profile=profile):
-        if not wait_for_ssm_ready(
-            instance_id, region=region, profile=profile, timeout=wait_timeout
-        ):
-            raise click.ClickException(
-                f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
-            )
-    region_str = region or "us-east-1"
-    src = f"s3://{bucket}/{key.rstrip('/')}"
-    if recursive:
-        cmd = f"aws s3 sync {src}/ {remote_path!r} --region {region_str!r}"
-    else:
-        cmd = f"aws s3 cp {src} {remote_path!r} --region {region_str!r}"
-    _run_ssm_command_and_wait(
-        instance_id, cmd, region=region, profile=profile
-    )
+    """Dispatch to the right copy implementation by (source_kind, dest_kind)."""
+    opts = {
+        "recursive": recursive,
+        "user": user,
+        "region": region,
+        "profile": profile,
+        "wait": wait,
+        "wait_timeout": wait_timeout,
+    }
+
+    def run_local_workstation(to_workstation: bool) -> None:
+        _copy_local_workstation(
+            src_loc.path if to_workstation else dest_loc.path,
+            (dest_loc.workstation_name if to_workstation else src_loc.workstation_name) or "",
+            dest_loc.path if to_workstation else src_loc.path,
+            to_workstation=to_workstation,
+            key_path=key_path or "",
+            **opts,
+        )
+
+    def run_local_s3(to_s3: bool) -> None:
+        _copy_local_s3(
+            src_loc.path if to_s3 else dest_loc.path,
+            bucket or "",
+            dest_loc.path if to_s3 else src_loc.path,
+            to_s3=to_s3,
+            recursive=recursive,
+            region=region,
+            profile=profile,
+        )
+
+    def run_workstation_s3(to_s3: bool) -> None:
+        _copy_workstation_s3(
+            (src_loc.workstation_name if to_s3 else dest_loc.workstation_name) or "",
+            src_loc.path if to_s3 else dest_loc.path,
+            bucket or "",
+            dest_loc.path if to_s3 else src_loc.path,
+            to_s3=to_s3,
+            recursive=recursive,
+            region=region,
+            profile=profile,
+            wait=wait,
+            wait_timeout=wait_timeout,
+        )
+
+    _HANDLERS: dict[tuple[LocationKind, LocationKind], Callable[[], None]] = {
+        (LocationKind.LOCAL, LocationKind.WORKSTATION): lambda: run_local_workstation(True),
+        (LocationKind.WORKSTATION, LocationKind.LOCAL): lambda: run_local_workstation(False),
+        (LocationKind.LOCAL, LocationKind.S3): lambda: run_local_s3(True),
+        (LocationKind.S3, LocationKind.LOCAL): lambda: run_local_s3(False),
+        (LocationKind.WORKSTATION, LocationKind.S3): lambda: run_workstation_s3(True),
+        (LocationKind.S3, LocationKind.WORKSTATION): lambda: run_workstation_s3(False),
+    }
+    key = (src_loc.kind, dest_loc.kind)
+    handler = _HANDLERS.get(key)
+    if not handler:
+        raise click.ClickException("Unsupported source/destination combination.")
+    handler()
 
 
 @click.command("copy")
@@ -524,78 +498,18 @@ def copy_cmd(
             raise click.ClickException(str(e)) from e
 
     try:
-        if src_loc.kind == LocationKind.LOCAL and dest_loc.kind == LocationKind.WORKSTATION:
-            _copy_local_to_workstation(
-                src_loc.path,
-                dest_loc.workstation_name or "",
-                dest_loc.path,
-                recursive=recursive,
-                user=user,
-                key_path=key_path or "",
-                region=region,
-                profile=profile,
-                wait=wait,
-                wait_timeout=wait_timeout,
-            )
-        elif src_loc.kind == LocationKind.WORKSTATION and dest_loc.kind == LocationKind.LOCAL:
-            _copy_workstation_to_local(
-                src_loc.workstation_name or "",
-                src_loc.path,
-                dest_loc.path,
-                recursive=recursive,
-                user=user,
-                key_path=key_path or "",
-                region=region,
-                profile=profile,
-                wait=wait,
-                wait_timeout=wait_timeout,
-            )
-        elif src_loc.kind == LocationKind.LOCAL and dest_loc.kind == LocationKind.S3:
-            _copy_local_to_s3(
-                src_loc.path,
-                bucket or "",
-                dest_loc.path,
-                recursive=recursive,
-                region=region,
-                profile=profile,
-            )
-        elif src_loc.kind == LocationKind.S3 and dest_loc.kind == LocationKind.LOCAL:
-            _copy_s3_to_local(
-                bucket or "",
-                src_loc.path,
-                dest_loc.path,
-                recursive=recursive,
-                region=region,
-                profile=profile,
-            )
-        elif src_loc.kind == LocationKind.WORKSTATION and dest_loc.kind == LocationKind.S3:
-            _copy_workstation_to_s3(
-                src_loc.workstation_name or "",
-                src_loc.path,
-                bucket or "",
-                dest_loc.path,
-                recursive=recursive,
-                user=user,
-                region=region,
-                profile=profile,
-                wait=wait,
-                wait_timeout=wait_timeout,
-            )
-        elif src_loc.kind == LocationKind.S3 and dest_loc.kind == LocationKind.WORKSTATION:
-            _copy_s3_to_workstation(
-                bucket or "",
-                src_loc.path,
-                dest_loc.workstation_name or "",
-                dest_loc.path,
-                recursive=recursive,
-                user=user,
-                region=region,
-                profile=profile,
-                wait=wait,
-                wait_timeout=wait_timeout,
-            )
-        else:
-            raise click.ClickException("Unsupported source/destination combination.")
+        _dispatch_copy(
+            src_loc,
+            dest_loc,
+            bucket=bucket,
+            key_path=key_path,
+            recursive=recursive,
+            user=user,
+            region=region,
+            profile=profile,
+            wait=wait,
+            wait_timeout=wait_timeout,
+        )
     except click.ClickException:
         raise
     except Exception as e:

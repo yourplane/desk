@@ -116,11 +116,11 @@ def test_copy_help(parse_mock: object, _bucket_mock: object) -> None:
 
 
 @patch("desk.commands.copy.get_desk_copy_bucket", return_value="desk-123-us-east-1-copy")
-@patch("desk.commands.copy._copy_local_to_s3")
+@patch("desk.commands.copy._copy_local_s3")
 def test_copy_local_to_s3_invoked(
     mock_copy: object, mock_bucket: object
 ) -> None:
-    """desk copy ./file s3:/key invokes _copy_local_to_s3."""
+    """desk copy ./file s3:/key invokes _copy_local_s3."""
     from click.testing import CliRunner
 
     from desk.cli import cli
