@@ -72,6 +72,43 @@ def get_desk_vpc_outputs(
     )
 
 
+def get_desk_copy_bucket(
+    stack_name: str = "desk",
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Return the desk copy S3 bucket name from the desk stack output.
+
+    Use for 'desk copy' when the source or destination is s3:/key.
+    Raises RuntimeError if the stack or DeskCopyBucketName output is missing.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    cf = session.client("cloudformation")
+    resolved_region = session.region_name
+
+    try:
+        response = cf.describe_stacks(StackName=stack_name)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ValidationError":
+            region_hint = f" (region: {resolved_region})" if resolved_region else ""
+            profile_hint = f" (profile: {profile})" if profile else ""
+            raise RuntimeError(
+                f"Stack '{stack_name}' not found{region_hint}{profile_hint}. "
+                "Deploy desk infrastructure (desk-vpc.yaml) so that DeskCopyBucketName is available."
+            ) from e
+        raise
+
+    stack = response["Stacks"][0]
+    outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
+    bucket = outputs.get("DeskCopyBucketName", "").strip()
+    if not bucket:
+        raise RuntimeError(
+            f"Stack '{stack_name}' has no DeskCopyBucketName output. "
+            "Update the desk stack with the template that defines DeskCopyBucket."
+        )
+    return bucket
+
+
 def get_latest_ubuntu_ami(
     version: str = "24.04",
     architecture: str = "x86_64",

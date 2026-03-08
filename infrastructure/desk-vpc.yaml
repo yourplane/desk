@@ -176,6 +176,45 @@ Resources:
       Roles:
         - !Ref WorkstationRole
 
+  DeskCopyBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub "desk-${AWS::AccountId}-${AWS::Region}-copy"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: desk:managed
+          Value: "true"
+        - Key: Name
+          Value: desk-copy-bucket
+
+  WorkstationDeskCopyBucketPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: desk-copy-bucket-access
+      Roles:
+        - !Ref WorkstationRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt DeskCopyBucket.Arn
+              - !Sub "${DeskCopyBucket.Arn}/*"
+
 Outputs:
   VpcId:
     Description: VPC ID for desk workstations
@@ -208,3 +247,9 @@ Outputs:
     Value: !Ref WorkstationInstanceProfile
     Export:
       Name: desk-WorkstationInstanceProfile
+
+  DeskCopyBucketName:
+    Description: S3 bucket for desk copy (use s3:/key in desk copy)
+    Value: !Ref DeskCopyBucket
+    Export:
+      Name: desk-DeskCopyBucketName
