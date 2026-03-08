@@ -8,6 +8,7 @@ from desk.commands.copy import (
     Location,
     LocationKind,
     parse_location,
+    _reject_copy_without_s3,
     _reject_local_to_local,
     _reject_workstation_to_workstation,
 )
@@ -162,3 +163,32 @@ def test_copy_workstation_to_workstation_rejected() -> None:
         result = runner.invoke(cli, ["copy", "main:/a", "dev:/b"])
     assert result.exit_code != 0
     assert "workstation" in result.output.lower() or "not supported" in result.output.lower()
+
+
+def test_reject_copy_without_s3() -> None:
+    """_reject_copy_without_s3 raises when neither source nor dest is S3."""
+    from click import ClickException
+
+    local = Location(LocationKind.LOCAL, "./a")
+    ws = Location(LocationKind.WORKSTATION, "/b", workstation_name="main")
+    s3 = Location(LocationKind.S3, "key")
+    with pytest.raises(ClickException, match="At least one.*must be S3"):
+        _reject_copy_without_s3(local, ws)
+    with pytest.raises(ClickException, match="At least one.*must be S3"):
+        _reject_copy_without_s3(ws, local)
+    _reject_copy_without_s3(local, s3)
+    _reject_copy_without_s3(s3, local)
+    _reject_copy_without_s3(ws, s3)
+    _reject_copy_without_s3(s3, ws)
+
+
+def test_copy_local_to_workstation_rejected() -> None:
+    """desk copy ./a main:/b fails (one end must be S3)."""
+    from click.testing import CliRunner
+
+    from desk.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["copy", "./a", "main:/b"])
+    assert result.exit_code != 0
+    assert "s3" in result.output.lower() or "S3" in result.output

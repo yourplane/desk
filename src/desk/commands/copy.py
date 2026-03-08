@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import time
-import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
@@ -117,92 +116,13 @@ def _reject_workstation_to_workstation(src: Location, dest: Location) -> None:
         )
 
 
-def _delete_s3_prefix(
-    bucket: str,
-    prefix: str,
-    *,
-    region: str | None,
-    profile: str | None,
-) -> None:
-    """Delete all objects under the given S3 prefix."""
-    import boto3
-
-    session = boto3.Session(region_name=region, profile_name=profile)
-    s3 = session.client("s3")
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        contents = page.get("Contents") or []
-        if not contents:
-            continue
-        s3.delete_objects(
-            Bucket=bucket,
-            Delete={"Objects": [{"Key": obj["Key"]} for obj in contents]},
+def _reject_copy_without_s3(src: Location, dest: Location) -> None:
+    """Reject copy when neither source nor destination is S3 (no local<->workstation)."""
+    if src.kind != LocationKind.S3 and dest.kind != LocationKind.S3:
+        raise click.ClickException(
+            "At least one of source or destination must be S3 (s3:/key). "
+            "Copy between local and workstation is not supported."
         )
-        log.debug("deleted %d objects under s3://%s/%s", len(contents), bucket, prefix)
-
-
-def _copy_local_workstation(
-    local_path: str,
-    workstation_name: str,
-    remote_path: str,
-    bucket: str,
-    *,
-    to_workstation: bool,
-    recursive: bool,
-    region: str | None,
-    profile: str | None,
-    wait: bool,
-    wait_timeout: int,
-) -> None:
-    """Copy between local and workstation via S3 staging and SSM SendCommand (no sessions)."""
-    temp_prefix = f"desk-copy-temp/{uuid.uuid4().hex}/"
-    try:
-        if to_workstation:
-            _copy_local_s3(
-                local_path,
-                bucket,
-                temp_prefix.rstrip("/"),
-                to_s3=True,
-                recursive=recursive,
-                region=region,
-                profile=profile,
-            )
-            _copy_workstation_s3(
-                workstation_name,
-                remote_path,
-                bucket,
-                temp_prefix.rstrip("/"),
-                to_s3=False,
-                recursive=recursive,
-                region=region,
-                profile=profile,
-                wait=wait,
-                wait_timeout=wait_timeout,
-            )
-        else:
-            _copy_workstation_s3(
-                workstation_name,
-                remote_path,
-                bucket,
-                temp_prefix.rstrip("/"),
-                to_s3=True,
-                recursive=recursive,
-                region=region,
-                profile=profile,
-                wait=wait,
-                wait_timeout=wait_timeout,
-            )
-            _copy_local_s3(
-                local_path,
-                bucket,
-                temp_prefix.rstrip("/"),
-                to_s3=False,
-                recursive=recursive,
-                region=region,
-                profile=profile,
-            )
-    finally:
-        _delete_s3_prefix(bucket, temp_prefix, region=region, profile=profile)
 
 
 def _copy_local_s3(
@@ -345,20 +265,6 @@ def _dispatch_copy(
 ) -> None:
     """Dispatch to the right copy implementation by (source_kind, dest_kind)."""
 
-    def run_local_workstation(to_workstation: bool) -> None:
-        _copy_local_workstation(
-            src_loc.path if to_workstation else dest_loc.path,
-            (dest_loc.workstation_name if to_workstation else src_loc.workstation_name) or "",
-            dest_loc.path if to_workstation else src_loc.path,
-            bucket,
-            to_workstation=to_workstation,
-            recursive=recursive,
-            region=region,
-            profile=profile,
-            wait=wait,
-            wait_timeout=wait_timeout,
-        )
-
     def run_local_s3(to_s3: bool) -> None:
         _copy_local_s3(
             src_loc.path if to_s3 else dest_loc.path,
@@ -385,8 +291,6 @@ def _dispatch_copy(
         )
 
     _HANDLERS: dict[tuple[LocationKind, LocationKind], Callable[[], None]] = {
-        (LocationKind.LOCAL, LocationKind.WORKSTATION): lambda: run_local_workstation(True),
-        (LocationKind.WORKSTATION, LocationKind.LOCAL): lambda: run_local_workstation(False),
         (LocationKind.LOCAL, LocationKind.S3): lambda: run_local_s3(True),
         (LocationKind.S3, LocationKind.LOCAL): lambda: run_local_s3(False),
         (LocationKind.WORKSTATION, LocationKind.S3): lambda: run_workstation_s3(True),
@@ -450,22 +354,22 @@ def copy_cmd(
     wait_timeout: int,
     stack: str,
 ) -> None:
-    """Copy files between local, workstation, and S3.
+    """Copy files between local, workstation, and S3 (one end must be S3).
 
     Locations:
       Local:        ./file, /tmp/dir, relative/path
       Workstation:  name:path (e.g. main:/tmp/file, main:~/dir)
       S3:           s3:/key or s3:/path/to/key (desk-managed bucket; no bucket name needed)
 
-    Copy between two local paths or two workstations is not supported.
+    At least one of source or destination must be S3. Copy between only local and
+    workstation is not supported.
 
     \b
     Examples:
-      desk copy ./file.txt main:/tmp/file.txt
-      desk copy main:/tmp/out.txt ./out.txt
       desk copy ./data s3:/backup/data
       desk copy s3:/backup/data ./restored
       desk copy main:/var/log/app s3:/logs/app -r
+      desk copy s3:/logs/app main:/tmp/restored -r
     """
     region = region or get_default_region()
     profile = profile or get_default_profile()
@@ -478,20 +382,12 @@ def copy_cmd(
 
     _reject_local_to_local(src_loc, dest_loc)
     _reject_workstation_to_workstation(src_loc, dest_loc)
+    _reject_copy_without_s3(src_loc, dest_loc)
 
-    need_bucket = (
-        src_loc.kind == LocationKind.S3
-        or dest_loc.kind == LocationKind.S3
-        or src_loc.kind == LocationKind.WORKSTATION
-        or dest_loc.kind == LocationKind.WORKSTATION
-    )
-    if not need_bucket:
-        bucket = ""
-    else:
-        try:
-            bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
-        except RuntimeError as e:
-            raise click.ClickException(str(e)) from e
+    try:
+        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
 
     try:
         _dispatch_copy(
