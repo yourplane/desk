@@ -1,14 +1,31 @@
 import { useEffect, useState } from 'react'
 import { listInstances, startInstance, stopInstance, type Instance } from '../api/client'
 
-function formatShutdownLocal(isoUtc: string | null, state: string): string {
-  if (!isoUtc || state === 'stopped' || state === 'stopping' || state === 'terminated' || state === 'shutting-down') return '—'
+function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: string; relative: string } {
+  if (!isoUtc || state === 'stopped' || state === 'stopping' || state === 'terminated' || state === 'shutting-down') {
+    return { absolute: '—', relative: '' }
+  }
   try {
     const d = new Date(isoUtc)
-    if (Number.isNaN(d.getTime())) return isoUtc
-    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+    if (Number.isNaN(d.getTime())) return { absolute: isoUtc, relative: '' }
+    const absolute = d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+    const now = Date.now()
+    const diffMs = d.getTime() - now
+    let relative = ''
+    if (diffMs > 0) {
+      const totalM = Math.floor(diffMs / 60000)
+      const h = Math.floor(totalM / 60)
+      const m = totalM % 60
+      relative = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`
+    } else {
+      const totalM = Math.floor(-diffMs / 60000)
+      const h = Math.floor(totalM / 60)
+      const m = totalM % 60
+      relative = h > 0 ? `${h}h ${m}m ago` : `${m}m ago`
+    }
+    return { absolute, relative }
   } catch {
-    return isoUtc
+    return { absolute: isoUtc, relative: '' }
   }
 }
 
@@ -98,7 +115,7 @@ export function InstanceList() {
             <tr>
               <th>Name</th>
               <th>Status</th>
-              <th>Auto-stop (local)</th>
+              <th>Auto-stop</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -112,11 +129,23 @@ export function InstanceList() {
                 <tr key={inst.instance_id}>
                   <td className="name">{inst.name || inst.instance_id}</td>
                   <td>
-                    <span className="state-badge" style={{ backgroundColor: stateColor(inst.state) }}>
+                    <span className="state-label" style={{ color: stateColor(inst.state) }}>
                       {inst.state}
                     </span>
                   </td>
-                  <td className="shutdown">{formatShutdownLocal(inst.shutdown_at, inst.state)}</td>
+                  <td className="shutdown">
+                    {(() => {
+                      const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
+                      return relative ? (
+                        <span className="shutdown-cell">
+                          <span className="shutdown-absolute">{absolute}</span>
+                          <span className="shutdown-relative">{relative}</span>
+                        </span>
+                      ) : (
+                        absolute
+                      )
+                    })()}
+                  </td>
                   <td className="actions">
                     {inst.state === 'stopped' && (
                       <button
