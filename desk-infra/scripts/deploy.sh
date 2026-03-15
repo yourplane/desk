@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Build and deploy the desk web app stack.
 # Usage: ./deploy.sh [stack-name] [aws-profile]
-# Requires: stack already created (aws cloudformation deploy) with params AllowedEmail, GoogleClientId, GoogleClientSecret, CognitoCallbackURL.
-# This script: 1) Builds frontend, 2) Packages and uploads Lambda code, 3) Syncs frontend to S3, 4) Invalidates CloudFront.
+# Requires: stack already created (CloudFormation with CognitoCallbackURL). Builds frontend, packages desk-api Lambda, syncs S3, invalidates CloudFront.
 set -e
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 INFRA_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
@@ -42,17 +41,7 @@ with zipfile.ZipFile(zpath, 'w') as zf:
 " "$z"; fi)
 }
 
-# 2. Package authorizer Lambda
-echo "==> Packaging authorizer Lambda..."
-AUTH_ZIP=$(mktemp -u).zip
-cd "$INFRA_DIR/auth"
-pip install -q -r requirements.txt -t .package
-cp handler.py .package/
-_zip_dir .package "$AUTH_ZIP"
-rm -rf .package
-AUTH_KEY="webapp/authorizer-$(date +%Y%m%d%H%M%S).zip"
-
-# 3. Package desk-api Lambda (desk-api + desk-sdk + deps)
+# 2. Package desk-api Lambda (desk-api + desk-sdk + deps)
 echo "==> Packaging desk-api Lambda..."
 API_BUILD_DIR=$(mktemp -d)
 trap "rm -rf '$API_BUILD_DIR'" EXIT
@@ -66,7 +55,7 @@ API_ZIP=$(mktemp -u).zip
 _zip_dir . "$API_ZIP"
 API_KEY="webapp/desk-api-$(date +%Y%m%d%H%M%S).zip"
 
-# 4. Get artifacts bucket from stack
+# 3. Get artifacts bucket from stack
 echo "==> Getting stack outputs..."
 BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue" --output text 2>/dev/null || true)
 if [ -z "$BUCKET" ]; then
@@ -74,26 +63,19 @@ if [ -z "$BUCKET" ]; then
   exit 1
 fi
 
-# 5. Upload Lambda zips
-echo "==> Uploading Lambda packages to s3://$BUCKET/..."
-aws s3 cp "$AUTH_ZIP" "s3://$BUCKET/$AUTH_KEY"
+# 4. Upload Lambda zip and update function
+echo "==> Uploading desk-api package to s3://$BUCKET/..."
 aws s3 cp "$API_ZIP" "s3://$BUCKET/$API_KEY"
-rm -f "$AUTH_ZIP" "$API_ZIP"
+rm -f "$API_ZIP"
+echo "==> Updating Lambda ${STACK_NAME}-api..."
+aws lambda update-function-code --function-name "${STACK_NAME}-api" --s3-bucket "$BUCKET" --s3-key "$API_KEY" --no-clobber 2>/dev/null || true
 
-# 6. Update Lambda function codes
-AUTHORIZER_FN="${STACK_NAME}-authorizer"
-API_FN="${STACK_NAME}-api"
-echo "==> Updating Lambda $AUTHORIZER_FN..."
-aws lambda update-function-code --function-name "$AUTHORIZER_FN" --s3-bucket "$BUCKET" --s3-key "$AUTH_KEY" --no-clobber 2>/dev/null || true
-echo "==> Updating Lambda $API_FN..."
-aws lambda update-function-code --function-name "$API_FN" --s3-bucket "$BUCKET" --s3-key "$API_KEY" --no-clobber 2>/dev/null || true
-
-# 7. Get frontend bucket and sync
+# 5. Get frontend bucket and sync
 FRONTEND_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text)
 echo "==> Syncing frontend to s3://$FRONTEND_BUCKET..."
 aws s3 sync "$REPO_ROOT/desk-frontend/dist" "s3://$FRONTEND_BUCKET" --delete
 
-# 8. Invalidate CloudFront
+# 6. Invalidate CloudFront
 DIST_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text 2>/dev/null || true)
 if [ -n "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
   echo "==> Invalidating CloudFront distribution $DIST_ID..."

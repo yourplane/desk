@@ -12,6 +12,7 @@ const CONFIG = {
 }
 
 const TOKEN_KEY = 'desk_id_token'
+const COOKIE_NAME = 'desk_token'
 const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
 
 export function isAuthEnabled(): boolean {
@@ -19,16 +20,23 @@ export function isAuthEnabled(): boolean {
 }
 
 export function getToken(): string | null {
-  return sessionStorage.getItem(TOKEN_KEY)
+  const fromStorage = sessionStorage.getItem(TOKEN_KEY)
+  if (fromStorage) return fromStorage
+  const match = document.cookie.match(new RegExp('(^| )' + COOKIE_NAME + '=([^;]+)'))
+  return match ? decodeURIComponent(match[2]!) : null
 }
 
 function setToken(token: string): void {
   sessionStorage.setItem(TOKEN_KEY, token)
+  const maxAge = 3600
+  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`
 }
 
 function clearToken(): void {
   sessionStorage.removeItem(TOKEN_KEY)
   sessionStorage.removeItem(PKCE_VERIFIER_KEY)
+  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
 }
 
 /** Redirect to Cognito hosted UI if auth is enabled and no token. Call once at app load. */

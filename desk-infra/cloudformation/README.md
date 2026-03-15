@@ -1,67 +1,54 @@
 # Desk Web App Stack
 
-CloudFormation stack for the desk web app: Cognito (Google login), Lambda (desk-api), API Gateway, S3, CloudFront, WAF.
+CloudFormation stack for the desk web app: **basic Cognito** (username/password, no Google), Lambda (desk-api), API Gateway with **built-in JWT authorizer**, S3, CloudFront with **viewer-request auth** (redirect to Cognito if no cookie), WAF.
+
+Auth is handled at the edge: a **CloudFront Function** checks for the `desk_token` cookie and redirects to Cognito hosted UI when missing. API Gateway validates the JWT (Cognito User Pool) with no custom authorizer code.
 
 ## Prerequisites
 
 - AWS CLI configured
 - Deploy the stack in **us-east-1** (required for WAF attached to CloudFront)
-- Google OAuth 2.0 client (Cloud Console): create credentials, add authorized redirect URI `https://<cognito-domain>.auth.<region>.amazoncognito.com/oauth2/idpresponse` for your Cognito domain
 - Node and Python for the deploy script
 
 ## First-time deploy
 
-1. Create the stack with required parameters:
+1. Create the stack (single parameter: callback URL; use placeholder first):
 
    ```bash
    aws cloudformation deploy \
      --template-file main.yaml \
      --stack-name desk-web \
-     --parameter-overrides \
-       AllowedEmail=you@example.com \
-       GoogleClientId=YOUR_GOOGLE_CLIENT_ID \
-       GoogleClientSecret=YOUR_GOOGLE_CLIENT_SECRET \
+     --parameter-overrides CognitoCallbackURL=https://placeholder.example.com \
      --capabilities CAPABILITY_IAM
    ```
 
-2. Get the CloudFront URL from outputs, then update the stack with the real Cognito callback URL:
+2. Set the real Cognito callback URL from the CloudFront output and redeploy:
 
    ```bash
    CF_URL=$(aws cloudformation describe-stacks --stack-name desk-web --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" --output text)
    aws cloudformation deploy \
      --template-file main.yaml \
      --stack-name desk-web \
-     --parameter-overrides \
-       AllowedEmail=you@example.com \
-       GoogleClientId=YOUR_GOOGLE_CLIENT_ID \
-       GoogleClientSecret=YOUR_GOOGLE_CLIENT_SECRET \
-       CognitoCallbackURL="$CF_URL" \
+     --parameter-overrides "CognitoCallbackURL=$CF_URL" \
      --capabilities CAPABILITY_IAM
    ```
 
-3. In Google Cloud Console, add the Cognito redirect URI to your OAuth client (e.g. `https://<domain>.auth.<region>.amazoncognito.com/oauth2/idpresponse` — or use the callback URL shown in Cognito).
-
-4. Run the deploy script to build frontend, upload Lambda code, sync S3, and invalidate CloudFront:
+3. Run the deploy script to build frontend, upload desk-api Lambda, sync S3, and invalidate CloudFront:
 
    ```bash
    ../scripts/deploy.sh desk-web
    ```
 
-## One-command deploy (stack + app)
+4. Create a user in the Cognito User Pool (AWS Console → Cognito → User Pools → your pool → Create user), then sign in with the hosted UI.
 
-With env vars set, you can run the full deploy (CloudFormation phases + deploy.sh) once:
+## One-command deploy
 
 ```bash
-export ALLOWED_EMAIL=you@example.com
-export GOOGLE_CLIENT_ID=your-google-client-id
-export GOOGLE_CLIENT_SECRET=your-google-client-secret
 export AWS_REGION=us-east-1
 ../scripts/full-deploy.sh desk-web
 ```
 
 ## Subsequent deploys (app only)
-
-After the stack exists, to rebuild frontend and update Lambdas/S3/CloudFront:
 
 ```bash
 ../scripts/deploy.sh desk-web
@@ -71,11 +58,8 @@ After the stack exists, to rebuild frontend and update Lambdas/S3/CloudFront:
 
 | Parameter | Description |
 |-----------|-------------|
-| AllowedEmail | Only this email can use the app |
-| GoogleClientId | Google OAuth client ID |
-| GoogleClientSecret | Google OAuth client secret |
-| CognitoCallbackURL | Callback URL (set to CloudFront URL after first deploy) |
+| CognitoCallbackURL | Callback URL for Cognito hosted UI (set to CloudFront URL after first deploy) |
 
 ## Local development
 
-Unaffected. Run `npm run dev` and `uvicorn app.main:app --reload` as before; no auth when VITE_COGNITO_* is unset.
+Unaffected. Run `npm run dev` and `uvicorn app.main:app --reload`; no auth when VITE_COGNITO_* is unset.

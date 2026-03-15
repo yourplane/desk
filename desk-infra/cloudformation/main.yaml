@@ -1,30 +1,20 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Desk web app - Cognito, Lambda, API Gateway, S3, CloudFront, WAF
+Description: Desk web app - Cognito (basic), Lambda, API Gateway, S3, CloudFront, WAF. Auth at CloudFront + API Gateway JWT.
 
 Parameters:
-  AllowedEmail:
-    Type: String
-    Description: Only this email can access the app (e.g. you@example.com)
-  GoogleClientId:
-    Type: String
-    Description: Google OAuth 2.0 client ID
-  GoogleClientSecret:
-    Type: String
-    NoEcho: true
-    Description: Google OAuth 2.0 client secret
   CognitoCallbackURL:
     Type: String
     Default: "https://placeholder.example.com"
-    Description: Callback URL for Cognito (after first deploy, set to https://<CloudFrontDomain> from output and redeploy)
+    Description: Callback URL for Cognito hosted UI (after first deploy, set to CloudFront URL from output and redeploy)
 
 Resources:
-  # ---- Cognito ----
+  # ---- Cognito (basic: username/password, no Google) ----
   UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: !Sub "${AWS::StackName}-pool"
-      AutoVerifiedAttributes: [email]
       UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
       Schema:
         - Name: email
           Required: true
@@ -36,32 +26,18 @@ Resources:
       UserPoolId: !Ref UserPool
       Domain: !Sub "${AWS::StackName}-${AWS::AccountId}"
 
-  UserPoolIdentityProvider:
-    Type: AWS::Cognito::UserPoolIdentityProvider
-    Properties:
-      UserPoolId: !Ref UserPool
-      ProviderName: Google
-      ProviderType: Google
-      ProviderDetails:
-        client_id: !Ref GoogleClientId
-        client_secret: !Ref GoogleClientSecret
-        authorize_scopes: "openid email profile"
-      AttributeMapping:
-        email: email
-        username: sub
-
   UserPoolAppClient:
     Type: AWS::Cognito::UserPoolAppClient
-    DependsOn: UserPoolIdentityProvider
     Properties:
       UserPoolId: !Ref UserPool
       ClientName: desk-web
       GenerateSecret: false
       ExplicitAuthFlows:
-        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
       SupportedIdentityProviders:
-        - Google
+        - COGNITO
       CallbackURLs:
         - !Ref CognitoCallbackURL
       LogoutURLs:
@@ -73,48 +49,6 @@ Resources:
         - email
         - profile
       AllowedOAuthFlowsUserPoolClient: true
-
-  # ---- Authorizer Lambda ----
-  AuthorizerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
-
-  AuthorizerRolePolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      RoleName: !Ref AuthorizerRole
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
-            Resource: "*"
-
-  AuthorizerFunction:
-    Type: AWS::Lambda::Function
-    DependsOn: UserPoolAppClient
-    Properties:
-      FunctionName: !Sub "${AWS::StackName}-authorizer"
-      Runtime: python3.12
-      Handler: handler.handler
-      Role: !GetAtt AuthorizerRole.Arn
-      Timeout: 10
-      MemorySize: 128
-      Environment:
-        Variables:
-          ALLOWED_EMAIL: !Ref AllowedEmail
-          USER_POOL_ID: !Ref UserPool
-          CLIENT_ID: !Ref UserPoolAppClient
-      Code:
-        ZipFile: |
-          def handler(event, context):
-              return {"isAuthorized": False}
 
   # ---- desk-api Lambda ----
   DeskApiRole:
@@ -162,7 +96,7 @@ Resources:
           def handler(event, context):
               return {"statusCode": 503, "body": "Run deploy script to upload desk-api package"}
 
-  # ---- API Gateway ----
+  # ---- API Gateway (JWT authorizer = Cognito, no custom Lambda) ----
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
@@ -173,18 +107,18 @@ Resources:
         AllowMethods: [GET, POST, OPTIONS]
         AllowHeaders: [Authorization, Content-Type]
 
-  Authorizer:
+  JwtAuthorizer:
     Type: AWS::ApiGatewayV2::Authorizer
     Properties:
       ApiId: !Ref HttpApi
-      Name: cognito-email-authorizer
-      AuthorizerType: REQUEST
-      AuthorizerUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations"
-      AuthorizerPayloadFormatVersion: "2.0"
+      Name: cognito-jwt
+      AuthorizerType: JWT
       IdentitySource:
         - $request.header.Authorization
-      EnableSimpleResponses: true
-      AuthorizerResultTtlInSeconds: 300
+      JwtConfiguration:
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+        Audience:
+          - !Ref UserPoolAppClient
 
   ApiIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -199,8 +133,8 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "ANY /api/{proxy+}"
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref Authorizer
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub "integrations/${ApiIntegration}"
 
   ApiDefaultRoute:
@@ -208,8 +142,8 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "ANY /api"
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref Authorizer
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub "integrations/${ApiIntegration}"
 
   ApiStage:
@@ -227,15 +161,7 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
 
-  AuthorizerPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref AuthorizerFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
-
-  # ---- Artifacts bucket (for deploy script: Lambda zips) ----
+  # ---- Artifacts bucket ----
   ArtifactsBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -279,7 +205,34 @@ Resources:
           Action: { Block: {} }
           OverrideAction: { None: {} }
 
-  # ---- CloudFront (needs API and S3; Cognito callback uses this domain) ----
+  # ---- CloudFront Function: redirect to Cognito if no auth cookie ----
+  AuthFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-auth"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Redirect to Cognito hosted UI when desk_token cookie is missing
+        Runtime: cloudfront-js-1.0
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri || '';
+          if (uri.indexOf('/api') === 0) return request;
+          var qs = request.querystring || {};
+          if (qs.code && qs.code.value) return request;
+          var cookies = request.cookies || {};
+          var token = cookies.desk_token && cookies.desk_token.value;
+          if (token) return request;
+          var domain = '${UserPoolDomain}';
+          var region = '${AWS::Region}';
+          var clientId = '${UserPoolAppClient}';
+          var redirectUri = '${CognitoCallbackURL}';
+          var loginUrl = 'https://' + domain + '.auth.' + region + '.amazoncognito.com/oauth2/authorize?client_id=' + clientId + '&response_type=code&scope=openid+email+profile&redirect_uri=' + encodeURIComponent(redirectUri);
+          return { statusCode: 302, statusDescription: 'Found', headers: { location: { value: loginUrl } } };
+        }
+
+  # ---- CloudFront ----
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     DependsOn: ApiStage
@@ -305,6 +258,9 @@ Resources:
           CachedMethods: [GET, HEAD]
           Compress: true
           DefaultTTL: 0
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt AuthFunction.FunctionARN
         CacheBehaviors:
           - PathPattern: /api/*
             TargetOriginId: ApiOrigin
@@ -340,29 +296,24 @@ Resources:
 
 Outputs:
   ArtifactsBucketName:
-    Description: S3 bucket for Lambda deployment packages (deploy script uploads here)
+    Description: S3 bucket for Lambda deployment packages
     Value: !Ref ArtifactsBucket
   CloudFrontDistributionId:
-    Description: CloudFront distribution ID (for cache invalidation)
+    Description: CloudFront distribution ID
     Value: !Ref CloudFrontDistribution
   CloudFrontDomain:
-    Description: CloudFront distribution domain (use for Cognito callback after first deploy)
+    Description: CloudFront domain
     Value: !GetAtt CloudFrontDistribution.DomainName
   CloudFrontURL:
     Description: App URL
     Value: !Sub "https://${CloudFrontDistribution.DomainName}"
   FrontendBucketName:
-    Description: S3 bucket for frontend assets
     Value: !Ref FrontendBucket
   UserPoolId:
-    Description: Cognito User Pool ID
     Value: !Ref UserPool
   AppClientId:
-    Description: Cognito App Client ID (for frontend)
     Value: !Ref UserPoolAppClient
   UserPoolDomain:
-    Description: Cognito hosted UI domain (prefix)
     Value: !Ref UserPoolDomain
   ApiEndpoint:
-    Description: API Gateway invoke URL
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
