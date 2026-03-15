@@ -47,7 +47,21 @@ CloudFormation stack for the desk web app: Cognito (Google login), Lambda (desk-
    ../scripts/deploy.sh desk-web
    ```
 
-## Subsequent deploys
+## One-command deploy (stack + app)
+
+With env vars set, you can run the full deploy (CloudFormation phases + deploy.sh) once:
+
+```bash
+export ALLOWED_EMAIL=you@example.com
+export GOOGLE_CLIENT_ID=your-google-client-id
+export GOOGLE_CLIENT_SECRET=your-google-client-secret
+export AWS_REGION=us-east-1
+../scripts/full-deploy.sh desk-web
+```
+
+## Subsequent deploys (app only)
+
+After the stack exists, to rebuild frontend and update Lambdas/S3/CloudFront:
 
 ```bash
 ../scripts/deploy.sh desk-web

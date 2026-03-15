@@ -27,8 +27,20 @@ fi
 # 1. Build frontend
 echo "==> Building frontend..."
 cd "$REPO_ROOT/desk-frontend"
-npm ci --omit=optional 2>/dev/null || npm install
+npm install
 npm run build
+
+# Helper: create zip from directory (use zip if available, else Python)
+_zip_dir() {
+  local d="$1" z="$2"
+  (cd "$d" && if command -v zip >/dev/null 2>&1; then zip -qr "$z" .; else python3 -c "
+import zipfile, pathlib, sys
+zpath = sys.argv[1]
+with zipfile.ZipFile(zpath, 'w') as zf:
+  for p in pathlib.Path('.').rglob('*'):
+    if p.is_file(): zf.write(p, p.as_posix())
+" "$z"; fi)
+}
 
 # 2. Package authorizer Lambda
 echo "==> Packaging authorizer Lambda..."
@@ -36,8 +48,7 @@ AUTH_ZIP=$(mktemp -u).zip
 cd "$INFRA_DIR/auth"
 pip install -q -r requirements.txt -t .package
 cp handler.py .package/
-cd .package && zip -qr "$AUTH_ZIP" . && cd ..
-mv .package/handler.py .
+_zip_dir .package "$AUTH_ZIP"
 rm -rf .package
 AUTH_KEY="webapp/authorizer-$(date +%Y%m%d%H%M%S).zip"
 
@@ -52,7 +63,7 @@ cp -r "$REPO_ROOT/desk-sdk/src/desk/"* "$API_BUILD_DIR/desk/"
 pip install -q --target "$API_BUILD_DIR" fastapi "mangum>=0.17" "boto3>=1.34" 2>/dev/null || true
 cd "$API_BUILD_DIR"
 API_ZIP=$(mktemp -u).zip
-zip -qr "$API_ZIP" .
+_zip_dir . "$API_ZIP"
 API_KEY="webapp/desk-api-$(date +%Y%m%d%H%M%S).zip"
 
 # 4. Get artifacts bucket from stack
