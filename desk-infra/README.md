@@ -59,14 +59,13 @@ sam deploy --template-file .aws-sam/build/template.yaml --stack-name reaper --ca
 
 The **desk-control** Lambda runs desk control-plane operations (e.g. list, start, stop, create, ami, tab list/create/close). It does **not** support interactive commands (`connect`, `scp`).
 
-Run these commands from the **repo root** (the directory that contains `desk-infra/`). Build the control template before deploy so `.aws-sam/build/template.yaml` is the control stack (not the reaper).
+Run these commands from the **repo root** (the directory that contains `desk-infra/`). Do **not** run `sam build` again from `desk-infra` after `build.sh`: `build.sh` uses `--build-in-source` so the Makefile finds `../../desk-sdk`; a plain `sam build` from `desk-infra` would rebuild in a scratch dir without desk-sdk. The last build in `build.sh` is control, so `.aws-sam/build/template.yaml` is already the control template.
 
 First-time deploy (guided setup):
 
 ```bash
 ./desk-infra/build.sh
 cd desk-infra
-sam build --template desk-control.yaml
 sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
 ```
 
@@ -76,7 +75,6 @@ Subsequent deploys (after `samconfig.toml` is updated for the control stack):
 # From repo root
 ./desk-infra/build.sh
 cd desk-infra
-sam build --template desk-control.yaml
 sam deploy --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
 ```
 
