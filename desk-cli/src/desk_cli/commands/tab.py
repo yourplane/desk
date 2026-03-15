@@ -12,15 +12,20 @@ from datetime import datetime, timezone
 import click
 
 from desk.aws import (
-    get_command_invocation,
     is_ssm_ready,
     resolve_workstation,
-    send_ssm_command,
     wait_for_ssm_ready,
 )
-from desk.commands.connect import get_connection_argv
+from desk_cli.commands.connect import get_connection_argv
 from desk.config import get_default_profile, get_default_region
 from desk.log import get_logger
+from desk.tab_impl import (
+    LIST_SEP,
+    list_sessions_with_details_command,
+    new_session_name,
+    run_remote_command,
+    shell_quote,
+)
 
 log = get_logger("tab")
 
@@ -45,22 +50,6 @@ def _screen_session_name(workstation: str) -> str:
     return f"{SCREEN_SESSION_PREFIX}{workstation}"
 
 
-def _short_session_suffix() -> str:
-    """Short unique suffix for auto-generated session names (hex ms timestamp, 11 chars)."""
-    return hex(int(time.time() * 1000))[2:]
-
-
-def _new_session_name(workstation: str, name: str | None = None) -> str:
-    """Session name for a new session: just the name or short suffix (no prefix)."""
-    if name is not None:
-        # Sanitize for screen: alphanumeric, hyphen, underscore only
-        sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-")
-        if not sanitized:
-            sanitized = _short_session_suffix()
-        return sanitized
-    return _short_session_suffix()
-
-
 def _parse_session_arg(session_arg: str) -> tuple[str, str | None]:
     """Parse SESSION argument: return (workstation, full_session_id or None).
 
@@ -81,89 +70,6 @@ def _parse_session_arg(session_arg: str) -> tuple[str, str | None]:
             workstation = suffix
         return (workstation, session_arg)
     return (session_arg, None)
-
-
-def _run_remote_command(
-    instance_id: str,
-    command: str,
-    region: str | None,
-    profile: str | None,
-    user: str = "ubuntu",
-    timeout_seconds: int = 30,
-) -> tuple[str, str, str, int | None]:
-    """Run command on instance via SSM as user; return (stdout, stderr, status, exit_code)."""
-    wrapped = f"sudo -u {user} bash -c {_shell_quote(command)}"
-    command_id = send_ssm_command(
-        instance_id,
-        wrapped,
-        region=region,
-        profile=profile,
-        timeout_seconds=timeout_seconds,
-    )
-    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
-    for _ in range(timeout_seconds + 10):
-        try:
-            result = get_command_invocation(
-                command_id, instance_id, region=region, profile=profile
-            )
-            if result.status in terminal_states:
-                return (
-                    result.stdout,
-                    result.stderr,
-                    result.status,
-                    result.exit_code,
-                )
-        except Exception as e:
-            log.debug("get_command_invocation: %s", e)
-        time.sleep(1)
-    return ("", "", "TimedOut", None)
-
-
-def _shell_quote(s: str) -> str:
-    escaped = s.replace("'", "'\"'\"'")
-    return f"'{escaped}'"
-
-
-# Delimiter for list output (session_id, state, cwd, cmd) - unlikely in paths/cmdline
-_LIST_SEP = "\x01"
-
-
-def _list_sessions_with_details_command() -> str:
-    """Build a remote bash command that lists all screen sessions and each window.
-    Uses only process tree (pgrep -P) and /proc — no screen -Q windows, so the
-    attached session never gets a message painted at the bottom.
-    Output: session_id, state, window_index, window_title, cwd, cmd (sep \\x01)
-    """
-    return (
-        "sep=$(printf '\\\\x01'); "
-        "while IFS= read -r line; do "
-        '[[ "$line" =~ No\\ Sockets ]] && break; '
-        '[[ ! "$line" =~ ^[[:space:]]*[0-9]+\\. ]] && continue; '
-        "session_id=$(echo \"$line\" | awk '{print $1}'); "
-        "state=$(echo \"$line\" | cut -f2-); "
-        'pid="${session_id%%.*}"; '
-        "children_list=$(pgrep -P $pid 2>/dev/null | sort -n); "
-        "widx=0; "
-        "while IFS= read -r child_pid; do "
-        '[[ -z "$child_pid" ]] && continue; '
-        "cwd=''; cmd=''; "
-        "if [[ -d /proc/$child_pid ]] 2>/dev/null; then "
-        "cwd=$(readlink /proc/$child_pid/cwd 2>/dev/null); "
-        "cmd=$(cat /proc/$child_pid/cmdline 2>/dev/null | tr '\\0' ' '); "
-        "[[ ${#cmd} -gt 80 ]] && cmd=\"..${cmd: -78}\"; "
-        "grandchild=$(pgrep -P $child_pid 2>/dev/null | sort -n | head -1); "
-        "if [[ -n \"$grandchild\" && -d /proc/$grandchild ]] 2>/dev/null; then "
-        "fg_cmd=$(cat /proc/$grandchild/cmdline 2>/dev/null | tr '\\0' ' '); "
-        "[[ ${#fg_cmd} -gt 80 ]] && fg_cmd=\"..${fg_cmd: -78}\"; "
-        "if [[ -n \"$fg_cmd\" && ( \"$cmd\" == /bin/bash* || \"$cmd\" == -bash* || \"$cmd\" == /usr/bin/bash* ) ]]; then cmd=\"$fg_cmd\"; fi; "
-        "fi; "
-        "wtitle=$(echo \"$cmd\" | awk '{print $1}'); [[ -z \"$wtitle\" ]] && wtitle='-'; "
-        "fi; "
-        'printf "%s${sep}%s${sep}%s${sep}%s${sep}%s${sep}%s\n" "$session_id" "$state" "$widx" "$wtitle" "$cwd" "$cmd"; '
-        "widx=$((widx+1)); "
-        "done <<< \"$children_list\"; "
-        "done < <(screen -ls 2>/dev/null)"
-    )
 
 
 def _common_tab_options(f):
@@ -315,7 +221,7 @@ def tab_connect(
     elif wait:
         _verbose_echo(verbose, "SSM already ready", time.perf_counter() - t0)
 
-    stdout, stderr, _, _ = _run_remote_command(
+    stdout, stderr, _, _ = run_remote_command(
         instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
     )
     lines = (stdout or "").strip().splitlines()
@@ -364,9 +270,9 @@ def tab_connect(
 
     # Use -x (multiuser) so we can attach even when session is already attached
     if window_index is not None:
-        remote_cmd = f"screen -x {_shell_quote(attach_id)} -p {window_index}"
+        remote_cmd = f"screen -x {shell_quote(attach_id)} -p {window_index}"
     else:
-        remote_cmd = f"screen -x {_shell_quote(attach_id)}"
+        remote_cmd = f"screen -x {shell_quote(attach_id)}"
 
     t2 = time.perf_counter()
     _verbose_echo(verbose, "building SSH argv (get_connection_argv)", t2 - t0)
@@ -432,8 +338,8 @@ def tab_list(
                 f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
             )
 
-    list_cmd = _list_sessions_with_details_command()
-    stdout, stderr, status, _ = _run_remote_command(
+    list_cmd = list_sessions_with_details_command()
+    stdout, stderr, status, _ = run_remote_command(
         instance_id,
         list_cmd,
         region=region,
@@ -447,9 +353,9 @@ def tab_list(
     lines = (stdout or "").strip().splitlines()
     rows: list[tuple[str, str, str, str, str, str]] = []
     for line in lines:
-        if _LIST_SEP not in line:
+        if LIST_SEP not in line:
             continue
-        parts = line.split(_LIST_SEP, 5)
+        parts = line.split(LIST_SEP, 5)
         session_id = (parts[0] if len(parts) > 0 else "").strip()
         state = (parts[1] if len(parts) > 1 else "").strip()
         win_idx = (parts[2] if len(parts) > 2 else "").strip() or "0"
@@ -462,9 +368,9 @@ def tab_list(
     # Fallback: old 4-field format (session, state, cwd, cmd) -> treat as single window 0
     if not rows and stdout:
         for line in (stdout or "").strip().splitlines():
-            if _LIST_SEP not in line:
+            if LIST_SEP not in line:
                 continue
-            parts = line.split(_LIST_SEP, 3)
+            parts = line.split(LIST_SEP, 3)
             if len(parts) >= 2:
                 session_id = (parts[0] or "").strip()
                 state = (parts[1] or "").strip()
@@ -487,7 +393,7 @@ def tab_list(
 
     # Fallback: run plain screen -ls when detailed script produced nothing
     if not rows:
-        simple_stdout, _, _, _ = _run_remote_command(
+        simple_stdout, _, _, _ = run_remote_command(
             instance_id,
             "screen -ls 2>/dev/null",
             region=region,
@@ -596,7 +502,7 @@ def tab_create(
             )
 
     # Unique name so each create is a new session (not a new window in an existing session)
-    session = _new_session_name(workstation, name=name)
+    session = new_session_name(workstation, name=name)
     user = "ubuntu"
     # Run from home. Start initial window with TERM/size set and a login shell so when the user
     # attaches via SSH they get colors and correct layout (SSM has no TTY so plain screen -dmS
@@ -605,7 +511,7 @@ def tab_create(
         f"cd /home/{user} && screen -dmS {session} "
         "bash -c 'export TERM=screen-256color; export COLUMNS=80; export LINES=24; exec bash -l'"
     )
-    stdout, stderr, status, exit_code = _run_remote_command(
+    stdout, stderr, status, exit_code = run_remote_command(
         instance_id, create_cmd, region=region, profile=profile, user=user
     )
     if status != "Success":
@@ -615,7 +521,7 @@ def tab_create(
         click.echo(stderr or "Failed to create session.", err=True)
         raise click.ClickException("tab create failed")
     # Get full session id (e.g. 18426.desk-main-1771812751954) for the suggested connect command
-    ls_stdout, _, _, _ = _run_remote_command(
+    ls_stdout, _, _, _ = run_remote_command(
         instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
     )
     full_session_id = None
@@ -736,7 +642,7 @@ def tab_up(
     elif wait:
         _verbose_echo(verbose, "SSM already ready", time.perf_counter() - t0)
 
-    stdout, _, _, _ = _run_remote_command(
+    stdout, _, _, _ = run_remote_command(
         instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
     )
     lines = (stdout or "").strip().splitlines()
@@ -770,19 +676,19 @@ def tab_up(
     if attach_id is None:
         # Create a new session
         _verbose_echo(verbose, "no matching session, creating", time.perf_counter() - t0)
-        session = _new_session_name(workstation, name=tab_name)
+        session = new_session_name(workstation, name=tab_name)
         create_cmd = (
             f"cd /home/{user} && screen -dmS {session} "
             "bash -c 'export TERM=screen-256color; export COLUMNS=80; export LINES=24; exec bash -l'"
         )
-        stdout_c, stderr_c, status_c, exit_code_c = _run_remote_command(
+        stdout_c, stderr_c, status_c, exit_code_c = run_remote_command(
             instance_id, create_cmd, region=region, profile=profile, user=user
         )
         if status_c != "Success" or (exit_code_c is not None and exit_code_c != 0):
             click.echo(stderr_c or "Failed to create session.", err=True)
             raise click.ClickException("tab up (create) failed")
         # Get full session id
-        ls_stdout, _, _, _ = _run_remote_command(
+        ls_stdout, _, _, _ = run_remote_command(
             instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
         )
         for line in (ls_stdout or "").strip().splitlines():
@@ -799,9 +705,9 @@ def tab_up(
         _verbose_echo(verbose, f"using existing session {attach_id}", time.perf_counter() - t0)
 
     if window_index is not None:
-        remote_cmd = f"screen -x {_shell_quote(attach_id)} -p {window_index}"
+        remote_cmd = f"screen -x {shell_quote(attach_id)} -p {window_index}"
     else:
-        remote_cmd = f"screen -x {_shell_quote(attach_id)}"
+        remote_cmd = f"screen -x {shell_quote(attach_id)}"
 
     t2 = time.perf_counter()
     _verbose_echo(verbose, "building SSH argv (get_connection_argv)", t2 - t0)
@@ -861,7 +767,7 @@ def tab_close(
             )
 
     # Validate session exists on this instance; resolve short name to full id
-    stdout, _, _, _ = _run_remote_command(
+    stdout, _, _, _ = run_remote_command(
         instance_id, "screen -ls 2>/dev/null", region=region, profile=profile
     )
     lines = (stdout or "").strip().splitlines()
@@ -886,7 +792,7 @@ def tab_close(
         )
 
     cmd = f"screen -S {session} -X quit"
-    _, stderr, status, exit_code = _run_remote_command(
+    _, stderr, status, exit_code = run_remote_command(
         instance_id, cmd, region=region, profile=profile
     )
     if status != "Success" or (exit_code is not None and exit_code != 0):

@@ -2,16 +2,28 @@
 
 A CLI to manage EC2 instances as remote workstations. Workstations run in private subnets with no public IPs. Connect via SSH over AWS Systems Manager (SSM) Session Manager—no bastion hosts or exposed ports.
 
+This repo is a **monorepo** with three subprojects:
+
+| Project     | Description |
+|------------|-------------|
+| **desk-sdk**   | Shared library (AWS, config, keys, logging, tab/control workflows). Used by the CLI and by Lambdas. |
+| **desk-cli**   | CLI application. Depends on desk-sdk. Provides the `desk` command. |
+| **desk-infra** | CloudFormation templates and Lambda code (reaper, control). Depends on desk-sdk only (uv pip install). |
+
+The root is a **uv** workspace that links desk-sdk and desk-cli.
+
 ---
 
 ## Installation
 
+From the repo root:
+
 ```bash
-pip install .
-# or for isolation: pipx install .
+uv sync
+uv run desk --help
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
 ---
 
@@ -156,7 +168,7 @@ See [AWS docs](https://docs.aws.amazon.com/systems-manager/latest/userguide/sess
 
 ## Configuration
 
-Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `config.example`. Overrides: `--region` / `--profile` or `AWS_REGION` / `AWS_PROFILE`.
+Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `desk-cli/config.example`. Overrides: `--region` / `--profile` or `AWS_REGION` / `AWS_PROFILE`.
 
 ```ini
 [defaults]
@@ -169,99 +181,7 @@ ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations 
 
 ## Infrastructure
 
-Deploy the desk VPC and networking:
-
-```bash
-aws cloudformation deploy \
-  --stack-name desk \
-  --template-file infrastructure/desk-vpc.yaml \
-  --capabilities CAPABILITY_NAMED_IAM
-```
-
-The template provides:
-
-- **VPC** with private subnets (2 AZs)
-- **NAT Gateway** for outbound internet (SSM and S3 traffic use the NAT)
-- **Security group** for workstations (no inbound rules)
-- **IAM instance profile** (`AmazonSSMManagedInstanceCore`)
-
-`desk create` uses the stack outputs automatically.
-
-### Auto-stop reaper Lambda
-
-The reaper is a Lambda that runs every 10 minutes and stops workstations past their `desk:shutdown-at` time. It uses the same `desk` library code as the CLI.
-
-Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html).
-
-**Build and deploy:** From the repo root, `infrastructure/build.sh` copies the desk package into the reaper and runs `sam build`:
-
-```bash
-./infrastructure/build.sh
-cd infrastructure
-sam deploy --guided --capabilities CAPABILITY_IAM --stack-name desk-reaper
-```
-
-On subsequent deploys (after the guided config is saved to `samconfig.toml`):
-
-```bash
-./infrastructure/build.sh
-cd infrastructure
-sam deploy
-```
-
-### Desk control plane Lambda
-
-The **desk-control** Lambda runs all desk control-plane operations (e.g. `desk list`, `desk start`, `desk stop`, `desk create`, `desk ami list`, `desk tab list`). It does **not** support interactive commands: `desk connect` and `desk scp` are excluded (they require SSH). Invoke it with an event that specifies the command and arguments.
-
-**Build:** From the repo root, `infrastructure/build.sh` copies the desk package into both the reaper and control Lambda directories and runs `sam build` for both templates:
-
-```bash
-./infrastructure/build.sh
-```
-
-This builds:
-- `desk-reaper.yaml` → reaper Lambda
-- `desk-control.yaml` → control plane Lambda
-
-**Deploy the control Lambda:** Build first (so the built template and artifacts are in `.aws-sam/build/`), then deploy using the **built** template so the Lambda package includes all dependencies:
-
-```bash
-./infrastructure/build.sh
-cd infrastructure
-sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
-```
-
-Subsequent deploys (after `samconfig.toml` is updated for the control stack):
-
-```bash
-./infrastructure/build.sh
-cd infrastructure
-sam deploy --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
-```
-
-Note: Deploy the built template (`.aws-sam/build/template.yaml`), not the source `desk-control.yaml`, so the deployed function uses the built artifact that includes the desk package and dependencies.
-
-**Invoke:** Send an event with `argv` (list of CLI args) or `command`/`args`/`options`. Optional `env` sets environment variables (e.g. `AWS_REGION`, `AWS_PROFILE`).
-
-```bash
-# List workstations
-aws lambda invoke --function-name desk-control --payload '{"argv": ["list"]}' out.json && cat out.json
-
-# Start a workstation
-aws lambda invoke --function-name desk-control --payload '{"argv": ["start", "main", "--region", "us-east-1"]}' out.json && cat out.json
-
-# Using command/args/options
-aws lambda invoke --function-name desk-control --payload '{"command": "stop", "args": ["main"], "env": {"AWS_REGION": "us-east-1"}}' out.json && cat out.json
-```
-
-Response shape: success `{"result": <data>}` (e.g. `list` → `{"result": {"workstations": [{"instance_id": "...", "name": "...", "state": "...", "shutdown_at": "..."}]}}`); failure `{"error": "..."}`. All responses are JSON; no CLI table output.
-
-**Allowed commands:** `list`, `start`, `stop`, `up`, `create`, `kill`, `reap`, `auto-stop`, `run`, `ami` (all subcommands), `tab list`, `tab create`, `tab close`. Not allowed: `connect`, `scp`, `tab connect`, `tab up`, `keygen`.
-
-**Lint CloudFormation:**
-```bash
-tox run -e lint
-```
+VPC, reaper Lambda, and control-plane Lambda are in **desk-infra**. See [desk-infra/README.md](desk-infra/README.md) for how to deploy the CloudFormation stacks and how to invoke the control Lambda (e.g. `desk list`).
 
 ---
 
@@ -293,9 +213,11 @@ desk reap --dry-run            # preview without stopping
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-tox run -e py    # tests
+uv sync --extra dev
+./run_tests.sh   # run SDK and CLI tests (two pytest invocations to avoid conftest conflict)
 ```
+
+Or run each suite separately: `uv run pytest desk-sdk/tests -q` and `uv run pytest desk-cli/tests -q`.
 
 ---
 
