@@ -10,8 +10,8 @@ REPO_ROOT=$(cd "$INFRA_DIR/.." && pwd)
 STACK_NAME=${1:-desk-web}
 AWS_PROFILE=${2:-}
 CLOUDFORMATION_DIR="$INFRA_DIR/cloudformation"
-
-export AWS_PROFILE
+[ -n "$AWS_REGION" ] && export AWS_DEFAULT_REGION=$AWS_REGION
+[ -n "$AWS_PROFILE" ] && export AWS_PROFILE
 
 echo "==> Stack: $STACK_NAME, Repo root: $REPO_ROOT"
 
@@ -37,6 +37,7 @@ cd "$CLOUDFORMATION_DIR"
 export DESK_SDK_PATH="$REPO_ROOT/desk-sdk"
 sam build --template-file main.yaml
 CF_URL=$(_get CloudFrontURL)
+[ -z "$CF_URL" ] || [ "$CF_URL" = "None" ] && CF_URL=""
 CALLBACK_URL="${CF_URL:-https://placeholder.example.com}"
 echo "==> SAM deploy (CognitoCallbackURL=$CALLBACK_URL)..."
 sam deploy \
@@ -44,11 +45,13 @@ sam deploy \
   --stack-name "$STACK_NAME" \
   --parameter-overrides "CognitoCallbackURL=$CALLBACK_URL" \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --resolve-s3 \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset 2>/dev/null || true
 
 # 3. Sync frontend to S3
-FRONTEND_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text)
+FRONTEND_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text 2>/dev/null || true)
+[ -z "$FRONTEND_BUCKET" ] || [ "$FRONTEND_BUCKET" = "None" ] && { echo "Error: Stack has no FrontendBucketName output. Ensure the stack is fully created." >&2; exit 1; }
 echo "==> Syncing frontend to s3://$FRONTEND_BUCKET..."
 aws s3 sync "$REPO_ROOT/desk-frontend/dist" "s3://$FRONTEND_BUCKET" --delete
 

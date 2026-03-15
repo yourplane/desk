@@ -28,7 +28,7 @@ Resources:
       Domain: !Sub "${AWS::StackName}-${AWS::AccountId}"
 
   UserPoolAppClient:
-    Type: AWS::Cognito::UserPoolAppClient
+    Type: AWS::Cognito::UserPoolClient
     Properties:
       UserPoolId: !Ref UserPool
       ClientName: desk-web
@@ -172,6 +172,10 @@ Resources:
       Name: !Sub "${AWS::StackName}-waf"
       Scope: CLOUDFRONT
       DefaultAction: { Allow: {} }
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-waf"
       Rules:
         - Name: RateLimitRule
           Priority: 1
@@ -180,7 +184,10 @@ Resources:
               Limit: 100
               AggregateKeyType: IP
           Action: { Block: {} }
-          OverrideAction: { None: {} }
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
 
   # ---- CloudFront Function: redirect to Cognito if no auth cookie ----
   AuthFunction:
@@ -226,7 +233,6 @@ Resources:
           - Id: ApiOrigin
             DomainName: !Sub "${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
             CustomOriginConfig:
-              HTTPSOnly: true
               OriginProtocolPolicy: https-only
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
@@ -235,6 +241,10 @@ Resources:
           CachedMethods: [GET, HEAD]
           Compress: true
           DefaultTTL: 0
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt AuthFunction.FunctionARN

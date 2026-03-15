@@ -7,8 +7,10 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 INFRA_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 STACK_NAME=${1:-desk-web}
 CLOUDFORMATION_DIR="$INFRA_DIR/cloudformation"
+# SAM and AWS CLI use AWS_DEFAULT_REGION when set
+[ -n "$AWS_REGION" ] && export AWS_DEFAULT_REGION=$AWS_REGION
 
-echo "==> Deploying stack $STACK_NAME (region: ${AWS_REGION:-default})"
+echo "==> Deploying stack $STACK_NAME (region: ${AWS_REGION:-${AWS_DEFAULT_REGION:-default}})"
 
 # 1) SAM build
 echo "==> SAM build..."
@@ -24,8 +26,9 @@ sam deploy \
   --stack-name "$STACK_NAME" \
   --parameter-overrides "CognitoCallbackURL=https://placeholder.example.com" \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --resolve-s3 \
   --no-confirm-changeset \
-  --no-fail-on-empty-changeset 2>/dev/null || true
+  --no-fail-on-empty-changeset
 
 # 3) Get CloudFront URL and redeploy with real callback
 CF_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" --output text 2>/dev/null || true)
@@ -38,6 +41,7 @@ else
     --stack-name "$STACK_NAME" \
     --parameter-overrides "CognitoCallbackURL=$CF_URL" \
     --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+    --resolve-s3 \
     --no-confirm-changeset \
     --no-fail-on-empty-changeset 2>/dev/null || true
 fi
