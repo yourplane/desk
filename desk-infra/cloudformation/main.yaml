@@ -1,5 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Desk web app - Cognito (basic), Lambda, API Gateway, S3, CloudFront, WAF. Auth at CloudFront + API Gateway JWT.
+Transform: AWS::Serverless-2016-10-31
+Description: Desk web app - Cognito (basic), Lambda (SAM), API Gateway, S3, CloudFront, WAF. Auth at CloudFront + API Gateway JWT.
 
 Parameters:
   CognitoCallbackURL:
@@ -50,51 +51,33 @@ Resources:
         - profile
       AllowedOAuthFlowsUserPoolClient: true
 
-  # ---- desk-api Lambda ----
-  DeskApiRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
-
-  DeskApiRolePolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      RoleName: !Ref DeskApiRole
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
-            Resource: "*"
-          - Effect: Allow
-            Action:
-              - ec2:DescribeInstances
-              - ec2:DescribeTags
-              - ec2:StartInstances
-              - ec2:StopInstances
-            Resource: "*"
-          - Effect: Allow
-            Action: cloudformation:DescribeStacks
-            Resource: "*"
-
+  # ---- desk-api Lambda (SAM builds and deploys via sam build / sam deploy) ----
   DeskApiFunction:
-    Type: AWS::Lambda::Function
+    Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-api"
       Runtime: python3.12
       Handler: lambda_handler.handler
-      Role: !GetAtt DeskApiRole.Arn
+      CodeUri: ../../desk-api
       Timeout: 30
       MemorySize: 256
-      Code:
-        ZipFile: |
-          def handler(event, context):
-              return {"statusCode": 503, "body": "Run deploy script to upload desk-api package"}
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ec2:DescribeInstances
+                - ec2:DescribeTags
+                - ec2:StartInstances
+                - ec2:StopInstances
+              Resource: "*"
+            - Effect: Allow
+              Action: cloudformation:DescribeStacks
+              Resource: "*"
+    Metadata:
+      BuildMethod: makefile
 
   # ---- API Gateway (JWT authorizer = Cognito, no custom Lambda) ----
   HttpApi:
@@ -160,12 +143,6 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
-
-  # ---- Artifacts bucket ----
-  ArtifactsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "${AWS::StackName}-artifacts-${AWS::AccountId}"
 
   # ---- S3 frontend ----
   FrontendBucket:
@@ -295,9 +272,6 @@ Resources:
                 AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
 
 Outputs:
-  ArtifactsBucketName:
-    Description: S3 bucket for Lambda deployment packages
-    Value: !Ref ArtifactsBucket
   CloudFrontDistributionId:
     Description: CloudFront distribution ID
     Value: !Ref CloudFrontDistribution

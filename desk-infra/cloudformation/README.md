@@ -1,45 +1,24 @@
 # Desk Web App Stack
 
-CloudFormation stack for the desk web app: **basic Cognito** (username/password, no Google), Lambda (desk-api), API Gateway with **built-in JWT authorizer**, S3, CloudFront with **viewer-request auth** (redirect to Cognito if no cookie), WAF.
+CloudFormation (SAM) stack for the desk web app: **basic Cognito** (username/password, no Google), **desk-api Lambda** (built with SAM from `desk-api/`), API Gateway with **built-in JWT authorizer**, S3, CloudFront with **viewer-request auth** (redirect to Cognito if no cookie), WAF.
 
 Auth is handled at the edge: a **CloudFront Function** checks for the `desk_token` cookie and redirects to Cognito hosted UI when missing. API Gateway validates the JWT (Cognito User Pool) with no custom authorizer code.
 
+**Lambda packaging**: The desk-api function is built with **SAM** (`sam build` uses the Makefile in `desk-api/` to copy app, lambda_handler, desk-sdk and install deps). SAM uses its own deployment bucket (managed by the SAM CLI); there is no custom artifacts bucket in this stack.
+
 ## Prerequisites
 
-- AWS CLI configured
+- AWS CLI and **AWS SAM CLI** installed
 - Deploy the stack in **us-east-1** (required for WAF attached to CloudFront)
 - Node and Python for the deploy script
 
 ## First-time deploy
 
-1. Create the stack (single parameter: callback URL; use placeholder first):
+Use the one-command deploy (see below), or:
 
-   ```bash
-   aws cloudformation deploy \
-     --template-file main.yaml \
-     --stack-name desk-web \
-     --parameter-overrides CognitoCallbackURL=https://placeholder.example.com \
-     --capabilities CAPABILITY_IAM
-   ```
+1. From `desk-infra/scripts`: run `./full-deploy.sh desk-web`. It will SAM build, deploy with placeholder callback, then redeploy with the real CloudFront URL, then build frontend and sync.
 
-2. Set the real Cognito callback URL from the CloudFront output and redeploy:
-
-   ```bash
-   CF_URL=$(aws cloudformation describe-stacks --stack-name desk-web --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" --output text)
-   aws cloudformation deploy \
-     --template-file main.yaml \
-     --stack-name desk-web \
-     --parameter-overrides "CognitoCallbackURL=$CF_URL" \
-     --capabilities CAPABILITY_IAM
-   ```
-
-3. Run the deploy script to build frontend, upload desk-api Lambda, sync S3, and invalidate CloudFront:
-
-   ```bash
-   ../scripts/deploy.sh desk-web
-   ```
-
-4. Create a user in the Cognito User Pool (AWS Console → Cognito → User Pools → your pool → Create user), then sign in with the hosted UI.
+2. Create a user in the Cognito User Pool (AWS Console → Cognito → User Pools → your pool → Create user), then sign in with the hosted UI.
 
 ## One-command deploy
 
