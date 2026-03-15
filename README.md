@@ -214,7 +214,7 @@ desk reap --dry-run            # preview without stopping
 
 ```bash
 uv sync --extra dev
-./scripts/run_tests.sh   # run SDK and CLI tests (two pytest invocations to avoid conftest conflict)
+./run_tests.sh   # run SDK and CLI tests (two pytest invocations to avoid conftest conflict)
 ```
 
 Or run each suite separately: `uv run pytest desk-sdk/tests -q` and `uv run pytest desk-cli/tests -q`.

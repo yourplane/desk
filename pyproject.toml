@@ -20,13 +20,14 @@ dev = ["pytest>=7.0.0"]
 members = ["desk-sdk", "desk-cli"]
 
 [tool.pytest.ini_options]
-# Root tests/ is empty; SDK and CLI tests live in desk-sdk/tests and desk-cli/tests (separate runs to avoid conftest conflict).
-# Run all tests with: ./scripts/run_tests.sh  or  uv run pytest desk-sdk/tests && uv run pytest desk-cli/tests
-testpaths = ["tests"]
+# SDK and CLI tests live in desk-sdk/tests and desk-cli/tests (separate runs to avoid conftest conflict).
+# Run all tests with: ./run_tests.sh  or  uv run pytest desk-sdk/tests && uv run pytest desk-cli/tests
+testpaths = []
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["desk_monorepo"]
+# Minimal placeholder so root is buildable; no user-facing package.
+packages = ["_desk_root"]
