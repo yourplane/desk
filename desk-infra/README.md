@@ -59,19 +59,24 @@ sam deploy --template-file .aws-sam/build/template.yaml --stack-name reaper --ca
 
 The **desk-control** Lambda runs desk control-plane operations (e.g. list, start, stop, create, ami, tab list/create/close). It does **not** support interactive commands (`connect`, `scp`).
 
-From the repo root:
+Run these commands from the **repo root** (the directory that contains `desk-infra/`). Build the control template before deploy so `.aws-sam/build/template.yaml` is the control stack (not the reaper).
+
+First-time deploy (guided setup):
 
 ```bash
 ./desk-infra/build.sh
 cd desk-infra
+sam build --template desk-control.yaml
 sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
 ```
 
 Subsequent deploys (after `samconfig.toml` is updated for the control stack):
 
 ```bash
+# From repo root
 ./desk-infra/build.sh
 cd desk-infra
+sam build --template desk-control.yaml
 sam deploy --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
 ```
 
