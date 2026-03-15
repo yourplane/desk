@@ -1,0 +1,368 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Desk web app - Cognito, Lambda, API Gateway, S3, CloudFront, WAF
+
+Parameters:
+  AllowedEmail:
+    Type: String
+    Description: Only this email can access the app (e.g. you@example.com)
+  GoogleClientId:
+    Type: String
+    Description: Google OAuth 2.0 client ID
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+    Description: Google OAuth 2.0 client secret
+  CognitoCallbackURL:
+    Type: String
+    Default: "https://placeholder.example.com"
+    Description: Callback URL for Cognito (after first deploy, set to https://<CloudFrontDomain> from output and redeploy)
+
+Resources:
+  # ---- Cognito ----
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-pool"
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: false
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub "${AWS::StackName}-${AWS::AccountId}"
+
+  UserPoolIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref UserPool
+      ProviderName: Google
+      ProviderType: Google
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+        client_secret: !Ref GoogleClientSecret
+        authorize_scopes: "openid email profile"
+      AttributeMapping:
+        email: email
+        username: sub
+
+  UserPoolAppClient:
+    Type: AWS::Cognito::UserPoolAppClient
+    DependsOn: UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: desk-web
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders:
+        - Google
+      CallbackURLs:
+        - !Ref CognitoCallbackURL
+      LogoutURLs:
+        - !Ref CognitoCallbackURL
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+
+  # ---- Authorizer Lambda ----
+  AuthorizerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+
+  AuthorizerRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      RoleName: !Ref AuthorizerRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+            Resource: "*"
+
+  AuthorizerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: UserPoolAppClient
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-authorizer"
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt AuthorizerRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          ALLOWED_EMAIL: !Ref AllowedEmail
+          USER_POOL_ID: !Ref UserPool
+          CLIENT_ID: !Ref UserPoolAppClient
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"isAuthorized": False}
+
+  # ---- desk-api Lambda ----
+  DeskApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+
+  DeskApiRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      RoleName: !Ref DeskApiRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeTags
+              - ec2:StartInstances
+              - ec2:StopInstances
+            Resource: "*"
+          - Effect: Allow
+            Action: cloudformation:DescribeStacks
+            Resource: "*"
+
+  DeskApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-api"
+      Runtime: python3.12
+      Handler: lambda_handler.handler
+      Role: !GetAtt DeskApiRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 503, "body": "Run deploy script to upload desk-api package"}
+
+  # ---- API Gateway ----
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-api"
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [Authorization, Content-Type]
+
+  Authorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: cognito-email-authorizer
+      AuthorizerType: REQUEST
+      AuthorizerUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations"
+      AuthorizerPayloadFormatVersion: "2.0"
+      IdentitySource:
+        - $request.header.Authorization
+      EnableSimpleResponses: true
+      AuthorizerResultTtlInSeconds: 300
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-api"
+      PayloadFormatVersion: "2.0"
+
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "ANY /api/{proxy+}"
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  ApiDefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "ANY /api"
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+
+  ApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DeskApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+  AuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+  # ---- Artifacts bucket (for deploy script: Lambda zips) ----
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-artifacts-${AWS::AccountId}"
+
+  # ---- S3 frontend ----
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ---- OAC ----
+  OAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ---- WAF ----
+  WafRule:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${AWS::StackName}-waf"
+      Scope: CLOUDFRONT
+      DefaultAction: { Allow: {} }
+      Rules:
+        - Name: RateLimitRule
+          Priority: 1
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+          Action: { Block: {} }
+          OverrideAction: { None: {} }
+
+  # ---- CloudFront (needs API and S3; Cognito callback uses this domain) ----
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: ApiStage
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: ApiOrigin
+            DomainName: !Sub "${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              HTTPSOnly: true
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          DefaultTTL: 0
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        WebACLId: !GetAtt WafRule.Arn
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+Outputs:
+  ArtifactsBucketName:
+    Description: S3 bucket for Lambda deployment packages (deploy script uploads here)
+    Value: !Ref ArtifactsBucket
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID (for cache invalidation)
+    Value: !Ref CloudFrontDistribution
+  CloudFrontDomain:
+    Description: CloudFront distribution domain (use for Cognito callback after first deploy)
+    Value: !GetAtt CloudFrontDistribution.DomainName
+  CloudFrontURL:
+    Description: App URL
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+  FrontendBucketName:
+    Description: S3 bucket for frontend assets
+    Value: !Ref FrontendBucket
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+  AppClientId:
+    Description: Cognito App Client ID (for frontend)
+    Value: !Ref UserPoolAppClient
+  UserPoolDomain:
+    Description: Cognito hosted UI domain (prefix)
+    Value: !Ref UserPoolDomain
+  ApiEndpoint:
+    Description: API Gateway invoke URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"

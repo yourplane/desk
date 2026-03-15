@@ -1,3 +1,5 @@
+import { getToken } from '../auth'
+
 export interface Instance {
   instance_id: string
   name: string
@@ -5,8 +7,14 @@ export interface Instance {
   shutdown_at: string | null
 }
 
+function authHeaders(): HeadersInit {
+  const token = getToken()
+  if (token) return { Authorization: `Bearer ${token}` }
+  return {}
+}
+
 export async function listInstances(): Promise<Instance[]> {
-  const res = await fetch('/api/instances')
+  const res = await fetch('/api/instances', { headers: authHeaders() })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || `HTTP ${res.status}`)
@@ -17,6 +25,7 @@ export async function listInstances(): Promise<Instance[]> {
 export async function startInstance(name: string): Promise<{ instance_id: string }> {
   const res = await fetch(`/api/instances/${encodeURIComponent(name)}/start`, {
     method: 'POST',
+    headers: authHeaders(),
   })
   if (!res.ok) {
     const text = await res.text()
@@ -35,6 +44,7 @@ export async function startInstance(name: string): Promise<{ instance_id: string
 export async function stopInstance(name: string): Promise<{ instance_id: string }> {
   const res = await fetch(`/api/instances/${encodeURIComponent(name)}/stop`, {
     method: 'POST',
+    headers: authHeaders(),
   })
   if (!res.ok) {
     const text = await res.text()
