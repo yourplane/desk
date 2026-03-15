@@ -4,11 +4,12 @@ React web UI for desk EC2 workstations. Talks to the backend at `/api`.
 
 ## Local development
 
-1. Start the API (from repo root or `desk-api`):
+1. Start the API (from repo root or from `desk-api`):
 
    ```bash
-   cd desk-api && uv run uvicorn app.main:app --reload
+   uv run --project desk-api uvicorn app.main:app --reload
    ```
+   or: `cd desk-api && uv run uvicorn app.main:app --reload`
 
 2. Start the frontend:
 

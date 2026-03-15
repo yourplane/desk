@@ -4,11 +4,20 @@ HTTP API for desk EC2 workstations. All EC2 logic lives in `desk-sdk`; this laye
 
 ## Local development
 
-From the repo root (or `desk-api` with `desk-sdk` on the path):
+Run from the **desk-api** directory (the `app` package lives here):
 
 ```bash
-uvicorn app.main:app --reload
+cd desk-api
+uv run uvicorn app.main:app --reload
 ```
+
+Or from the repo root using the workspace project:
+
+```bash
+uv run --project desk-api uvicorn app.main:app --reload
+```
+
+Running `uvicorn app.main:app` from the repo root without `--project desk-api` will fail with `ModuleNotFoundError: No module named 'app'`.
 
 - API: http://localhost:8000
 - Docs: http://localhost:8000/docs
