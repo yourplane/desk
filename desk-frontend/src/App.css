@@ -1,0 +1,133 @@
+.app {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.instance-list {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: 1.5rem 1.75rem;
+}
+
+.page-title {
+  margin: 0 0 1.25rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.loading,
+.error-message {
+  margin: 0;
+  padding: 0.75rem 0;
+}
+
+.error-message {
+  color: var(--danger);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.instances-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.instances-table th,
+.instances-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.instances-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.instances-table tbody tr:hover {
+  background: var(--bg);
+}
+
+.instances-table .name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.instances-table .shutdown {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.instances-table .empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2rem;
+}
+
+.state-label {
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.shutdown-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.shutdown-absolute {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.shutdown-relative {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  white-space: nowrap;
+}
+
+.btn {
+  padding: 0.4rem 0.9rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-start {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-start:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
+.btn-stop {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn-stop:not(:disabled):hover {
+  background: var(--danger-hover);
+}

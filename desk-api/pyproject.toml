@@ -1,0 +1,25 @@
+[project]
+name = "desk-api"
+version = "0.1.0"
+description = "Desk API: HTTP API for EC2 workstations (FastAPI + Mangum)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.100.0",
+    "mangum>=0.17.0",
+    "uvicorn[standard]>=0.22.0",
+    "desk-sdk",
+]
+
+[tool.uv.sources]
+desk-sdk = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.hatch.build.targets.sdist]
+include = ["app", "lambda_handler.py"]
