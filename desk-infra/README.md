@@ -39,7 +39,7 @@ From the repo root:
 ```bash
 ./desk-infra/build.sh
 cd desk-infra
-sam deploy --guided --capabilities CAPABILITY_IAM --stack-name desk-reaper
+sam deploy --guided --capabilities CAPABILITY_IAM --stack-name reaper
 ```
 
 On subsequent deploys (after the guided config is saved to `samconfig.toml`):
