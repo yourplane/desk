@@ -88,10 +88,13 @@ Deploy the **built** template (`.aws-sam/build/template.yaml`) so the Lambda pac
 
 Send an event with `argv` (list of CLI args) or `command`/`args`/`options`. Optional `env` sets environment variables (e.g. `AWS_REGION`, `AWS_PROFILE`).
 
+Use **`--payload file://...`** so the JSON is not mangled by the shell (inline payloads can cause "Invalid UTF-8" or parse errors).
+
 **Example: desk list**
 
 ```bash
-aws lambda invoke --function-name desk-control --payload '{"argv": ["list"]}' out.json && cat out.json
+echo '{"argv": ["list"]}' > payload.json
+aws lambda invoke --function-name desk-control --payload file://payload.json out.json && cat out.json
 ```
 
 Response: `{"result": {"workstations": [{"instance_id": "...", "name": "...", "state": "...", "shutdown_at": "..."}]}}` on success, or `{"error": "..."}` on failure.
@@ -100,10 +103,12 @@ Response: `{"result": {"workstations": [{"instance_id": "...", "name": "...", "s
 
 ```bash
 # Start a workstation
-aws lambda invoke --function-name desk-control --payload '{"argv": ["start", "main", "--region", "us-east-1"]}' out.json && cat out.json
+echo '{"argv": ["start", "main", "--region", "us-east-1"]}' > payload.json
+aws lambda invoke --function-name desk-control --payload file://payload.json out.json && cat out.json
 
 # Stop (using command/args/options)
-aws lambda invoke --function-name desk-control --payload '{"command": "stop", "args": ["main"], "env": {"AWS_REGION": "us-east-1"}}' out.json && cat out.json
+echo '{"command": "stop", "args": ["main"], "env": {"AWS_REGION": "us-east-1"}}' > payload.json
+aws lambda invoke --function-name desk-control --payload file://payload.json out.json && cat out.json
 ```
 
 All responses are JSON. **Allowed commands:** `list`, `start`, `stop`, `up`, `create`, `kill`, `reap`, `auto-stop`, `run`, `ami` (all subcommands), `tab list`, `tab create`, `tab close`. Not allowed: `connect`, `scp`, `tab connect`, `tab up`, `keygen`.
