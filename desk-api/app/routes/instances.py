@@ -1,5 +1,7 @@
 """Instance management routes. All EC2 logic lives in desk-sdk."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 
 from desk.aws import (
@@ -10,6 +12,7 @@ from desk.aws import (
 )
 from desk.config import get_default_profile, get_default_region
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["instances"])
 
 
@@ -21,7 +24,13 @@ def _region_profile():
 def list_instances():
     """List workstation instances (tagged Type=workstation)."""
     region, profile = _region_profile()
-    workstations = list_workstations(region=region, profile=profile)
+    logger.info("list_instances: region=%s profile=%s", region, profile)
+    try:
+        workstations = list_workstations(region=region, profile=profile)
+    except Exception as e:
+        logger.exception("list_workstations failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    logger.info("list_instances: returning %d workstations", len(workstations))
     return [
         {
             "instance_id": w.instance_id,

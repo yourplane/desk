@@ -13,11 +13,18 @@ function authHeaders(): HeadersInit {
   return {}
 }
 
+function errorMessage(res: Response, text: string): string {
+  if (res.status === 401) {
+    return 'Session expired or invalid. Please log in again.'
+  }
+  return text?.trim() || `Request failed (${res.status})`
+}
+
 export async function listInstances(): Promise<Instance[]> {
   const res = await fetch('/api/instances', { headers: authHeaders() })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
+    throw new Error(errorMessage(res, text))
   }
   return res.json()
 }
