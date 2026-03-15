@@ -10,5 +10,6 @@ if [ ! -d "$REPO_ROOT/desk-sdk" ]; then
 fi
 
 cd "$SCRIPT_DIR"
-sam build --template desk-reaper.yaml "$@"
-sam build --template desk-control.yaml "$@"
+# Use --build-in-source so the Makefile runs in the real repo and can find ../../desk-sdk.
+sam build --build-in-source --template desk-reaper.yaml "$@"
+sam build --build-in-source --template desk-control.yaml "$@"

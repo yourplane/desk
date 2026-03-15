@@ -88,13 +88,12 @@ Deploy the **built** template (`.aws-sam/build/template.yaml`) so the Lambda pac
 
 Send an event with `argv` (list of CLI args) or `command`/`args`/`options`. Optional `env` sets environment variables (e.g. `AWS_REGION`, `AWS_PROFILE`).
 
-Use **`--payload file://payload.json`** and **`--cli-binary-format raw-in-base64-out`**. AWS CLI v2 treats the payload as base64 by default, which can cause "Invalid UTF-8" when Lambda parses the request; this flag sends the file contents as raw JSON. Write the JSON with Python so the file is UTF-8.
+Use **`--cli-binary-format raw-in-base64-out`** so the payload is sent as raw JSON (AWS CLI v2 treats it as base64 by default, which can cause "Invalid UTF-8" errors).
 
 **Example: desk list**
 
 ```bash
-python3 -c "import json; open('payload.json','w',encoding='utf-8').write(json.dumps({'argv': ['list']}))"
-aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-control --payload file://payload.json out.json && cat out.json
+aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-control --payload '{"argv": ["list"]}' out.json && cat out.json
 ```
 
 Response: `{"result": {"workstations": [{"instance_id": "...", "name": "...", "state": "...", "shutdown_at": "..."}]}}` on success, or `{"error": "..."}` on failure.
@@ -103,12 +102,10 @@ Response: `{"result": {"workstations": [{"instance_id": "...", "name": "...", "s
 
 ```bash
 # Start a workstation
-python3 -c "import json; open('payload.json','w',encoding='utf-8').write(json.dumps({'argv': ['start', 'main', '--region', 'us-east-1']}))"
-aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-control --payload file://payload.json out.json && cat out.json
+aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-control --payload '{"argv": ["start", "main", "--region", "us-east-1"]}' out.json && cat out.json
 
 # Stop (using command/args/options)
-python3 -c "import json; open('payload.json','w',encoding='utf-8').write(json.dumps({'command': 'stop', 'args': ['main'], 'env': {'AWS_REGION': 'us-east-1'}}))"
-aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-control --payload file://payload.json out.json && cat out.json
+aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-control --payload '{"command": "stop", "args": ["main"], "env": {"AWS_REGION": "us-east-1"}}' out.json && cat out.json
 ```
 
 All responses are JSON. **Allowed commands:** `list`, `start`, `stop`, `up`, `create`, `kill`, `reap`, `auto-stop`, `run`, `ami` (all subcommands), `tab list`, `tab create`, `tab close`. Not allowed: `connect`, `scp`, `tab connect`, `tab up`, `keygen`.
