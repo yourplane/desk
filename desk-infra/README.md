@@ -34,20 +34,25 @@ The template provides:
 
 The reaper runs every 10 minutes and stops workstations past their `desk:shutdown-at` time.
 
-From the repo root:
+Run these commands from the **repo root** (the directory that contains `desk-infra/`). The build script and `sam` deploy must be run from the correct directory; `--template-file` is required so SAM deploys the reaper template (not the control template).
+
+First-time deploy (guided setup):
 
 ```bash
 ./desk-infra/build.sh
 cd desk-infra
-sam deploy --guided --capabilities CAPABILITY_IAM --stack-name reaper
+sam build --template desk-reaper.yaml
+sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM
 ```
 
 On subsequent deploys (after the guided config is saved to `samconfig.toml`):
 
 ```bash
+# From repo root
 ./desk-infra/build.sh
 cd desk-infra
-sam deploy
+sam build --template desk-reaper.yaml
+sam deploy --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM
 ```
 
 ### 3. Control plane Lambda
