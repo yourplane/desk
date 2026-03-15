@@ -17,7 +17,13 @@ React web UI for desk EC2 workstations. Talks to the backend at `/api`.
    npm run dev
    ```
 
-3. Open http://localhost:5173 — the dev server proxies `/api` to the backend at port 8000.
+   The dev server proxies `/api` to the backend. By default it uses port **8000**. To use a different backend port (e.g. 8888), set `DESK_API_PORT`:
+
+   ```bash
+   DESK_API_PORT=8888 npm run dev
+   ```
+
+3. Open http://localhost:5173.
 
 ## Build
 
