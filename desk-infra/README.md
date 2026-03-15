@@ -88,12 +88,12 @@ Deploy the **built** template (`.aws-sam/build/template.yaml`) so the Lambda pac
 
 Send an event with `argv` (list of CLI args) or `command`/`args`/`options`. Optional `env` sets environment variables (e.g. `AWS_REGION`, `AWS_PROFILE`).
 
-Use **`--payload file://...`** so the JSON is not mangled by the shell (inline payloads can cause "Invalid UTF-8" or parse errors).
+Use **`--payload file://payload.json`** and write the JSON with **Python** so the file is UTF-8 (shell `echo` can use a different encoding and cause "Invalid UTF-8" errors).
 
 **Example: desk list**
 
 ```bash
-echo '{"argv": ["list"]}' > payload.json
+python3 -c "import json; open('payload.json','w',encoding='utf-8').write(json.dumps({'argv': ['list']}))"
 aws lambda invoke --function-name desk-control --payload file://payload.json out.json && cat out.json
 ```
 
@@ -103,11 +103,11 @@ Response: `{"result": {"workstations": [{"instance_id": "...", "name": "...", "s
 
 ```bash
 # Start a workstation
-echo '{"argv": ["start", "main", "--region", "us-east-1"]}' > payload.json
+python3 -c "import json; open('payload.json','w',encoding='utf-8').write(json.dumps({'argv': ['start', 'main', '--region', 'us-east-1']}))"
 aws lambda invoke --function-name desk-control --payload file://payload.json out.json && cat out.json
 
 # Stop (using command/args/options)
-echo '{"command": "stop", "args": ["main"], "env": {"AWS_REGION": "us-east-1"}}' > payload.json
+python3 -c "import json; open('payload.json','w',encoding='utf-8').write(json.dumps({'command': 'stop', 'args': ['main'], 'env': {'AWS_REGION': 'us-east-1'}}))"
 aws lambda invoke --function-name desk-control --payload file://payload.json out.json && cat out.json
 ```
 
