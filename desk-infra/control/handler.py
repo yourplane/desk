@@ -281,7 +281,6 @@ def _run_command(argv: list, region: str | None, profile: str | None):
             set_shutdown_tag,
             start_instance,
         )
-        from desk.commands.create import create as create_cmd
         from desk.config import get_default_profile, get_default_region
         if not args:
             raise ValueError("up requires workstation name")
@@ -353,17 +352,16 @@ def _run_command(argv: list, region: str | None, profile: str | None):
         p = profile or get_default_profile()
         instance_id = resolve_workstation(workstation, region=r, profile=p)
         if sub == "list":
-            # Run the list-sessions command and parse output into sessions
-            from desk.commands.tab import _list_sessions_with_details_command, _run_remote_command, _LIST_SEP
-            list_cmd = _list_sessions_with_details_command()
-            stdout, stderr, status, exit_code = _run_remote_command(
+            from desk.tab_impl import LIST_SEP, list_sessions_with_details_command, run_remote_command
+            list_cmd = list_sessions_with_details_command()
+            stdout, stderr, status, exit_code = run_remote_command(
                 instance_id, list_cmd, region=r, profile=p
             )
             sessions = []
             for line in (stdout or "").strip().splitlines():
-                if _LIST_SEP not in line:
+                if LIST_SEP not in line:
                     continue
-                parts = line.split(_LIST_SEP, 5)
+                parts = line.split(LIST_SEP, 5)
                 if len(parts) >= 2:
                     sessions.append({
                         "session_id": (parts[0] or "").strip(),
@@ -375,21 +373,21 @@ def _run_command(argv: list, region: str | None, profile: str | None):
                     })
             return {"workstation": workstation, "instance_id": instance_id, "sessions": sessions}
         if sub == "create":
-            from desk.commands.tab import _new_session_name, _run_remote_command
+            from desk.tab_impl import new_session_name, run_remote_command
             name = tab_args[1] if len(tab_args) > 1 else None
-            session_name = _new_session_name(workstation, name=name)
+            session_name = new_session_name(workstation, name=name)
             user = "ubuntu"
             create_cmd = (
                 f"cd /home/{user} && screen -dmS {session_name} "
                 "bash -c 'export TERM=screen-256color; export COLUMNS=80; export LINES=24; exec bash -l'"
             )
-            stdout, stderr, status, exit_code = _run_remote_command(
+            stdout, stderr, status, exit_code = run_remote_command(
                 instance_id, create_cmd, region=r, profile=p, user=user
             )
             if status != "Success" or (exit_code is not None and exit_code != 0):
                 raise ValueError(stderr or "tab create failed")
             # Get full session id
-            out2, _, _, _ = _run_remote_command(
+            out2, _, _, _ = run_remote_command(
                 instance_id, "screen -ls 2>/dev/null", region=r, profile=p
             )
             full_id = None
@@ -403,11 +401,11 @@ def _run_command(argv: list, region: str | None, profile: str | None):
                         break
             return {"workstation": workstation, "instance_id": instance_id, "session": session_name, "session_id": full_id}
         if sub == "close":
-            from desk.commands.tab import _run_remote_command
+            from desk.tab_impl import run_remote_command
             if len(tab_args) < 2:
                 raise ValueError("tab close requires workstation and session")
             session_arg = tab_args[1]
-            stdout, _, _, _ = _run_remote_command(
+            stdout, _, _, _ = run_remote_command(
                 instance_id, "screen -ls 2>/dev/null", region=r, profile=p
             )
             session_lines = [
@@ -424,7 +422,7 @@ def _run_command(argv: list, region: str | None, profile: str | None):
             if not matching:
                 raise ValueError(f"Session '{session_arg}' not found on {workstation}")
             session_id = matching[0].split()[0]
-            _, stderr, status, exit_code = _run_remote_command(
+            _, stderr, status, exit_code = run_remote_command(
                 instance_id, f"screen -S {session_id} -X quit", region=r, profile=p
             )
             if status != "Success" or (exit_code is not None and exit_code != 0):

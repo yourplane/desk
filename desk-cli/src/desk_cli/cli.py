@@ -4,8 +4,24 @@ import sys
 
 import click
 
-from desk import __version__
-from desk.commands import ami, auto_stop, connect, copy, create, keygen, kill, list_, reap, run, scp, start, stop, tab, up
+from desk_cli import __version__
+from desk_cli.commands import (
+    ami,
+    auto_stop,
+    connect,
+    copy,
+    create,
+    keygen,
+    kill,
+    list_,
+    reap,
+    run,
+    scp,
+    start,
+    stop,
+    tab,
+    up,
+)
 
 
 @click.group()

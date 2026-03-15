@@ -16,7 +16,7 @@ from desk.aws import (
     set_shutdown_tag,
     start_instance,
 )
-from desk.commands import create, tab
+from desk_cli.commands import create, tab
 from desk.config import get_default_profile, get_default_region
 from desk.keys import get_default_private_key_path
 

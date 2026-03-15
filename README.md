@@ -2,16 +2,28 @@
 
 A CLI to manage EC2 instances as remote workstations. Workstations run in private subnets with no public IPs. Connect via SSH over AWS Systems Manager (SSM) Session Manager—no bastion hosts or exposed ports.
 
+This repo is a **monorepo** with three subprojects:
+
+| Project     | Description |
+|------------|-------------|
+| **desk-sdk**   | Shared library (AWS, config, keys, logging, tab/control workflows). Used by the CLI and by Lambdas. |
+| **desk-cli**   | CLI application. Depends on desk-sdk. Provides the `desk` command. |
+| **desk-infra** | CloudFormation templates and Lambda code (reaper, control). Depends on desk-sdk only (uv pip install). |
+
+The root is a **uv** workspace that links desk-sdk and desk-cli.
+
 ---
 
 ## Installation
 
+From the repo root:
+
 ```bash
-pip install .
-# or for isolation: pipx install .
+uv sync
+uv run desk --help
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
 ---
 
@@ -156,7 +168,7 @@ See [AWS docs](https://docs.aws.amazon.com/systems-manager/latest/userguide/sess
 
 ## Configuration
 
-Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `config.example`. Overrides: `--region` / `--profile` or `AWS_REGION` / `AWS_PROFILE`.
+Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `desk-cli/config.example`. Overrides: `--region` / `--profile` or `AWS_REGION` / `AWS_PROFILE`.
 
 ```ini
 [defaults]
@@ -174,7 +186,7 @@ Deploy the desk VPC and networking:
 ```bash
 aws cloudformation deploy \
   --stack-name desk \
-  --template-file infrastructure/desk-vpc.yaml \
+  --template-file desk-infra/desk-vpc.yaml \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
@@ -193,19 +205,19 @@ The reaper is a Lambda that runs every 10 minutes and stops workstations past th
 
 Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html).
 
-**Build and deploy:** From the repo root, `infrastructure/build.sh` copies the desk package into the reaper and runs `sam build`:
+**Build and deploy:** From the repo root, `desk-infra/build.sh` installs desk-sdk into the Lambdas (via uv pip install) and runs `sam build`:
 
 ```bash
-./infrastructure/build.sh
-cd infrastructure
+./desk-infra/build.sh
+cd desk-infra
 sam deploy --guided --capabilities CAPABILITY_IAM --stack-name desk-reaper
 ```
 
 On subsequent deploys (after the guided config is saved to `samconfig.toml`):
 
 ```bash
-./infrastructure/build.sh
-cd infrastructure
+./desk-infra/build.sh
+cd desk-infra
 sam deploy
 ```
 
@@ -213,10 +225,10 @@ sam deploy
 
 The **desk-control** Lambda runs all desk control-plane operations (e.g. `desk list`, `desk start`, `desk stop`, `desk create`, `desk ami list`, `desk tab list`). It does **not** support interactive commands: `desk connect` and `desk scp` are excluded (they require SSH). Invoke it with an event that specifies the command and arguments.
 
-**Build:** From the repo root, `infrastructure/build.sh` copies the desk package into both the reaper and control Lambda directories and runs `sam build` for both templates:
+**Build:** From the repo root, `desk-infra/build.sh` installs desk-sdk into both Lambdas and runs `sam build` for both templates:
 
 ```bash
-./infrastructure/build.sh
+./desk-infra/build.sh
 ```
 
 This builds:
@@ -226,16 +238,16 @@ This builds:
 **Deploy the control Lambda:** Build first (so the built template and artifacts are in `.aws-sam/build/`), then deploy using the **built** template so the Lambda package includes all dependencies:
 
 ```bash
-./infrastructure/build.sh
-cd infrastructure
+./desk-infra/build.sh
+cd desk-infra
 sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
 ```
 
 Subsequent deploys (after `samconfig.toml` is updated for the control stack):
 
 ```bash
-./infrastructure/build.sh
-cd infrastructure
+./desk-infra/build.sh
+cd desk-infra
 sam deploy --template-file .aws-sam/build/template.yaml --stack-name desk-control --capabilities CAPABILITY_IAM --region us-east-1
 ```
 
@@ -260,7 +272,7 @@ Response shape: success `{"result": <data>}` (e.g. `list` → `{"result": {"work
 
 **Lint CloudFormation:**
 ```bash
-tox run -e lint
+cfn-lint desk-infra/desk-vpc.yaml desk-infra/desk-reaper.yaml desk-infra/desk-control.yaml
 ```
 
 ---
@@ -293,8 +305,8 @@ desk reap --dry-run            # preview without stopping
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-tox run -e py    # tests
+uv sync --extra dev
+pytest desk-sdk/tests desk-cli/tests -q   # run SDK and CLI tests
 ```
 
 ---

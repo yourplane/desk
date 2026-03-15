@@ -7,13 +7,13 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from desk.cli import cli
+from desk_cli.cli import cli
 
 
 def _run_desk(*args: str) -> subprocess.CompletedProcess[str]:
     """Run desk CLI and return result. Click writes help to stderr."""
     return subprocess.run(
-        [sys.executable, "-m", "desk.cli", *args],
+        [sys.executable, "-m", "desk_cli.cli", *args],
         capture_output=True,
         text=True,
     )
@@ -34,13 +34,13 @@ def test_desk_up_help() -> None:
     assert "--forward" in output or "-L" in output
 
 
-@patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
-@patch("desk.commands.up.tab.tab_up")
-@patch("desk.commands.up.set_shutdown_tag")
-@patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
-@patch("desk.commands.up.start_instance")
-@patch("desk.commands.up.list_workstations")
-@patch("desk.commands.up.resolve_workstation")
+@patch("desk_cli.commands.up.get_default_private_key_path", return_value="/some/key")
+@patch("desk_cli.commands.up.tab.tab_up")
+@patch("desk_cli.commands.up.set_shutdown_tag")
+@patch("desk_cli.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
+@patch("desk_cli.commands.up.start_instance")
+@patch("desk_cli.commands.up.list_workstations")
+@patch("desk_cli.commands.up.resolve_workstation")
 def test_desk_up_starts_stopped_instance(
     mock_resolve: object,
     mock_list: object,
@@ -69,14 +69,14 @@ def test_desk_up_starts_stopped_instance(
     mock_tab_up.assert_called_once()
 
 
-@patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
-@patch("desk.commands.up.tab.tab_up")
-@patch("desk.commands.up.set_shutdown_tag")
-@patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
-@patch("desk.commands.up.start_instance")
-@patch("desk.commands.up.get_instance_state")
-@patch("desk.commands.up.list_workstations")
-@patch("desk.commands.up.resolve_workstation")
+@patch("desk_cli.commands.up.get_default_private_key_path", return_value="/some/key")
+@patch("desk_cli.commands.up.tab.tab_up")
+@patch("desk_cli.commands.up.set_shutdown_tag")
+@patch("desk_cli.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
+@patch("desk_cli.commands.up.start_instance")
+@patch("desk_cli.commands.up.get_instance_state")
+@patch("desk_cli.commands.up.list_workstations")
+@patch("desk_cli.commands.up.resolve_workstation")
 def test_desk_up_waits_for_stopping_instance(
     mock_resolve: object,
     mock_list: object,
@@ -107,12 +107,12 @@ def test_desk_up_waits_for_stopping_instance(
     mock_tab_up.assert_called_once()
 
 
-@patch("desk.commands.up.get_default_private_key_path", return_value=None)
-@patch("desk.commands.up.set_shutdown_tag")
-@patch("desk.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
-@patch("desk.commands.up.start_instance")
-@patch("desk.commands.up.list_workstations")
-@patch("desk.commands.up.resolve_workstation")
+@patch("desk_cli.commands.up.get_default_private_key_path", return_value=None)
+@patch("desk_cli.commands.up.set_shutdown_tag")
+@patch("desk_cli.commands.up.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
+@patch("desk_cli.commands.up.start_instance")
+@patch("desk_cli.commands.up.list_workstations")
+@patch("desk_cli.commands.up.resolve_workstation")
 def test_desk_up_skips_connect_when_no_ssh_key(
     mock_resolve: object,
     mock_list: object,
@@ -147,7 +147,7 @@ def test_desk_create_help() -> None:
     assert "WORKSTATION" in output
 
 
-@patch("desk.commands.create.list_workstations")
+@patch("desk_cli.commands.create.list_workstations")
 def test_desk_create_rejects_duplicate_name_running(mock_list_workstations: object) -> None:
     """desk create fails when workstation with same name is running."""
     from desk.aws import Workstation
@@ -165,7 +165,7 @@ def test_desk_create_rejects_duplicate_name_running(mock_list_workstations: obje
     assert "running" in result.output
 
 
-@patch("desk.commands.create.list_workstations")
+@patch("desk_cli.commands.create.list_workstations")
 def test_desk_create_rejects_duplicate_name_stopped(mock_list_workstations: object) -> None:
     """desk create fails when workstation with same name is stopped."""
     from desk.aws import Workstation
@@ -183,7 +183,7 @@ def test_desk_create_rejects_duplicate_name_stopped(mock_list_workstations: obje
     assert "stopped" in result.output
 
 
-@patch("desk.commands.create.list_workstations")
+@patch("desk_cli.commands.create.list_workstations")
 def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: object) -> None:
     """desk create fails when workstation with same name is stopping."""
     from desk.aws import Workstation
@@ -200,12 +200,12 @@ def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: obj
     assert "stopping" in result.output
 
 
-@patch("desk.commands.create.set_shutdown_tag")
-@patch("desk.commands.create.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
-@patch("desk.commands.create.run_instance")
-@patch("desk.commands.create.get_latest_ubuntu_ami")
-@patch("desk.commands.create.get_desk_vpc_outputs")
-@patch("desk.commands.create.list_workstations")
+@patch("desk_cli.commands.create.set_shutdown_tag")
+@patch("desk_cli.commands.create.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
+@patch("desk_cli.commands.create.run_instance")
+@patch("desk_cli.commands.create.get_latest_ubuntu_ami")
+@patch("desk_cli.commands.create.get_desk_vpc_outputs")
+@patch("desk_cli.commands.create.list_workstations")
 def test_desk_create_allows_duplicate_name_when_terminated(
     mock_list_workstations: object,
     mock_vpc: object,
@@ -270,7 +270,7 @@ def test_desk_ami_list_help() -> None:
     assert "--all" in output
 
 
-@patch("desk.commands.ami.list_amis")
+@patch("desk_cli.commands.ami.list_amis")
 def test_desk_ami_list_empty(mock_list_amis: object) -> None:
     """desk ami list shows message when no AMIs found."""
     mock_list_amis.return_value = []
@@ -283,7 +283,7 @@ def test_desk_ami_list_empty(mock_list_amis: object) -> None:
     mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=True)
 
 
-@patch("desk.commands.ami.list_amis")
+@patch("desk_cli.commands.ami.list_amis")
 def test_desk_ami_list_success(mock_list_amis: object) -> None:
     """desk ami list shows table of AMIs."""
     from desk.aws import AmiInfo
@@ -310,7 +310,7 @@ def test_desk_ami_list_success(mock_list_amis: object) -> None:
     mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=True)
 
 
-@patch("desk.commands.ami.list_amis")
+@patch("desk_cli.commands.ami.list_amis")
 def test_desk_ami_list_plain(mock_list_amis: object) -> None:
     """desk ami list --output plain prints tab-separated lines."""
     from desk.aws import AmiInfo
@@ -333,7 +333,7 @@ def test_desk_ami_list_plain(mock_list_amis: object) -> None:
     mock_list_amis.assert_called_once()
 
 
-@patch("desk.commands.ami.list_amis")
+@patch("desk_cli.commands.ami.list_amis")
 def test_desk_ami_list_all_flag(mock_list_amis: object) -> None:
     """desk ami list --all passes managed_only=False."""
     mock_list_amis.return_value = []
@@ -402,10 +402,10 @@ def test_desk_ami_create_help() -> None:
     assert "--wait" in output
 
 
-@patch("desk.commands.ami.get_ami_state")
-@patch("desk.commands.ami.create_ami")
-@patch("desk.commands.ami.get_instance_state")
-@patch("desk.commands.ami.resolve_workstation")
+@patch("desk_cli.commands.ami.get_ami_state")
+@patch("desk_cli.commands.ami.create_ami")
+@patch("desk_cli.commands.ami.get_instance_state")
+@patch("desk_cli.commands.ami.resolve_workstation")
 def test_desk_ami_create_success(
     mock_resolve: object,
     mock_get_state: object,
@@ -438,10 +438,10 @@ def test_desk_ami_create_success(
     assert "created successfully" in result.output
 
 
-@patch("desk.commands.ami.get_ami_state")
-@patch("desk.commands.ami.create_ami")
-@patch("desk.commands.ami.get_instance_state")
-@patch("desk.commands.ami.resolve_workstation")
+@patch("desk_cli.commands.ami.get_ami_state")
+@patch("desk_cli.commands.ami.create_ami")
+@patch("desk_cli.commands.ami.get_instance_state")
+@patch("desk_cli.commands.ami.resolve_workstation")
 def test_desk_ami_create_no_wait(
     mock_resolve: object,
     mock_get_state: object,
@@ -462,9 +462,9 @@ def test_desk_ami_create_no_wait(
     assert "being created in the background" in result.output
 
 
-@patch("desk.commands.ami.create_ami")
-@patch("desk.commands.ami.get_instance_state")
-@patch("desk.commands.ami.resolve_workstation")
+@patch("desk_cli.commands.ami.create_ami")
+@patch("desk_cli.commands.ami.get_instance_state")
+@patch("desk_cli.commands.ami.resolve_workstation")
 def test_desk_ami_create_with_no_reboot(
     mock_resolve: object,
     mock_get_state: object,
@@ -485,7 +485,7 @@ def test_desk_ami_create_with_no_reboot(
     assert "inconsistent state" in result.output
 
 
-@patch("desk.commands.ami.resolve_workstation")
+@patch("desk_cli.commands.ami.resolve_workstation")
 def test_desk_ami_create_workstation_not_found(mock_resolve: object) -> None:
     """desk ami create fails when workstation not found."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -497,9 +497,9 @@ def test_desk_ami_create_workstation_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
-@patch("desk.commands.ami.wait_for_instance_state")
-@patch("desk.commands.ami.get_instance_state")
-@patch("desk.commands.ami.resolve_workstation")
+@patch("desk_cli.commands.ami.wait_for_instance_state")
+@patch("desk_cli.commands.ami.get_instance_state")
+@patch("desk_cli.commands.ami.resolve_workstation")
 def test_desk_ami_create_waits_for_stopping_instance(
     mock_resolve: object,
     mock_get_state: object,
@@ -518,10 +518,10 @@ def test_desk_ami_create_waits_for_stopping_instance(
     mock_wait_state.assert_called_once()
 
 
-@patch("desk.commands.ami.get_ami_state")
-@patch("desk.commands.ami.create_ami")
-@patch("desk.commands.ami.get_instance_state")
-@patch("desk.commands.ami.resolve_workstation")
+@patch("desk_cli.commands.ami.get_ami_state")
+@patch("desk_cli.commands.ami.create_ami")
+@patch("desk_cli.commands.ami.get_instance_state")
+@patch("desk_cli.commands.ami.resolve_workstation")
 def test_desk_ami_create_generates_default_name(
     mock_resolve: object,
     mock_get_state: object,
@@ -546,10 +546,10 @@ def test_desk_ami_create_generates_default_name(
     assert len(call_kwargs["name"]) > len("main-")
 
 
-@patch("desk.commands.ami.get_ami_state")
-@patch("desk.commands.ami.create_ami")
-@patch("desk.commands.ami.get_instance_state")
-@patch("desk.commands.ami.resolve_workstation")
+@patch("desk_cli.commands.ami.get_ami_state")
+@patch("desk_cli.commands.ami.create_ami")
+@patch("desk_cli.commands.ami.get_instance_state")
+@patch("desk_cli.commands.ami.resolve_workstation")
 def test_desk_ami_create_fails_on_ami_failure(
     mock_resolve: object,
     mock_get_state: object,
@@ -575,12 +575,12 @@ def test_desk_shows_friendly_error_without_traceback() -> None:
     from unittest.mock import patch
 
     # Test the main() wrapper function's exception handling
-    with patch("desk.cli.cli") as mock_cli:
+    with patch("desk_cli.cli.cli") as mock_cli:
         mock_cli.side_effect = RuntimeError("Something went wrong")
 
         with patch("sys.stderr", new_callable=StringIO) as mock_stderr:
             with patch("sys.exit") as mock_exit:
-                from desk.cli import main
+                from desk_cli.cli import main
                 main()
 
                 mock_exit.assert_called_once_with(1)
@@ -606,7 +606,7 @@ def test_desk_list_help() -> None:
     assert "List workstation instances" in output
 
 
-@patch("desk.commands.list_.list_workstations")
+@patch("desk_cli.commands.list_.list_workstations")
 def test_desk_list_empty(mock_list: object) -> None:
     """desk list shows message when no workstations."""
     mock_list.return_value = []
@@ -636,7 +636,7 @@ def test_desk_keygen_help() -> None:
     assert "--force" in output
 
 
-@patch("desk.commands.keygen.subprocess.run")
+@patch("desk_cli.commands.keygen.subprocess.run")
 def test_desk_keygen_creates_key(mock_run: object, tmp_path) -> None:
     """desk keygen -f PATH creates key and prints public key."""
     key_path = tmp_path / "id_ed25519"
@@ -680,7 +680,7 @@ def test_desk_keygen_refuses_overwrite(tmp_path) -> None:
     assert "force" in result.output.lower()
 
 
-@patch("desk.commands.keygen.subprocess.run")
+@patch("desk_cli.commands.keygen.subprocess.run")
 def test_desk_keygen_force_overwrite(mock_run: object, tmp_path) -> None:
     """desk keygen --force overwrites existing key."""
     key_path = tmp_path / "id_ed25519"
@@ -705,7 +705,7 @@ def test_desk_keygen_force_overwrite(mock_run: object, tmp_path) -> None:
     assert "-t" in call_args and "ed25519" in call_args
 
 
-@patch("desk.commands.keygen.subprocess.run")
+@patch("desk_cli.commands.keygen.subprocess.run")
 def test_desk_keygen_type_rsa(mock_run: object, tmp_path) -> None:
     """desk keygen --type rsa passes -b 4096 to ssh-keygen."""
     key_path = tmp_path / "id_rsa"
@@ -724,12 +724,12 @@ def test_desk_keygen_type_rsa(mock_run: object, tmp_path) -> None:
     assert "-b" in call_args and "4096" in call_args
 
 
-@patch("desk.commands.connect.add_temporary_ssh_key")
-@patch("desk.commands.connect.get_public_key_content")
-@patch("desk.commands.connect.os.execvp")
-@patch("desk.commands.connect.is_ssm_ready")
-@patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_default_private_key_path")
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_resolves_and_execs_ssh(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -762,12 +762,12 @@ def test_desk_connect_resolves_and_execs_ssh(
     assert "ubuntu@i-abc123" in args
 
 
-@patch("desk.commands.connect.add_temporary_ssh_key")
-@patch("desk.commands.connect.get_public_key_content")
-@patch("desk.commands.connect.os.execvp")
-@patch("desk.commands.connect.is_ssm_ready")
-@patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_default_private_key_path")
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_key(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -797,7 +797,7 @@ def test_desk_connect_with_key(
     assert args[idx + 1] == str(key_file)
 
 
-@patch("desk.commands.connect.get_default_private_key_path")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_key_not_found(mock_get_default_key: object) -> None:
     """desk connect fails when default key file does not exist."""
     mock_get_default_key.return_value = "/nonexistent/my-key.pem"
@@ -807,12 +807,12 @@ def test_desk_connect_key_not_found(mock_get_default_key: object) -> None:
     assert "not found" in result.output
 
 
-@patch("desk.commands.connect.add_temporary_ssh_key")
-@patch("desk.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
-@patch("desk.commands.connect.is_ssm_ready")
-@patch("desk.commands.connect.os.execvp")
-@patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_default_private_key_path")
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_waits_for_ssm_then_connects(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -837,8 +837,8 @@ def test_desk_connect_waits_for_ssm_then_connects(
     mock_execvp.assert_called_once()
 
 
-@patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_default_private_key_path")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_not_found(
     mock_get_default_key: object, mock_resolve: object, tmp_path
 ) -> None:
@@ -854,12 +854,12 @@ def test_desk_connect_not_found(
     assert "not found" in result.output
 
 
-@patch("desk.commands.connect.add_temporary_ssh_key")
-@patch("desk.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
-@patch("desk.commands.connect.os.execvp")
-@patch("desk.commands.connect.is_ssm_ready")
-@patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_default_private_key_path")
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_port_forward(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -888,12 +888,12 @@ def test_desk_connect_with_port_forward(
     assert args[idx + 1] == "8080:localhost:80"
 
 
-@patch("desk.commands.connect.add_temporary_ssh_key")
-@patch("desk.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
-@patch("desk.commands.connect.os.execvp")
-@patch("desk.commands.connect.is_ssm_ready")
-@patch("desk.commands.connect.resolve_workstation")
-@patch("desk.commands.connect.get_default_private_key_path")
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_multiple_port_forwards(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -934,8 +934,8 @@ def test_desk_stop_help() -> None:
     assert "WORKSTATION" in output
 
 
-@patch("desk.commands.stop.stop_instance")
-@patch("desk.commands.stop.resolve_workstation")
+@patch("desk_cli.commands.stop.stop_instance")
+@patch("desk_cli.commands.stop.resolve_workstation")
 def test_desk_stop_by_name(mock_resolve: object, mock_stop: object) -> None:
     """desk stop resolves name and stops instance."""
     mock_resolve.return_value = "i-abc123"
@@ -948,8 +948,8 @@ def test_desk_stop_by_name(mock_resolve: object, mock_stop: object) -> None:
     assert "Stopped" in result.output
 
 
-@patch("desk.commands.stop.stop_instance")
-@patch("desk.commands.stop.resolve_workstation")
+@patch("desk_cli.commands.stop.stop_instance")
+@patch("desk_cli.commands.stop.resolve_workstation")
 def test_desk_stop_by_instance_id(mock_resolve: object, mock_stop: object) -> None:
     """desk stop with instance ID stops the instance."""
     mock_resolve.return_value = "i-abc123"
@@ -961,7 +961,7 @@ def test_desk_stop_by_instance_id(mock_resolve: object, mock_stop: object) -> No
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
 
 
-@patch("desk.commands.stop.resolve_workstation")
+@patch("desk_cli.commands.stop.resolve_workstation")
 def test_desk_stop_not_found(mock_resolve: object) -> None:
     """desk stop with unknown name shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -981,8 +981,8 @@ def test_desk_kill_help() -> None:
     assert "--yes" in output
 
 
-@patch("desk.commands.kill.terminate_instance")
-@patch("desk.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.terminate_instance")
+@patch("desk_cli.commands.kill.resolve_workstation")
 def test_desk_kill_with_yes_flag(mock_resolve: object, mock_terminate: object) -> None:
     """desk kill --yes terminates without prompting."""
     mock_resolve.return_value = "i-abc123"
@@ -997,8 +997,8 @@ def test_desk_kill_with_yes_flag(mock_resolve: object, mock_terminate: object) -
     assert "Terminated" in result.output
 
 
-@patch("desk.commands.kill.terminate_instance")
-@patch("desk.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.terminate_instance")
+@patch("desk_cli.commands.kill.resolve_workstation")
 def test_desk_kill_confirms_before_terminate(mock_resolve: object, mock_terminate: object) -> None:
     """desk kill prompts for confirmation."""
     mock_resolve.return_value = "i-abc123"
@@ -1010,8 +1010,8 @@ def test_desk_kill_confirms_before_terminate(mock_resolve: object, mock_terminat
     assert "Terminate" in result.output
 
 
-@patch("desk.commands.kill.terminate_instance")
-@patch("desk.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.terminate_instance")
+@patch("desk_cli.commands.kill.resolve_workstation")
 def test_desk_kill_aborts_on_no(mock_resolve: object, mock_terminate: object) -> None:
     """desk kill aborts when user declines confirmation."""
     mock_resolve.return_value = "i-abc123"
@@ -1021,7 +1021,7 @@ def test_desk_kill_aborts_on_no(mock_resolve: object, mock_terminate: object) ->
     mock_terminate.assert_not_called()
 
 
-@patch("desk.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.resolve_workstation")
 def test_desk_kill_not_found(mock_resolve: object) -> None:
     """desk kill with unknown name shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -1040,10 +1040,10 @@ def test_desk_start_help() -> None:
     assert "WORKSTATION" in output
 
 
-@patch("desk.commands.start.set_shutdown_tag")
-@patch("desk.commands.start.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
-@patch("desk.commands.start.start_instance")
-@patch("desk.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.set_shutdown_tag")
+@patch("desk_cli.commands.start.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
+@patch("desk_cli.commands.start.start_instance")
+@patch("desk_cli.commands.start.resolve_workstation")
 def test_desk_start_by_name(
     mock_resolve: object, mock_start: object, mock_compute: object, mock_set_tag: object
 ) -> None:
@@ -1060,10 +1060,10 @@ def test_desk_start_by_name(
     assert "Started" in result.output
 
 
-@patch("desk.commands.start.set_shutdown_tag")
-@patch("desk.commands.start.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
-@patch("desk.commands.start.start_instance")
-@patch("desk.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.set_shutdown_tag")
+@patch("desk_cli.commands.start.compute_shutdown_at", return_value="2026-02-07T20:00:00Z")
+@patch("desk_cli.commands.start.start_instance")
+@patch("desk_cli.commands.start.resolve_workstation")
 def test_desk_start_by_instance_id(
     mock_resolve: object, mock_start: object, mock_compute: object, mock_set_tag: object
 ) -> None:
@@ -1079,7 +1079,7 @@ def test_desk_start_by_instance_id(
     mock_start.assert_called_once_with("i-abc123", region=None, profile=None)
 
 
-@patch("desk.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.resolve_workstation")
 def test_desk_start_not_found(mock_resolve: object) -> None:
     """desk start with unknown name shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -1089,7 +1089,7 @@ def test_desk_start_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
-@patch("desk.commands.list_.list_workstations")
+@patch("desk_cli.commands.list_.list_workstations")
 def test_desk_list_table_output(mock_list: object) -> None:
     """desk list shows table of workstations."""
     from desk.aws import Workstation
@@ -1116,10 +1116,10 @@ def test_desk_run_help() -> None:
     assert "--follow" in output
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_sends_command(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1150,10 +1150,10 @@ def test_desk_run_sends_command(
     assert "Command is running" in result.output
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_follow_tails_output(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1203,10 +1203,10 @@ def test_desk_run_follow_tails_output(
     assert "completed successfully" in result.output
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_follow_shows_stderr(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1245,8 +1245,8 @@ def test_desk_run_follow_shows_stderr(
     assert "error output" in result.output
 
 
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_not_ssm_ready_no_wait(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1262,9 +1262,9 @@ def test_desk_run_not_ssm_ready_no_wait(
     assert "not SSM-ready" in result.output
 
 
-@patch("desk.commands.run.wait_for_ssm_ready")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.wait_for_ssm_ready")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_waits_for_ssm(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1283,7 +1283,7 @@ def test_desk_run_waits_for_ssm(
     assert "did not become SSM-ready" in result.output
 
 
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_workstation_not_found(mock_resolve: object) -> None:
     """desk run fails when workstation not found."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -1295,10 +1295,10 @@ def test_desk_run_workstation_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_immediate_completion(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1326,10 +1326,10 @@ def test_desk_run_immediate_completion(
     assert "done" in result.output
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_command_failure_exits_nonzero(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1357,10 +1357,10 @@ def test_desk_run_command_failure_exits_nonzero(
     assert "failed" in result.output.lower()
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_reads_local_script_file(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1398,10 +1398,10 @@ def test_desk_run_reads_local_script_file(
     assert "Reading script from" in result.output
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_inline_command_not_treated_as_file(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1433,10 +1433,10 @@ def test_desk_run_inline_command_not_treated_as_file(
     assert "Reading script from" not in result.output
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_as_user(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1468,10 +1468,10 @@ def test_desk_run_as_user(
     assert "whoami" in sent_script
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_as_user_with_quotes(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1503,10 +1503,10 @@ def test_desk_run_as_user_with_quotes(
     assert "hello world" in sent_script
 
 
-@patch("desk.commands.run.get_command_invocation")
-@patch("desk.commands.run.send_ssm_command")
-@patch("desk.commands.run.is_ssm_ready")
-@patch("desk.commands.run.resolve_workstation")
+@patch("desk_cli.commands.run.get_command_invocation")
+@patch("desk_cli.commands.run.send_ssm_command")
+@patch("desk_cli.commands.run.is_ssm_ready")
+@patch("desk_cli.commands.run.resolve_workstation")
 def test_desk_run_as_user_with_script_file(
     mock_resolve: object,
     mock_ssm_ready: object,
@@ -1554,12 +1554,12 @@ def test_desk_scp_help() -> None:
     assert "--recursive" in output or "-r" in output
 
 
-@patch("desk.commands.scp.add_temporary_ssh_key")
-@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
-@patch("desk.commands.scp.os.execvp")
-@patch("desk.commands.scp.is_ssm_ready")
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.add_temporary_ssh_key")
+@patch("desk_cli.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
+@patch("desk_cli.commands.scp.os.execvp")
+@patch("desk_cli.commands.scp.is_ssm_ready")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_upload(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -1590,12 +1590,12 @@ def test_desk_scp_upload(
     assert "ubuntu@i-abc123:~/remote.txt" in args
 
 
-@patch("desk.commands.scp.add_temporary_ssh_key")
-@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
-@patch("desk.commands.scp.os.execvp")
-@patch("desk.commands.scp.is_ssm_ready")
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.add_temporary_ssh_key")
+@patch("desk_cli.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
+@patch("desk_cli.commands.scp.os.execvp")
+@patch("desk_cli.commands.scp.is_ssm_ready")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_download(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -1623,12 +1623,12 @@ def test_desk_scp_download(
     assert "./local.txt" in args
 
 
-@patch("desk.commands.scp.add_temporary_ssh_key")
-@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
-@patch("desk.commands.scp.os.execvp")
-@patch("desk.commands.scp.is_ssm_ready")
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.add_temporary_ssh_key")
+@patch("desk_cli.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
+@patch("desk_cli.commands.scp.os.execvp")
+@patch("desk_cli.commands.scp.is_ssm_ready")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_with_workstation_prefix(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -1656,12 +1656,12 @@ def test_desk_scp_with_workstation_prefix(
     assert "./hosts" in args
 
 
-@patch("desk.commands.scp.add_temporary_ssh_key")
-@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
-@patch("desk.commands.scp.os.execvp")
-@patch("desk.commands.scp.is_ssm_ready")
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.add_temporary_ssh_key")
+@patch("desk_cli.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
+@patch("desk_cli.commands.scp.os.execvp")
+@patch("desk_cli.commands.scp.is_ssm_ready")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_recursive(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -1690,12 +1690,12 @@ def test_desk_scp_recursive(
     assert "-r" in args
 
 
-@patch("desk.commands.scp.add_temporary_ssh_key")
-@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
-@patch("desk.commands.scp.os.execvp")
-@patch("desk.commands.scp.is_ssm_ready")
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.add_temporary_ssh_key")
+@patch("desk_cli.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
+@patch("desk_cli.commands.scp.os.execvp")
+@patch("desk_cli.commands.scp.is_ssm_ready")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_with_custom_key(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -1724,7 +1724,7 @@ def test_desk_scp_with_custom_key(
     assert args[idx + 1] == str(key_file)
 
 
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_key_not_found(mock_get_default_key: object) -> None:
     """desk scp fails when default key file does not exist."""
     mock_get_default_key.return_value = "/nonexistent/my-key.pem"
@@ -1734,8 +1734,8 @@ def test_desk_scp_key_not_found(mock_get_default_key: object) -> None:
     assert "not found" in result.output
 
 
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_workstation_not_found(
     mock_get_default_key: object, mock_resolve: object, tmp_path
 ) -> None:
@@ -1751,12 +1751,12 @@ def test_desk_scp_workstation_not_found(
     assert "not found" in result.output
 
 
-@patch("desk.commands.scp.add_temporary_ssh_key")
-@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
-@patch("desk.commands.scp.is_ssm_ready")
-@patch("desk.commands.scp.os.execvp")
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.add_temporary_ssh_key")
+@patch("desk_cli.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
+@patch("desk_cli.commands.scp.is_ssm_ready")
+@patch("desk_cli.commands.scp.os.execvp")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_waits_for_ssm_then_proceeds(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -1781,12 +1781,12 @@ def test_desk_scp_waits_for_ssm_then_proceeds(
     mock_execvp.assert_called_once()
 
 
-@patch("desk.commands.scp.add_temporary_ssh_key")
-@patch("desk.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
-@patch("desk.commands.scp.os.execvp")
-@patch("desk.commands.scp.is_ssm_ready")
-@patch("desk.commands.scp.resolve_workstation")
-@patch("desk.commands.scp.get_default_private_key_path")
+@patch("desk_cli.commands.scp.add_temporary_ssh_key")
+@patch("desk_cli.commands.scp.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...")
+@patch("desk_cli.commands.scp.os.execvp")
+@patch("desk_cli.commands.scp.is_ssm_ready")
+@patch("desk_cli.commands.scp.resolve_workstation")
+@patch("desk_cli.commands.scp.get_default_private_key_path")
 def test_desk_scp_with_custom_user(
     mock_get_default_key: object,
     mock_resolve: object,
@@ -1816,7 +1816,7 @@ def test_desk_scp_with_custom_user(
 # ── shutdown / auto-stop tests ───────────────────────────────────────
 
 
-@patch("desk.commands.list_.list_workstations")
+@patch("desk_cli.commands.list_.list_workstations")
 def test_desk_list_shows_shutdown_column(mock_list: object) -> None:
     """desk list table includes a SHUTDOWN column."""
     from desk.aws import Workstation
@@ -1832,7 +1832,7 @@ def test_desk_list_shows_shutdown_column(mock_list: object) -> None:
     assert "in " in result.output
 
 
-@patch("desk.commands.list_.list_workstations")
+@patch("desk_cli.commands.list_.list_workstations")
 def test_desk_list_shutdown_overdue_shown(mock_list: object) -> None:
     """desk list shows OVERDUE for past shutdown times."""
     from desk.aws import Workstation
@@ -1846,7 +1846,7 @@ def test_desk_list_shutdown_overdue_shown(mock_list: object) -> None:
     assert "OVERDUE" in result.output
 
 
-@patch("desk.commands.list_.list_workstations")
+@patch("desk_cli.commands.list_.list_workstations")
 def test_desk_list_stopped_not_overdue(mock_list: object) -> None:
     """desk list does not show OVERDUE for stopped/stopping instances."""
     from desk.aws import Workstation
@@ -1861,7 +1861,7 @@ def test_desk_list_stopped_not_overdue(mock_list: object) -> None:
     assert "OVERDUE" not in result.output
 
 
-@patch("desk.commands.list_.list_workstations")
+@patch("desk_cli.commands.list_.list_workstations")
 def test_desk_list_no_shutdown_shows_dash(mock_list: object) -> None:
     """desk list shows '-' when no shutdown tag."""
     from desk.aws import Workstation
@@ -1875,7 +1875,7 @@ def test_desk_list_no_shutdown_shows_dash(mock_list: object) -> None:
     assert "SHUTDOWN" in result.output
 
 
-@patch("desk.commands.list_.list_workstations")
+@patch("desk_cli.commands.list_.list_workstations")
 def test_desk_list_plain_includes_shutdown(mock_list: object) -> None:
     """desk list --output plain includes shutdown info."""
     from desk.aws import Workstation
@@ -1889,10 +1889,10 @@ def test_desk_list_plain_includes_shutdown(mock_list: object) -> None:
     assert "in " in result.output
 
 
-@patch("desk.commands.start.set_shutdown_tag")
-@patch("desk.commands.start.compute_shutdown_at")
-@patch("desk.commands.start.start_instance")
-@patch("desk.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.set_shutdown_tag")
+@patch("desk_cli.commands.start.compute_shutdown_at")
+@patch("desk_cli.commands.start.start_instance")
+@patch("desk_cli.commands.start.resolve_workstation")
 def test_desk_start_sets_shutdown_tag(
     mock_resolve: object,
     mock_start: object,
@@ -1912,9 +1912,9 @@ def test_desk_start_sets_shutdown_tag(
     )
 
 
-@patch("desk.commands.start.set_shutdown_tag")
-@patch("desk.commands.start.start_instance")
-@patch("desk.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.set_shutdown_tag")
+@patch("desk_cli.commands.start.start_instance")
+@patch("desk_cli.commands.start.resolve_workstation")
 def test_desk_start_custom_shutdown_hours(
     mock_resolve: object,
     mock_start: object,
@@ -1930,9 +1930,9 @@ def test_desk_start_custom_shutdown_hours(
     # The compute_shutdown_at call was made with 8.0 (tested indirectly)
 
 
-@patch("desk.commands.start.set_shutdown_tag")
-@patch("desk.commands.start.start_instance")
-@patch("desk.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.set_shutdown_tag")
+@patch("desk_cli.commands.start.start_instance")
+@patch("desk_cli.commands.start.resolve_workstation")
 def test_desk_start_shutdown_zero_skips_tag(
     mock_resolve: object,
     mock_start: object,
@@ -1947,12 +1947,12 @@ def test_desk_start_shutdown_zero_skips_tag(
     mock_set_tag.assert_not_called()
 
 
-@patch("desk.commands.create.set_shutdown_tag")
-@patch("desk.commands.create.compute_shutdown_at")
-@patch("desk.commands.create.run_instance")
-@patch("desk.commands.create.get_latest_ubuntu_ami")
-@patch("desk.commands.create.get_desk_vpc_outputs")
-@patch("desk.commands.create.list_workstations")
+@patch("desk_cli.commands.create.set_shutdown_tag")
+@patch("desk_cli.commands.create.compute_shutdown_at")
+@patch("desk_cli.commands.create.run_instance")
+@patch("desk_cli.commands.create.get_latest_ubuntu_ami")
+@patch("desk_cli.commands.create.get_desk_vpc_outputs")
+@patch("desk_cli.commands.create.list_workstations")
 def test_desk_create_sets_shutdown_tag(
     mock_list_workstations: object,
     mock_vpc: object,
@@ -1981,11 +1981,11 @@ def test_desk_create_sets_shutdown_tag(
     )
 
 
-@patch("desk.commands.create.set_shutdown_tag")
-@patch("desk.commands.create.run_instance")
-@patch("desk.commands.create.get_latest_ubuntu_ami")
-@patch("desk.commands.create.get_desk_vpc_outputs")
-@patch("desk.commands.create.list_workstations")
+@patch("desk_cli.commands.create.set_shutdown_tag")
+@patch("desk_cli.commands.create.run_instance")
+@patch("desk_cli.commands.create.get_latest_ubuntu_ami")
+@patch("desk_cli.commands.create.get_desk_vpc_outputs")
+@patch("desk_cli.commands.create.list_workstations")
 def test_desk_create_shutdown_zero_skips_tag(
     mock_list_workstations: object,
     mock_vpc: object,
@@ -2020,9 +2020,9 @@ def test_desk_auto_stop_help() -> None:
     assert "--clear" in output
 
 
-@patch("desk.commands.auto_stop.set_shutdown_tag")
-@patch("desk.commands.auto_stop.compute_shutdown_at")
-@patch("desk.commands.auto_stop.resolve_workstation")
+@patch("desk_cli.commands.auto_stop.set_shutdown_tag")
+@patch("desk_cli.commands.auto_stop.compute_shutdown_at")
+@patch("desk_cli.commands.auto_stop.resolve_workstation")
 def test_desk_auto_stop_sets_shutdown(
     mock_resolve: object,
     mock_compute: object,
@@ -2043,9 +2043,9 @@ def test_desk_auto_stop_sets_shutdown(
     assert "Auto-stop set to" in result.output
 
 
-@patch("desk.commands.auto_stop.set_shutdown_tag")
-@patch("desk.commands.auto_stop.compute_shutdown_at")
-@patch("desk.commands.auto_stop.resolve_workstation")
+@patch("desk_cli.commands.auto_stop.set_shutdown_tag")
+@patch("desk_cli.commands.auto_stop.compute_shutdown_at")
+@patch("desk_cli.commands.auto_stop.resolve_workstation")
 def test_desk_auto_stop_with_minutes(
     mock_resolve: object,
     mock_compute: object,
@@ -2062,9 +2062,9 @@ def test_desk_auto_stop_with_minutes(
     mock_set_tag.assert_called_once()
 
 
-@patch("desk.commands.auto_stop.set_shutdown_tag")
-@patch("desk.commands.auto_stop.compute_shutdown_at")
-@patch("desk.commands.auto_stop.resolve_workstation")
+@patch("desk_cli.commands.auto_stop.set_shutdown_tag")
+@patch("desk_cli.commands.auto_stop.compute_shutdown_at")
+@patch("desk_cli.commands.auto_stop.resolve_workstation")
 def test_desk_auto_stop_with_hours_and_minutes(
     mock_resolve: object,
     mock_compute: object,
@@ -2081,9 +2081,9 @@ def test_desk_auto_stop_with_hours_and_minutes(
     mock_set_tag.assert_called_once()
 
 
-@patch("desk.commands.auto_stop.set_shutdown_tag")
-@patch("desk.commands.auto_stop.compute_shutdown_at")
-@patch("desk.commands.auto_stop.resolve_workstation")
+@patch("desk_cli.commands.auto_stop.set_shutdown_tag")
+@patch("desk_cli.commands.auto_stop.compute_shutdown_at")
+@patch("desk_cli.commands.auto_stop.resolve_workstation")
 def test_desk_auto_stop_defaults(
     mock_resolve: object,
     mock_compute: object,
@@ -2101,8 +2101,8 @@ def test_desk_auto_stop_defaults(
     mock_set_tag.assert_called_once()
 
 
-@patch("desk.commands.auto_stop.clear_shutdown_tag")
-@patch("desk.commands.auto_stop.resolve_workstation")
+@patch("desk_cli.commands.auto_stop.clear_shutdown_tag")
+@patch("desk_cli.commands.auto_stop.resolve_workstation")
 def test_desk_auto_stop_clear(
     mock_resolve: object,
     mock_clear_tag: object,
@@ -2117,7 +2117,7 @@ def test_desk_auto_stop_clear(
     assert "cleared" in result.output.lower()
 
 
-@patch("desk.commands.auto_stop.resolve_workstation")
+@patch("desk_cli.commands.auto_stop.resolve_workstation")
 def test_desk_auto_stop_workstation_not_found(mock_resolve: object) -> None:
     """desk auto-stop with unknown workstation shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -2127,13 +2127,13 @@ def test_desk_auto_stop_workstation_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
-@patch("desk.commands.up.get_default_private_key_path", return_value="/some/key")
-@patch("desk.commands.up.tab.tab_up")
-@patch("desk.commands.up.set_shutdown_tag")
-@patch("desk.commands.up.compute_shutdown_at")
-@patch("desk.commands.up.start_instance")
-@patch("desk.commands.up.list_workstations")
-@patch("desk.commands.up.resolve_workstation")
+@patch("desk_cli.commands.up.get_default_private_key_path", return_value="/some/key")
+@patch("desk_cli.commands.up.tab.tab_up")
+@patch("desk_cli.commands.up.set_shutdown_tag")
+@patch("desk_cli.commands.up.compute_shutdown_at")
+@patch("desk_cli.commands.up.start_instance")
+@patch("desk_cli.commands.up.list_workstations")
+@patch("desk_cli.commands.up.resolve_workstation")
 def test_desk_up_sets_shutdown_tag_on_start(
     mock_resolve: object,
     mock_list: object,
@@ -2237,7 +2237,7 @@ def test_desk_reap_help() -> None:
     assert "--dry-run" in output
 
 
-@patch("desk.commands.reap.reap_overdue")
+@patch("desk_cli.commands.reap.reap_overdue")
 def test_desk_reap_stops_overdue(mock_reap: object) -> None:
     """desk reap stops instances whose shutdown time is in the past."""
     from desk.aws import Workstation
@@ -2253,7 +2253,7 @@ def test_desk_reap_stops_overdue(mock_reap: object) -> None:
     assert "i-overdue" in result.output
 
 
-@patch("desk.commands.reap.reap_overdue")
+@patch("desk_cli.commands.reap.reap_overdue")
 def test_desk_reap_dry_run(mock_reap: object) -> None:
     """desk reap --dry-run shows what would be stopped without stopping."""
     from desk.aws import Workstation
@@ -2269,7 +2269,7 @@ def test_desk_reap_dry_run(mock_reap: object) -> None:
     assert "would be stopped" in result.output
 
 
-@patch("desk.commands.reap.reap_overdue")
+@patch("desk_cli.commands.reap.reap_overdue")
 def test_desk_reap_none_overdue(mock_reap: object) -> None:
     """desk reap with no overdue instances reports nothing to do."""
     mock_reap.return_value = []
@@ -2279,7 +2279,7 @@ def test_desk_reap_none_overdue(mock_reap: object) -> None:
     assert "No overdue workstations" in result.output
 
 
-@patch("desk.commands.reap.reap_overdue")
+@patch("desk_cli.commands.reap.reap_overdue")
 def test_desk_reap_skips_no_tag(mock_reap: object) -> None:
     """desk reap skips instances without a shutdown tag."""
     mock_reap.return_value = []
@@ -2289,7 +2289,7 @@ def test_desk_reap_skips_no_tag(mock_reap: object) -> None:
     assert "No overdue workstations" in result.output
 
 
-@patch("desk.commands.reap.reap_overdue")
+@patch("desk_cli.commands.reap.reap_overdue")
 def test_desk_reap_stops_multiple(mock_reap: object) -> None:
     """desk reap stops all overdue instances."""
     from desk.aws import Workstation
@@ -2320,28 +2320,25 @@ def test_desk_tab_help() -> None:
     assert "screen" in output.lower()
 
 
-@patch("desk.commands.tab.os.execvp")
-@patch("desk.commands.tab.get_connection_argv")
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.os.execvp")
+@patch("desk_cli.commands.tab.get_connection_argv")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_connect_calls_connection_with_screen(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm_ready: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
     mock_get_argv: object,
     mock_execvp: object,
 ) -> None:
     """desk tab connect runs screen -ls via SSM, then builds SSH argv with screen -x."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {"stdout": "  12345.foo-tab\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
-    )()
+    mock_run_remote.return_value = ("  12345.foo-tab\t(Detached)\n", "", "Success", 0)
     mock_get_argv.return_value = ["ssh", "-o", "ProxyCommand=...", "ubuntu@i-abc123", "screen -x '12345.foo-tab'"]
     mock_execvp.side_effect = OSError(2, "No such file")
 
@@ -2356,28 +2353,25 @@ def test_desk_tab_connect_calls_connection_with_screen(
     mock_execvp.assert_called_once_with("ssh", mock_get_argv.return_value)
 
 
-@patch("desk.commands.tab.os.execvp")
-@patch("desk.commands.tab.get_connection_argv")
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.os.execvp")
+@patch("desk_cli.commands.tab.get_connection_argv")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_connect_with_session_uses_session_id(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm_ready: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
     mock_get_argv: object,
     mock_execvp: object,
 ) -> None:
     """desk tab connect with full session id passes that id to screen -x."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {"stdout": "  16691.desk-main\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
-    )()
+    mock_run_remote.return_value = ("  16691.desk-main\t(Detached)\n", "", "Success", 0)
     mock_get_argv.return_value = ["ssh", "ubuntu@i-abc123", "screen -x '16691.desk-main'"]
     mock_execvp.side_effect = OSError(2, "No such file")
 
@@ -2391,28 +2385,21 @@ def test_desk_tab_connect_with_session_uses_session_id(
     assert "16691.desk-main" in call_kw["remote_command"]
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.wait_for_ssm_ready")
-@patch("desk.commands.tab.resolve_workstation")
-@patch("desk.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.wait_for_ssm_ready")
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_list_no_session(
     _mock_profile: object,
     _mock_region: object,
     mock_resolve: object,
     mock_wait: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """desk tab list shows message when no screen session exists."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {"stdout": "No Sockets found in /run/screen.", "stderr": "", "status": "Success", "exit_code": 0},
-    )()
+    mock_run_remote.return_value = ("No Sockets found in /run/screen.", "", "Success", 0)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["tab", "list", "main"])
@@ -2422,24 +2409,21 @@ def test_desk_tab_list_no_session(
     assert "desk tab create main" in result.output
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_connect_fails_when_no_session(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm_ready: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """desk tab connect with no session raises when no screen sessions on workstation."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {"stdout": "No Sockets found in /run/screen.\n", "stderr": "", "status": "Success", "exit_code": 0},
-    )()
+    mock_run_remote.return_value = ("No Sockets found in /run/screen.\n", "", "Success", 0)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["tab", "connect", "main"])
@@ -2449,33 +2433,27 @@ def test_desk_tab_connect_fails_when_no_session(
     assert "desk tab create main" in result.output
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_list_shows_session_and_windows(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """desk tab list shows one row per window with cwd and command."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    # Two windows: 0 bash, 1 vim (session_id, state, win_idx, win_title, cwd, cmd)
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {
-            "stdout": (
-                "12345.desk-main\x01(Detached)\x010\x01bash\x01/home/ubuntu\x01bash\n"
-                "12345.desk-main\x01(Detached)\x011\x01vim\x01/home/ubuntu/proj\x01vim\n"
-            ),
-            "stderr": "",
-            "status": "Success",
-            "exit_code": 0,
-        },
-    )()
+    mock_run_remote.return_value = (
+        "12345.desk-main\x01(Detached)\x010\x01bash\x01/home/ubuntu\x01bash\n"
+        "12345.desk-main\x01(Detached)\x011\x01vim\x01/home/ubuntu/proj\x01vim\n",
+        "",
+        "Success",
+        0,
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["tab", "list", "main", "--windows"])
@@ -2488,30 +2466,26 @@ def test_desk_tab_list_shows_session_and_windows(
     assert "├─" in result.output and "└─" in result.output
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_list_default_no_winlist_call(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """desk tab list runs list-with-details script, one row per window."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    # List script output: session_id, state, win_idx, win_title, cwd, cmd (sep \x01)
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {
-            "stdout": "12345.desk-main\x01(Detached)\x010\x01bash\x01/home/ubuntu\x01bash\n",
-            "stderr": "",
-            "status": "Success",
-            "exit_code": 0,
-        },
-    )()
+    mock_run_remote.return_value = (
+        "12345.desk-main\x01(Detached)\x010\x01bash\x01/home/ubuntu\x01bash\n",
+        "",
+        "Success",
+        0,
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["tab", "list", "main"])
@@ -2521,38 +2495,32 @@ def test_desk_tab_list_default_no_winlist_call(
     assert "/home/ubuntu" in result.output
     assert "bash" in result.output
     assert "└─" in result.output or "├─" in result.output
-    assert mock_send.call_count == 1
+    assert mock_run_remote.call_count == 1
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_list_tree_two_levels_one_line_per_window(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """Tab list shows 2-level tree; window info (idx, title, cwd, cmd) on one line.
     Matches structure from real screen -ls and screen -S ID -Q windows (e.g. 0*&$ bash  1-$ bash).
     """
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    # Simulate output from remote script for one session, two windows (like screen -Q windows)
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {
-            "stdout": (
-                "1084.desk-main\x01(02/22/26 19:56:26)\t(Attached)\x010\x01bash\x01/home/ubuntu\x01bash\n"
-                "1084.desk-main\x01(02/22/26 19:56:26)\t(Attached)\x011\x01bash\x01/home/ubuntu/proj\x01bash\n"
-            ),
-            "stderr": "",
-            "status": "Success",
-            "exit_code": 0,
-        },
-    )()
+    mock_run_remote.return_value = (
+        "1084.desk-main\x01(02/22/26 19:56:26)\t(Attached)\x010\x01bash\x01/home/ubuntu\x01bash\n"
+        "1084.desk-main\x01(02/22/26 19:56:26)\t(Attached)\x011\x01bash\x01/home/ubuntu/proj\x01bash\n",
+        "",
+        "Success",
+        0,
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["tab", "list", "main"])
@@ -2569,35 +2537,30 @@ def test_desk_tab_list_tree_two_levels_one_line_per_window(
     assert "/home/ubuntu" in result.output and "/home/ubuntu/proj" in result.output
 
 
-@patch("desk.commands.tab.shutil.get_terminal_size")
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.shutil.get_terminal_size")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
     mock_get_terminal_size: object,
 ) -> None:
     """Command column gets enough space so '.tox/py/bin/desk tab list main' is not truncated."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
     mock_get_terminal_size.return_value = type("Size", (), {"columns": 80, "lines": 24})()
     cmd_text = ".tox/py/bin/desk tab list main"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {
-            "stdout": (
-                f"1084.desk-main\x01(Attached)\x011\x01-\x01/home/ubuntu/tasks/fix-tabs/desk\x01{cmd_text}\n"
-            ),
-            "stderr": "",
-            "status": "Success",
-            "exit_code": 0,
-        },
-    )()
+    mock_run_remote.return_value = (
+        f"1084.desk-main\x01(Attached)\x011\x01-\x01/home/ubuntu/tasks/fix-tabs/desk\x01{cmd_text}\n",
+        "",
+        "Success",
+        0,
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["tab", "list", "main"])
@@ -2606,34 +2569,26 @@ def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
     assert cmd_text in result.output, f"Expected {cmd_text!r} to appear in full in output"
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
-@patch("desk.commands.tab._new_session_name", return_value="abc123")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.new_session_name", return_value="abc123")
 def test_desk_tab_create_success(
     mock_new_session: object,
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """desk tab create runs remote screen command and reports success with connect hint."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
     # First call: create success; second: screen -ls with session so we suggest full id
-    mock_get_inv.side_effect = [
-        type("Result", (), {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0})(),
-        type(
-            "Result",
-            (),
-            {
-                "stdout": "  18426.abc123\t(Detached)\n",
-                "stderr": "",
-                "status": "Success",
-                "exit_code": 0,
-            },
-        )(),
+    mock_run_remote.side_effect = [
+        ("", "", "Success", 0),
+        ("  18426.abc123\t(Detached)\n", "", "Success", 0),
     ]
 
     runner = CliRunner()
@@ -2642,31 +2597,31 @@ def test_desk_tab_create_success(
     assert result.exit_code == 0
     assert "Session created: abc123" in result.output
     assert "desk tab connect main 18426.abc123" in result.output
-    assert mock_send.call_count == 2
+    assert mock_run_remote.call_count == 2
     # Without name, session uses short auto-generated name (hex, no prefix); first call is create
-    create_cmd = mock_send.call_args_list[0][0][1]
+    create_cmd = mock_run_remote.call_args_list[0][0][1]
     match = re.search(r"screen -dmS ([a-f0-9]+) ", create_cmd)
     assert match, "session name should be short hex (no prefix)"
     assert match.group(1) == "abc123"
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_create_with_optional_name(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """desk tab create with NAME uses that as the session name (no prefix)."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    # Create + screen -ls (two _run_remote_command calls)
-    mock_get_inv.side_effect = [
-        type("Result", (), {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0})(),
-        type("Result", (), {"stdout": "  9999.my-tab\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0})(),
+    mock_run_remote.side_effect = [
+        ("", "", "Success", 0),
+        ("  9999.my-tab\t(Detached)\n", "", "Success", 0),
     ]
 
     runner = CliRunner()
@@ -2674,32 +2629,29 @@ def test_desk_tab_create_with_optional_name(
 
     assert result.exit_code == 0
     assert "Session created" in result.output
-    create_cmd = mock_send.call_args_list[0][0][1]
+    create_cmd = mock_run_remote.call_args_list[0][0][1]
     assert "screen -dmS my-tab " in create_cmd
 
 
-@patch("desk.commands.tab.os.execvp")
-@patch("desk.commands.tab.get_connection_argv")
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.os.execvp")
+@patch("desk_cli.commands.tab.get_connection_argv")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_up_connects_when_session_exists(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm_ready: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
     mock_get_argv: object,
     mock_execvp: object,
 ) -> None:
     """desk tab up with existing session connects without creating."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {"stdout": "  12345.foo-tab\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
-    )()
+    mock_run_remote.return_value = ("  12345.foo-tab\t(Detached)\n", "", "Success", 0)
     mock_get_argv.return_value = ["ssh", "ubuntu@i-abc123", "screen -x '12345.foo-tab'"]
     mock_execvp.side_effect = OSError(2, "No such file")
 
@@ -2712,41 +2664,33 @@ def test_desk_tab_up_connects_when_session_exists(
     assert "12345.foo-tab" in call_kw["remote_command"]
     mock_execvp.assert_called_once_with("ssh", mock_get_argv.return_value)
     # Only screen -ls, no create
-    assert mock_send.call_count == 1
+    assert mock_run_remote.call_count == 1
 
 
-@patch("desk.commands.tab.os.execvp")
-@patch("desk.commands.tab.get_connection_argv")
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
-@patch("desk.commands.tab._new_session_name", return_value="abc123")
+@patch("desk_cli.commands.tab.os.execvp")
+@patch("desk_cli.commands.tab.get_connection_argv")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.new_session_name", return_value="abc123")
 def test_desk_tab_up_creates_then_connects_when_no_session(
     mock_new_session: object,
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm_ready: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
     mock_get_argv: object,
     mock_execvp: object,
 ) -> None:
     """desk tab up with no sessions creates one then connects."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    # First: screen -ls (no sockets); second: create; third: screen -ls (new session)
-    mock_get_inv.side_effect = [
-        type(
-            "Result",
-            (),
-            {"stdout": "No Sockets found in /run/screen.\n", "stderr": "", "status": "Success", "exit_code": 0},
-        )(),
-        type("Result", (), {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0})(),
-        type(
-            "Result",
-            (),
-            {"stdout": "  18426.abc123\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
-        )(),
+    mock_run_remote.side_effect = [
+        ("No Sockets found in /run/screen.\n", "", "Success", 0),
+        ("", "", "Success", 0),
+        ("  18426.abc123\t(Detached)\n", "", "Success", 0),
     ]
     mock_get_argv.return_value = ["ssh", "ubuntu@i-abc123", "screen -x '18426.abc123'"]
     mock_execvp.side_effect = OSError(2, "No such file")
@@ -2755,35 +2699,32 @@ def test_desk_tab_up_creates_then_connects_when_no_session(
     result = runner.invoke(cli, ["tab", "up", "main"])
 
     assert result.exit_code == 127
-    assert mock_send.call_count == 3  # screen -ls, create, screen -ls after create
-    create_cmd = mock_send.call_args_list[1][0][1]
+    assert mock_run_remote.call_count == 3  # screen -ls, create, screen -ls after create
+    create_cmd = mock_run_remote.call_args_list[1][0][1]
     assert "screen -dmS abc123 " in create_cmd
     mock_get_argv.assert_called_once()
     assert "18426.abc123" in mock_get_argv.call_args[1]["remote_command"]
 
 
-@patch("desk.commands.tab.os.execvp")
-@patch("desk.commands.tab.get_connection_argv")
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.os.execvp")
+@patch("desk_cli.commands.tab.get_connection_argv")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_up_with_tab_name_connects_to_matching(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm_ready: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
     mock_get_argv: object,
     mock_execvp: object,
 ) -> None:
     """desk tab up WORKSTATION TAB_NAME uses existing session when name matches."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    mock_get_inv.return_value = type(
-        "Result",
-        (),
-        {"stdout": "  9999.my-tab\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
-    )()
+    mock_run_remote.return_value = ("  9999.my-tab\t(Detached)\n", "", "Success", 0)
     mock_get_argv.return_value = ["ssh", "ubuntu@i-abc123", "screen -x '9999.my-tab'"]
     mock_execvp.side_effect = OSError(2, "No such file")
 
@@ -2793,39 +2734,31 @@ def test_desk_tab_up_with_tab_name_connects_to_matching(
     assert result.exit_code == 127
     mock_get_argv.assert_called_once()
     assert "9999.my-tab" in mock_get_argv.call_args[1]["remote_command"]
-    assert mock_send.call_count == 1
+    assert mock_run_remote.call_count == 1
 
 
-@patch("desk.commands.tab.os.execvp")
-@patch("desk.commands.tab.get_connection_argv")
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.os.execvp")
+@patch("desk_cli.commands.tab.get_connection_argv")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_up_with_tab_name_creates_when_no_match(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm_ready: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
     mock_get_argv: object,
     mock_execvp: object,
 ) -> None:
     """desk tab up WORKSTATION TAB_NAME creates session when no matching name."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    # First: screen -ls (other session only); second: create; third: screen -ls (my-tab)
-    mock_get_inv.side_effect = [
-        type(
-            "Result",
-            (),
-            {"stdout": "  1111.other\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
-        )(),
-        type("Result", (), {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0})(),
-        type(
-            "Result",
-            (),
-            {"stdout": "  1111.other\t(Detached)\n  2222.my-tab\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0},
-        )(),
+    mock_run_remote.side_effect = [
+        ("  1111.other\t(Detached)\n", "", "Success", 0),
+        ("", "", "Success", 0),
+        ("  1111.other\t(Detached)\n  2222.my-tab\t(Detached)\n", "", "Success", 0),
     ]
     mock_get_argv.return_value = ["ssh", "ubuntu@i-abc123", "screen -x '2222.my-tab'"]
     mock_execvp.side_effect = OSError(2, "No such file")
@@ -2834,8 +2767,8 @@ def test_desk_tab_up_with_tab_name_creates_when_no_match(
     result = runner.invoke(cli, ["tab", "up", "main", "my-tab"])
 
     assert result.exit_code == 127
-    assert mock_send.call_count == 3  # screen -ls, create, screen -ls after create
-    create_cmd = mock_send.call_args_list[1][0][1]
+    assert mock_run_remote.call_count == 3  # screen -ls, create, screen -ls after create
+    create_cmd = mock_run_remote.call_args_list[1][0][1]
     assert "screen -dmS my-tab " in create_cmd
     assert "2222.my-tab" in mock_get_argv.call_args[1]["remote_command"]
 
@@ -2850,23 +2783,23 @@ def test_desk_tab_up_help() -> None:
     assert "TAB_NAME" in output
 
 
-@patch("desk.commands.tab.get_command_invocation")
-@patch("desk.commands.tab.send_ssm_command")
-@patch("desk.commands.tab.is_ssm_ready", return_value=True)
-@patch("desk.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.run_remote_command")
+@patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.tab.resolve_workstation")
+@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
+@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
 def test_desk_tab_close_success(
+    _mock_profile: object,
+    _mock_region: object,
     mock_resolve: object,
     mock_ssm: object,
-    mock_send: object,
-    mock_get_inv: object,
+    mock_run_remote: object,
 ) -> None:
     """desk tab close runs remote screen quit and reports success."""
     mock_resolve.return_value = "i-abc123"
-    mock_send.return_value = "cmd-1"
-    # First call: screen -ls (validate session); second: screen -X quit
-    mock_get_inv.side_effect = [
-        type("Result", (), {"stdout": "12345.foo-tab\t(Detached)\n", "stderr": "", "status": "Success", "exit_code": 0})(),
-        type("Result", (), {"stdout": "", "stderr": "", "status": "Success", "exit_code": 0})(),
+    mock_run_remote.side_effect = [
+        ("12345.foo-tab\t(Detached)\n", "", "Success", 0),
+        ("", "", "Success", 0),
     ]
 
     runner = CliRunner()
@@ -2874,4 +2807,4 @@ def test_desk_tab_close_success(
 
     assert result.exit_code == 0
     assert "Session 12345.foo-tab closed" in result.output
-    assert mock_send.call_count == 2
+    assert mock_run_remote.call_count == 2

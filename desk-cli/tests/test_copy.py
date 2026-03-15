@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from desk.commands.copy import (
+from desk_cli.commands.copy import (
     Location,
     LocationKind,
     parse_location,
@@ -99,13 +99,13 @@ def test_reject_workstation_to_workstation() -> None:
     _reject_workstation_to_workstation(a, Location(LocationKind.LOCAL, "./b"))
 
 
-@patch("desk.commands.copy.get_desk_copy_bucket", return_value="desk-123-us-east-1-copy")
-@patch("desk.commands.copy.parse_location")
+@patch("desk_cli.commands.copy.get_desk_copy_bucket", return_value="desk-123-us-east-1-copy")
+@patch("desk_cli.commands.copy.parse_location")
 def test_copy_help(parse_mock: object, _bucket_mock: object) -> None:
     """desk copy --help shows location types."""
     from click.testing import CliRunner
 
-    from desk.cli import cli
+    from desk_cli.cli import cli
 
     runner = CliRunner()
     result = runner.invoke(cli, ["copy", "--help"])
@@ -116,15 +116,17 @@ def test_copy_help(parse_mock: object, _bucket_mock: object) -> None:
     assert "Local" in out or "local" in out
 
 
-@patch("desk.commands.copy.get_desk_copy_bucket", return_value="desk-123-us-east-1-copy")
-@patch("desk.commands.copy._copy_local_s3")
+@patch("desk.config.get_default_region", return_value="us-east-1")
+@patch("desk.config.get_default_profile", return_value=None)
+@patch("desk_cli.commands.copy.get_desk_copy_bucket", return_value="desk-123-us-east-1-copy")
+@patch("desk_cli.commands.copy._copy_local_s3")
 def test_copy_local_to_s3_invoked(
-    mock_copy: object, mock_bucket: object
+    mock_copy: object, mock_bucket: object, _mock_profile: object, _mock_region: object
 ) -> None:
     """desk copy ./file s3:/key invokes _copy_local_s3."""
     from click.testing import CliRunner
 
-    from desk.cli import cli
+    from desk_cli.cli import cli
 
     runner = CliRunner()
     result = runner.invoke(cli, ["copy", "./file", "s3:/key"])
@@ -141,7 +143,7 @@ def test_copy_local_to_local_rejected() -> None:
     """desk copy ./a ./b fails with clear message."""
     from click.testing import CliRunner
 
-    from desk.cli import cli
+    from desk_cli.cli import cli
 
     runner = CliRunner()
     result = runner.invoke(cli, ["copy", "./a", "./b"])
@@ -155,10 +157,10 @@ def test_copy_workstation_to_workstation_rejected() -> None:
 
     from click.testing import CliRunner
 
-    from desk.cli import cli
+    from desk_cli.cli import cli
 
     runner = CliRunner()
-    with patch("desk.commands.copy.resolve_workstation") as mock_resolve:
+    with patch("desk_cli.commands.copy.resolve_workstation") as mock_resolve:
         mock_resolve.side_effect = AssertionError("should not resolve")
         result = runner.invoke(cli, ["copy", "main:/a", "dev:/b"])
     assert result.exit_code != 0
@@ -186,7 +188,7 @@ def test_copy_local_to_workstation_rejected() -> None:
     """desk copy ./a main:/b fails (one end must be S3)."""
     from click.testing import CliRunner
 
-    from desk.cli import cli
+    from desk_cli.cli import cli
 
     runner = CliRunner()
     result = runner.invoke(cli, ["copy", "./a", "main:/b"])
