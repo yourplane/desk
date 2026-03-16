@@ -572,16 +572,6 @@ mv authorized_keys~ authorized_keys
     )
 
 
-@dataclass
-class AmiInfo:
-    """Information about an AMI."""
-
-    image_id: str
-    name: str
-    state: str
-    source_instance_id: str | None = None
-
-
 def create_ami(
     instance_id: str,
     name: str,
