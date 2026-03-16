@@ -218,21 +218,6 @@ Resources:
           return { statusCode: 302, statusDescription: 'Found', headers: { location: { value: loginUrl } } };
         }
 
-  # ---- CloudFront: forward Authorization to API origin ----
-  ApiOriginRequestPolicy:
-    Type: AWS::CloudFront::OriginRequestPolicy
-    Properties:
-      OriginRequestPolicyConfig:
-        Name: !Sub "${AWS::StackName}-api-origin-request"
-        Comment: Forward Authorization header to API Gateway for JWT
-        HeadersConfig:
-          HeaderBehavior: whitelist
-          Headers: [Authorization]
-        CookiesConfig:
-          CookieBehavior: none
-        QueryStringsConfig:
-          QueryStringBehavior: none
-
   # ---- CloudFront ----
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -273,7 +258,7 @@ Resources:
             CachedMethods: [GET, HEAD]
             Compress: true
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
         ViewerCertificate:
           CloudFrontDefaultCertificate: true
         WebACLId: !GetAtt WafRule.Arn
