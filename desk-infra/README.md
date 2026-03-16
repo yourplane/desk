@@ -34,25 +34,37 @@ The template provides:
 
 The reaper runs every 10 minutes and stops workstations past their `desk:shutdown-at` time.
 
-Run these commands from the **repo root** (the directory that contains `desk-infra/`). The build script and `sam` deploy must be run from the correct directory; `--template-file` is required so SAM deploys the reaper template (not the control template).
+Run these commands from the **repo root** (the directory that contains `desk-infra/`). Use **`--build-in-source`** so the reaper Makefile finds `../../desk-sdk`; a plain `sam build` from `desk-infra` would run in a scratch dir without desk-sdk. Use `--template-file` so SAM deploys the reaper template (not the control template). For first-time deploy you may need `--resolve-s3` (or `--guided`) so SAM can upload the artifact to S3.
 
 First-time deploy (guided setup):
 
 ```bash
-./desk-infra/build.sh
 cd desk-infra
-sam build --template desk-reaper.yaml
-sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM
+sam build --build-in-source --template desk-reaper.yaml
+sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM --resolve-s3
 ```
 
 On subsequent deploys (after the guided config is saved to `samconfig.toml`):
 
 ```bash
-# From repo root
-./desk-infra/build.sh
 cd desk-infra
-sam build --template desk-reaper.yaml
-sam deploy --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM
+sam build --build-in-source --template desk-reaper.yaml
+sam deploy --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM --resolve-s3
+```
+
+**Invoke and test:**
+
+```bash
+aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-reaper --payload '{}' --region us-east-1 out.json && cat out.json
+```
+
+Response: `{"stopped": []}` when no workstations are overdue, or `{"stopped": [{"instance_id": "...", "name": "...", "shutdown_at": "..."}]}` when some were stopped.
+
+**CloudWatch logs:** Log group `/aws/lambda/desk-reaper`. List recent streams and get events:
+
+```bash
+aws logs describe-log-streams --log-group-name /aws/lambda/desk-reaper --order-by LastEventTime --descending --max-items 1 --region us-east-1
+aws logs get-log-events --log-group-name /aws/lambda/desk-reaper --log-stream-name "<stream-name>" --region us-east-1
 ```
 
 ### 3. Control plane Lambda
