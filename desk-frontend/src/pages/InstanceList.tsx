@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { listInstances, startInstance, stopInstance, type Instance } from '../api/client'
-import { logout } from '../auth'
+import { isAuthEnabled, logout } from '../auth'
 
 function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: string; relative: string } {
   if (!isoUtc || state === 'stopped' || state === 'stopping' || state === 'terminated' || state === 'shutting-down') {
@@ -95,10 +95,21 @@ export function InstanceList() {
     }
   }
 
+  const pageHeader = (
+    <div className="page-header">
+      <h1 className="page-title">Workstations</h1>
+      {isAuthEnabled() && (
+        <button type="button" className="btn btn-secondary" onClick={() => logout()}>
+          Log out
+        </button>
+      )}
+    </div>
+  )
+
   if (loading) {
     return (
       <div className="instance-list">
-        <h1 className="page-title">Workstations</h1>
+        {pageHeader}
         <p className="loading">Loading instances…</p>
       </div>
     )
@@ -108,7 +119,7 @@ export function InstanceList() {
     const isAuthError = /session expired|invalid|log in again/i.test(error)
     return (
       <div className="instance-list">
-        <h1 className="page-title">Workstations</h1>
+        {pageHeader}
         <p className="error-message" role="alert">{error}</p>
         {isAuthError && (
           <button type="button" className="btn btn-start" onClick={() => logout()}>
@@ -121,7 +132,7 @@ export function InstanceList() {
 
   return (
     <div className="instance-list">
-      <h1 className="page-title">Workstations</h1>
+      {pageHeader}
       <div className="table-wrap">
         <table className="instances-table">
           <thead>
