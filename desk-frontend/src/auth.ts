@@ -14,6 +14,7 @@ const CONFIG = {
 const TOKEN_KEY = 'desk_id_token'
 const COOKIE_NAME = 'desk_token'
 const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
+const PKCE_VERIFIER_COOKIE = 'desk_pkce_verifier'
 
 export function isAuthEnabled(): boolean {
   return !!(CONFIG.userPoolId && CONFIG.clientId && CONFIG.domain && CONFIG.redirectUri)
@@ -37,6 +38,19 @@ function clearToken(): void {
   sessionStorage.removeItem(TOKEN_KEY)
   sessionStorage.removeItem(PKCE_VERIFIER_KEY)
   document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
+  document.cookie = `${PKCE_VERIFIER_COOKIE}=; path=/; max-age=0`
+}
+
+function getPkceVerifier(): string | null {
+  const fromStorage = sessionStorage.getItem(PKCE_VERIFIER_KEY)
+  if (fromStorage) return fromStorage
+  const match = document.cookie.match(new RegExp('(^| )' + PKCE_VERIFIER_COOKIE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]+)'))
+  return match ? decodeURIComponent(match[2]!) : null
+}
+
+function clearPkceVerifier(): void {
+  sessionStorage.removeItem(PKCE_VERIFIER_KEY)
+  document.cookie = `${PKCE_VERIFIER_COOKIE}=; path=/; max-age=0`
 }
 
 /** Redirect to Cognito hosted UI if auth is enabled and no token. Call once at app load. */
@@ -52,6 +66,8 @@ export async function goToLogin(): Promise<void> {
   const verifier = randomString(43)
   const challenge = await sha256Base64Url(verifier)
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier)
+  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `${PKCE_VERIFIER_COOKIE}=${encodeURIComponent(verifier)}; path=/; max-age=600; SameSite=Lax${secure}`
   const base = `https://${CONFIG.domain}.auth.${import.meta.env.VITE_COGNITO_REGION || 'us-east-1'}.amazoncognito.com`
   const params = new URLSearchParams({
     client_id: CONFIG.clientId!,
@@ -69,7 +85,7 @@ export async function handleCallback(): Promise<boolean> {
   if (!isAuthEnabled()) return true
   const params = new URLSearchParams(window.location.search)
   const code = params.get('code')
-  const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY)
+  const verifier = getPkceVerifier()
   if (!code || !verifier) return false
   const region = import.meta.env.VITE_COGNITO_REGION || 'us-east-1'
   const base = `https://${CONFIG.domain}.auth.${region}.amazoncognito.com`
@@ -90,7 +106,7 @@ export async function handleCallback(): Promise<boolean> {
   const idToken = data.id_token
   if (!idToken) return false
   setToken(idToken)
-  sessionStorage.removeItem(PKCE_VERIFIER_KEY)
+  clearPkceVerifier()
   return true
 }
 
