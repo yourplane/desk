@@ -203,6 +203,8 @@ Resources:
           var request = event.request;
           var uri = request.uri || '';
           if (uri.indexOf('/api') === 0) return request;
+          if (uri.indexOf('/assets/') === 0) return request;
+          if (/\.(css|js|svg|ico|woff2?|ttf|eot|png|jpg|jpeg|gif|webp)(\?|$)/i.test(uri)) return request;
           var qs = request.querystring || {};
           if (qs.code && qs.code.value) return request;
           var cookies = request.cookies || {};
