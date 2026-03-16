@@ -9,6 +9,7 @@ from desk.aws import (
     resolve_workstation,
     start_instance,
     stop_instance,
+    terminate_instance,
 )
 from desk.config import get_default_profile, get_default_region
 
@@ -67,4 +68,25 @@ def stop_instance_by_name(name: str):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     stop_instance(instance_id, region=region, profile=profile)
+    return {"instance_id": instance_id}
+
+
+@router.post("/instances/{name}/kill")
+def kill_instance_by_name(name: str):
+    """Permanently terminate a workstation by name or instance ID."""
+    region, profile = _region_profile()
+    try:
+        instance_id = resolve_workstation(
+            name,
+            region=region,
+            profile=profile,
+            states=["pending", "running", "stopping", "stopped"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    try:
+        terminate_instance(instance_id, region=region, profile=profile)
+    except Exception as e:
+        logger.exception("terminate_instance failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
     return {"instance_id": instance_id}

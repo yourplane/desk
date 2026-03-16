@@ -131,3 +131,12 @@
 .btn-stop:not(:disabled):hover {
   background: var(--danger-hover);
 }
+
+.btn-kill {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn-kill:not(:disabled):hover {
+  background: var(--danger-hover);
+}

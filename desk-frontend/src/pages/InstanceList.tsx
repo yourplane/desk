@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listInstances, startInstance, stopInstance, type Instance } from '../api/client'
+import { listInstances, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
 import { logout } from '../auth'
 
 function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: string; relative: string } {
@@ -95,6 +95,20 @@ export function InstanceList() {
     }
   }
 
+  const onKill = async (name: string) => {
+    if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
+    setActing(name)
+    setError(null)
+    try {
+      await killInstance(name)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className="instance-list">
@@ -178,6 +192,16 @@ export function InstanceList() {
                         onClick={() => onStop(inst.name || inst.instance_id)}
                       >
                         {acting === (inst.name || inst.instance_id) ? '…' : 'Stop'}
+                      </button>
+                    )}
+                    {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
+                      <button
+                        type="button"
+                        className="btn btn-kill"
+                        disabled={acting !== null}
+                        onClick={() => onKill(inst.name || inst.instance_id)}
+                      >
+                        {acting === (inst.name || inst.instance_id) ? '…' : 'Kill'}
                       </button>
                     )}
                   </td>
