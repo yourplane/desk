@@ -1,0 +1,15 @@
+# Login and auth flow
+
+## Overview
+
+1. User opens the app (CloudFront URL). CloudFront viewer-request function checks for `desk_token` cookie; if missing, redirects to Cognito hosted UI.
+2. User signs in at Cognito; Cognito redirects back to the app with `?code=...`.
+3. Frontend runs `handleCallback()`: reads `code` and PKCE `code_verifier` (from sessionStorage or cookie), POSTs to Cognito `/oauth2/token`, receives `id_token`, stores it in sessionStorage and `desk_token` cookie.
+4. App shows workstations list and calls `GET /api/instances` with header `Authorization: Bearer <id_token>`.
+5. Request hits CloudFront → API Gateway (HTTP API). Origin Request Policy forwards `Authorization` to the origin. JWT authorizer validates token (issuer = Cognito User Pool URL, audience = app client ID). If valid, request reaches Lambda; if not, 401.
+
+## Important details
+
+- **Callback URL**: Must match exactly in Cognito app client and in the frontend build (`VITE_COGNITO_REDIRECT_URI`). Deploy script sets this from stack output when building the frontend.
+- **PKCE verifier**: Stored in sessionStorage and a short-lived cookie when redirecting to login so it survives the redirect back (e.g. same or new tab).
+- **API Gateway JWT**: Issuer = `https://cognito-idp.<region>.amazonaws.com/<UserPoolId>`, Audience = app client ID. The `id_token` from Cognito must have matching `iss` and `aud` claims.

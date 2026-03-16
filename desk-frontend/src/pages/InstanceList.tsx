@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { listInstances, startInstance, stopInstance, type Instance } from '../api/client'
+import { logout } from '../auth'
 
 function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: string; relative: string } {
   if (!isoUtc || state === 'stopped' || state === 'stopping' || state === 'terminated' || state === 'shutting-down') {
@@ -52,7 +53,13 @@ export function InstanceList() {
       const list = await listInstances()
       setInstances(list)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!msg.trim()) {
+        setError('Unable to load workstations. Check the browser console or API logs.')
+      } else {
+        setError(msg)
+      }
+      console.error('InstanceList load failed:', e)
     } finally {
       setLoading(false)
     }
@@ -98,10 +105,16 @@ export function InstanceList() {
   }
 
   if (error) {
+    const isAuthError = /session expired|invalid|log in again/i.test(error)
     return (
       <div className="instance-list">
         <h1 className="page-title">Workstations</h1>
-        <p className="error-message">{error}</p>
+        <p className="error-message" role="alert">{error}</p>
+        {isAuthError && (
+          <button type="button" className="btn btn-start" onClick={() => logout()}>
+            Log in again
+          </button>
+        )}
       </div>
     )
   }
