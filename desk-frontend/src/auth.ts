@@ -43,12 +43,12 @@ function clearToken(): void {
 export function ensureAuth(): boolean {
   if (!isAuthEnabled()) return true
   if (getToken()) return true
-  redirectToLogin()
+  goToLogin()
   return false
 }
 
-/** Build Cognito hosted UI login URL (authorization code + PKCE). */
-async function redirectToLogin(): Promise<void> {
+/** Navigate to Cognito hosted UI login (e.g. after sign-in failure or no session). */
+export async function goToLogin(): Promise<void> {
   const verifier = randomString(43)
   const challenge = await sha256Base64Url(verifier)
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier)
