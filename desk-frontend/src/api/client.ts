@@ -66,3 +66,31 @@ export async function stopInstance(name: string): Promise<{ instance_id: string 
   }
   return res.json()
 }
+
+export type SetAutoStopResult =
+  | { instance_id: string; shutdown_at: string }
+  | { instance_id: string; shutdown_cleared: true }
+
+export async function setAutoStop(
+  name: string,
+  options: { duration?: string; clear?: boolean }
+): Promise<SetAutoStopResult> {
+  const body = options.clear ? { clear: true } : { duration: options.duration ?? '4h' }
+  const res = await fetch(`/api/instances/${encodeURIComponent(name)}/auto-stop`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}

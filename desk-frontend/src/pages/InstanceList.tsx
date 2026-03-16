@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react'
-import { listInstances, startInstance, stopInstance, type Instance } from '../api/client'
+import { useEffect, useRef, useState } from 'react'
+import { listInstances, setAutoStop, startInstance, stopInstance, type Instance } from '../api/client'
 import { logout } from '../auth'
+
+const AUTO_STOP_PRESETS = [
+  { label: '30m', value: '30m' },
+  { label: '2h', value: '2h' },
+  { label: '4h', value: '4h' },
+  { label: '8h', value: '8h' },
+] as const
 
 function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: string; relative: string } {
   if (!isoUtc || state === 'stopped' || state === 'stopping' || state === 'terminated' || state === 'shutting-down') {
@@ -45,6 +52,8 @@ export function InstanceList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [acting, setActing] = useState<string | null>(null)
+  const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
+  const autoStopMenuRef = useRef<HTMLDivElement>(null)
 
   const load = async () => {
     setLoading(true)
@@ -94,6 +103,58 @@ export function InstanceList() {
       setActing(null)
     }
   }
+
+  const onSetAutoStop = async (name: string, duration: string) => {
+    setActing(name)
+    setError(null)
+    setOpenAutoStopFor(null)
+    try {
+      await setAutoStop(name, { duration })
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
+  const onClearAutoStop = async (name: string) => {
+    setActing(name)
+    setError(null)
+    setOpenAutoStopFor(null)
+    try {
+      await setAutoStop(name, { clear: true })
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
+  const onPlus2h = async (name: string) => {
+    setActing(name)
+    setError(null)
+    try {
+      await setAutoStop(name, { duration: '2h' })
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
+  useEffect(() => {
+    if (openAutoStopFor === null) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (autoStopMenuRef.current && !autoStopMenuRef.current.contains(e.target as Node)) {
+        setOpenAutoStopFor(null)
+      }
+    }
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [openAutoStopFor])
 
   if (loading) {
     return (
@@ -149,13 +210,72 @@ export function InstanceList() {
                   <td className="shutdown">
                     {(() => {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
-                      return relative ? (
-                        <span className="shutdown-cell">
-                          <span className="shutdown-absolute">{absolute}</span>
-                          <span className="shutdown-relative">{relative}</span>
-                        </span>
-                      ) : (
-                        absolute
+                      const isRunningOrPending = inst.state === 'running' || inst.state === 'pending'
+                      const nameOrId = inst.name || inst.instance_id
+                      const menuOpen = openAutoStopFor === nameOrId
+                      const busy = acting !== null
+                      if (!isRunningOrPending) {
+                        return relative ? (
+                          <span className="shutdown-cell">
+                            <span className="shutdown-absolute">{absolute}</span>
+                            <span className="shutdown-relative">{relative}</span>
+                          </span>
+                        ) : (
+                          absolute
+                        )
+                      }
+                      return (
+                        <div className="shutdown-cell shutdown-cell--editable" ref={menuOpen ? autoStopMenuRef : undefined}>
+                          <button
+                            type="button"
+                            className="shutdown-clickable"
+                            disabled={busy}
+                            onClick={() => setOpenAutoStopFor((prev) => (prev === nameOrId ? null : nameOrId))}
+                            title="Set auto-stop time"
+                          >
+                            {relative ? (
+                              <>
+                                <span className="shutdown-absolute">{absolute}</span>
+                                <span className="shutdown-relative">{relative}</span>
+                              </>
+                            ) : (
+                              absolute
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-plus2h"
+                            disabled={busy}
+                            onClick={() => onPlus2h(nameOrId)}
+                            title="Set auto-stop to 2 hours from now"
+                          >
+                            +2h
+                          </button>
+                          {menuOpen && (
+                            <div className="shutdown-menu" role="menu">
+                              <div className="shutdown-menu-title">Set auto-stop</div>
+                              {AUTO_STOP_PRESETS.map(({ label, value }) => (
+                                <button
+                                  key={value}
+                                  type="button"
+                                  role="menuitem"
+                                  className="shutdown-menu-item"
+                                  onClick={() => onSetAutoStop(nameOrId, value)}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="shutdown-menu-item shutdown-menu-item--clear"
+                                onClick={() => onClearAutoStop(nameOrId)}
+                              >
+                                Clear auto-stop
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )
                     })()}
                   </td>
