@@ -21,7 +21,7 @@ function errorMessage(res: Response, text: string): string {
 }
 
 export async function listInstances(): Promise<Instance[]> {
-  const res = await fetch('/api/instances', { headers: authHeaders() })
+  const res = await fetch('/api/workstations', { headers: authHeaders() })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(errorMessage(res, text))
@@ -29,8 +29,8 @@ export async function listInstances(): Promise<Instance[]> {
   return res.json()
 }
 
-export async function startInstance(name: string): Promise<{ instance_id: string }> {
-  const res = await fetch(`/api/instances/${encodeURIComponent(name)}/start`, {
+export async function startInstance(name: string): Promise<{ instance_id: string; shutdown_at?: string | null }> {
+  const res = await fetch(`/api/workstations/${encodeURIComponent(name)}/start`, {
     method: 'POST',
     headers: authHeaders(),
   })
@@ -49,7 +49,7 @@ export async function startInstance(name: string): Promise<{ instance_id: string
 }
 
 export async function stopInstance(name: string): Promise<{ instance_id: string }> {
-  const res = await fetch(`/api/instances/${encodeURIComponent(name)}/stop`, {
+  const res = await fetch(`/api/workstations/${encodeURIComponent(name)}/stop`, {
     method: 'POST',
     headers: authHeaders(),
   })
