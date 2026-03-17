@@ -177,7 +177,7 @@ def get_latest_ami_by_name_prefix(
     return images[0]["ImageId"]
 
 
-def run_instance(
+def _run_instance(
     *,
     ami_id: str,
     instance_type: str,
@@ -189,7 +189,7 @@ def run_instance(
     region: str | None = None,
     profile: str | None = None,
 ) -> str:
-    """Launch an EC2 instance and return its instance ID."""
+    """Launch an EC2 instance and return its instance ID. Internal; use run_workstation for auto-stop."""
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
@@ -229,9 +229,38 @@ def run_instance(
         run_kw["KeyName"] = key_name
 
     response = ec2.run_instances(**run_kw)
+    return response["Instances"][0]["InstanceId"]
 
-    instance_id = response["Instances"][0]["InstanceId"]
-    return instance_id
+
+def run_workstation(
+    *,
+    ami_id: str,
+    instance_type: str,
+    subnet_id: str,
+    security_group_ids: list[str],
+    iam_instance_profile_name: str,
+    name: str,
+    shutdown_after: str,
+    key_name: str | None = None,
+    region: str | None = None,
+    profile: str | None = None,
+) -> tuple[str, str | None]:
+    """Create a workstation: launch instance and set auto-stop. Returns (instance_id, shutdown_at or None)."""
+    instance_id = _run_instance(
+        ami_id=ami_id,
+        instance_type=instance_type,
+        subnet_id=subnet_id,
+        security_group_ids=security_group_ids,
+        iam_instance_profile_name=iam_instance_profile_name,
+        name=name,
+        key_name=key_name,
+        region=region,
+        profile=profile,
+    )
+    shutdown_at = _maybe_set_shutdown_tag(
+        instance_id, shutdown_after=shutdown_after, region=region, profile=profile
+    )
+    return (instance_id, shutdown_at)
 
 
 @dataclass
@@ -437,16 +466,30 @@ def stop_instance(
     return instance_id
 
 
-def start_instance(
+def _start_instance(
     instance_id: str,
     region: str | None = None,
     profile: str | None = None,
 ) -> str:
-    """Start a stopped EC2 instance. Returns the instance ID."""
+    """Start a stopped EC2 instance. Returns the instance ID. Internal; use start_workstation for auto-stop."""
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
     ec2.start_instances(InstanceIds=[instance_id])
     return instance_id
+
+
+def start_workstation(
+    instance_id: str,
+    shutdown_after: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> tuple[str, str | None]:
+    """Start a workstation: start instance and set auto-stop. Returns (instance_id, shutdown_at or None)."""
+    _start_instance(instance_id, region=region, profile=profile)
+    shutdown_at = _maybe_set_shutdown_tag(
+        instance_id, shutdown_after=shutdown_after, region=region, profile=profile
+    )
+    return (instance_id, shutdown_at)
 
 
 def terminate_instance(
@@ -827,6 +870,23 @@ def clear_shutdown_tag(
         Tags=[{"Key": TAG_SHUTDOWN_AT}],
     )
     log.debug("clear_shutdown_tag instance_id=%s", instance_id)
+
+
+def _maybe_set_shutdown_tag(
+    instance_id: str,
+    *,
+    shutdown_after: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Set or clear desk:shutdown-at from shutdown_after duration. Returns shutdown_at if set, else None."""
+    hours = parse_duration(shutdown_after)
+    if hours > 0:
+        shutdown_at = compute_shutdown_at(hours)
+        set_shutdown_tag(instance_id, shutdown_at, region=region, profile=profile)
+        return shutdown_at
+    clear_shutdown_tag(instance_id, region=region, profile=profile)
+    return None
 
 
 def reap_overdue(

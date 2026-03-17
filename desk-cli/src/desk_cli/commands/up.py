@@ -8,13 +8,10 @@ import time
 import click
 
 from desk.aws import (
-    compute_shutdown_at,
     get_instance_state,
     list_workstations,
-    parse_duration,
     resolve_workstation,
-    set_shutdown_tag,
-    start_instance,
+    start_workstation,
 )
 from desk_cli.commands import create, tab
 from desk.config import get_default_profile, get_default_region
@@ -156,11 +153,12 @@ def up(
                         f"Timeout waiting for {instance_id} to stop. Try again later."
                     )
             click.echo(f"Starting {instance_id}...")
-            start_instance(instance_id, region=region, profile=profile)
-            shutdown_hours = parse_duration(shutdown_after)
-            if shutdown_hours > 0:
-                shutdown_time = compute_shutdown_at(shutdown_hours)
-                set_shutdown_tag(instance_id, shutdown_time, region=region, profile=profile)
+            start_workstation(
+                instance_id,
+                shutdown_after=shutdown_after,
+                region=region,
+                profile=profile,
+            )
             click.secho("Started.", fg="green")
         else:
             # No existing workstation at all, create it
