@@ -6,7 +6,7 @@ import os
 
 import click
 
-from desk.aws import compute_shutdown_at, parse_duration, resolve_workstation, set_shutdown_tag, start_instance
+from desk.aws import resolve_workstation, start_workstation
 from desk.config import get_default_profile, get_default_region
 
 
@@ -58,11 +58,10 @@ def start(
         raise click.UsageError(str(e)) from e
 
     click.echo(f"Starting {instance_id}...")
-    start_instance(instance_id, region=region, profile=profile)
-
-    shutdown_hours = parse_duration(shutdown_after)
-    if shutdown_hours > 0:
-        shutdown_time = compute_shutdown_at(shutdown_hours)
-        set_shutdown_tag(instance_id, shutdown_time, region=region, profile=profile)
-
+    start_workstation(
+        instance_id,
+        shutdown_after=shutdown_after,
+        region=region,
+        profile=profile,
+    )
     click.secho("Started.", fg="green")
