@@ -11,6 +11,18 @@
   padding: 1.5rem 1.75rem;
 }
 
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.page-header .page-title {
+  margin: 0;
+}
+
 .page-title {
   margin: 0 0 1.25rem;
   font-size: 1.5rem;
@@ -137,6 +149,17 @@
 
 .btn-stop:not(:disabled):hover {
   background: var(--danger-hover);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:not(:disabled):hover {
+  background: var(--bg);
+  color: var(--text);
 }
 
 .build-info {
