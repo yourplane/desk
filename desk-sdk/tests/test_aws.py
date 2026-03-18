@@ -24,8 +24,8 @@ from desk.aws import (
     list_ec2_key_pairs,
     list_workstations,
     resolve_workstation,
-    run_instance,
-    start_instance,
+    run_workstation,
+    start_workstation,
     stop_instance,
     terminate_instance,
 )
@@ -197,25 +197,28 @@ def test_get_latest_ami_by_name_prefix_none_found(mock_session: MagicMock) -> No
 
 
 @patch("desk.aws.boto3.Session")
-def test_run_instance_success(mock_session: MagicMock) -> None:
-    """run_instance returns instance ID."""
+def test_run_workstation_success(mock_session: MagicMock) -> None:
+    """run_workstation launches instance and sets shutdown tag; returns (instance_id, shutdown_at)."""
     mock_ec2 = MagicMock()
     mock_ec2.run_instances.return_value = {
         "Instances": [{"InstanceId": "i-abc123"}],
     }
     mock_session.return_value.client.return_value = mock_ec2
 
-    result = run_instance(
+    instance_id, shutdown_at = run_workstation(
         ami_id="ami-123",
         instance_type="t3.medium",
         subnet_id="subnet-a",
         security_group_ids=["sg-456"],
         iam_instance_profile_name="desk-profile",
         name="my-workstation",
+        shutdown_after="4h",
         key_name=None,
     )
 
-    assert result == "i-abc123"
+    assert instance_id == "i-abc123"
+    assert shutdown_at is not None
+    assert "T" in shutdown_at and "Z" in shutdown_at
     mock_ec2.run_instances.assert_called_once()
     call_kw = mock_ec2.run_instances.call_args[1]
     assert call_kw["ImageId"] == "ami-123"
@@ -227,6 +230,7 @@ def test_run_instance_success(mock_session: MagicMock) -> None:
     assert bdm[0]["Ebs"]["VolumeSize"] == 32
     assert bdm[0]["Ebs"]["VolumeType"] == "gp3"
     assert bdm[0]["Ebs"]["DeleteOnTermination"] is True
+    mock_ec2.create_tags.assert_called_once()
 
 
 def test_resolve_workstation_by_id() -> None:
@@ -462,15 +466,18 @@ def test_stop_instance_success(mock_session: MagicMock) -> None:
 
 
 @patch("desk.aws.boto3.Session")
-def test_start_instance_success(mock_session: MagicMock) -> None:
-    """start_instance calls start_instances and returns instance ID."""
+def test_start_workstation_success(mock_session: MagicMock) -> None:
+    """start_workstation starts instance and sets shutdown tag; returns (instance_id, shutdown_at)."""
     mock_ec2 = MagicMock()
     mock_session.return_value.client.return_value = mock_ec2
 
-    result = start_instance("i-abc123")
+    instance_id, shutdown_at = start_workstation("i-abc123", "4h")
 
-    assert result == "i-abc123"
+    assert instance_id == "i-abc123"
+    assert shutdown_at is not None
+    assert "T" in shutdown_at and "Z" in shutdown_at
     mock_ec2.start_instances.assert_called_once_with(InstanceIds=["i-abc123"])
+    mock_ec2.create_tags.assert_called_once()
 
 
 def test_resolve_workstation_by_name_with_stopped_states() -> None:

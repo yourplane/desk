@@ -119,25 +119,18 @@ def _run_command(argv: list, region: str | None, profile: str | None):
         return {"workstations": [asdict(w) for w in workstations]}
 
     if cmd == "start":
-        from desk.aws import (
-            compute_shutdown_at,
-            parse_duration,
-            resolve_workstation,
-            set_shutdown_tag,
-            start_instance,
-        )
+        from desk.aws import resolve_workstation, start_workstation
         from desk.config import get_default_profile, get_default_region
         if not args:
             raise ValueError("start requires workstation name or instance ID")
         r = region or get_default_region()
         p = profile or get_default_profile()
         instance_id = resolve_workstation(args[0], region=r, profile=p, states=["stopped"])
-        start_instance(instance_id, region=r, profile=p)
         shutdown_after = _opt(args, "--shutdown") or "4h"
-        hours = parse_duration(shutdown_after)
-        if hours > 0:
-            shutdown_at = compute_shutdown_at(hours)
-            set_shutdown_tag(instance_id, shutdown_at, region=r, profile=p)
+        instance_id, shutdown_at = start_workstation(
+            instance_id, shutdown_after=shutdown_after, region=r, profile=p
+        )
+        if shutdown_at is not None:
             return {"instance_id": instance_id, "shutdown_at": shutdown_at}
         return {"instance_id": instance_id}
 
@@ -229,14 +222,11 @@ def _run_command(argv: list, region: str | None, profile: str | None):
 
     if cmd == "create":
         from desk.aws import (
-            compute_shutdown_at,
             get_desk_vpc_outputs,
             get_latest_ami_by_name_prefix,
             get_latest_ubuntu_ami,
             list_workstations,
-            parse_duration,
-            run_instance,
-            set_shutdown_tag,
+            run_workstation,
         )
         from desk.config import get_default_ami_prefix, get_default_profile, get_default_region
         if not args:
@@ -255,32 +245,23 @@ def _run_command(argv: list, region: str | None, profile: str | None):
                    else get_latest_ubuntu_ami(region=r, profile=p))
         instance_type = _opt(args, "--instance-type") or "t3.medium"
         shutdown_after = _opt(args, "--shutdown") or "4h"
-        instance_id = run_instance(
+        instance_id, shutdown_at = run_workstation(
             ami_id=ami,
             instance_type=instance_type,
             subnet_id=vpc.private_subnet_ids[0],
             security_group_ids=[vpc.security_group_id],
             iam_instance_profile_name=vpc.instance_profile_name,
             name=name,
+            shutdown_after=shutdown_after,
             region=r,
             profile=p,
         )
-        hours = parse_duration(shutdown_after)
-        if hours > 0:
-            shutdown_at = compute_shutdown_at(hours)
-            set_shutdown_tag(instance_id, shutdown_at, region=r, profile=p)
+        if shutdown_at is not None:
             return {"instance_id": instance_id, "name": name, "shutdown_at": shutdown_at}
         return {"instance_id": instance_id, "name": name}
 
     if cmd == "up":
-        from desk.aws import (
-            compute_shutdown_at,
-            list_workstations,
-            parse_duration,
-            resolve_workstation,
-            set_shutdown_tag,
-            start_instance,
-        )
+        from desk.aws import list_workstations, start_workstation
         from desk.config import get_default_profile, get_default_region
         if not args:
             raise ValueError("up requires workstation name")
@@ -294,14 +275,13 @@ def _run_command(argv: list, region: str | None, profile: str | None):
             if w.state in ("running", "pending"):
                 return {"instance_id": w.instance_id, "name": w.name, "state": w.state}
             if w.state == "stopped":
-                start_instance(w.instance_id, region=r, profile=p)
                 shutdown_after = _opt(args, "--shutdown") or "4h"
-                hours = parse_duration(shutdown_after)
-                if hours > 0:
-                    shutdown_at = compute_shutdown_at(hours)
-                    set_shutdown_tag(w.instance_id, shutdown_at, region=r, profile=p)
-                    return {"instance_id": w.instance_id, "name": w.name, "started": True, "shutdown_at": shutdown_at}
-                return {"instance_id": w.instance_id, "name": w.name, "started": True}
+                instance_id, shutdown_at = start_workstation(
+                    w.instance_id, shutdown_after=shutdown_after, region=r, profile=p
+                )
+                if shutdown_at is not None:
+                    return {"instance_id": instance_id, "name": w.name, "started": True, "shutdown_at": shutdown_at}
+                return {"instance_id": instance_id, "name": w.name, "started": True}
             if w.state in ("stopping", "shutting-down"):
                 raise ValueError(f"Workstation '{name}' is {w.state}; wait and try again.")
         # No existing or only terminated: create
