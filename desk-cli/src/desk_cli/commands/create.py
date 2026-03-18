@@ -6,14 +6,11 @@ import click
 
 from desk.aws import (
     DeskVpcOutputs,
-    compute_shutdown_at,
     get_desk_vpc_outputs,
     get_latest_ami_by_name_prefix,
     get_latest_ubuntu_ami,
     list_workstations,
-    parse_duration,
-    run_instance,
-    set_shutdown_tag,
+    run_workstation,
 )
 from desk.config import get_default_ami_prefix, get_default_profile, get_default_region
 
@@ -119,22 +116,18 @@ def create(
     subnet_id = vpc_outputs.private_subnet_ids[0]
 
     click.echo(f"Launching instance '{workstation}' ({instance_type})...")
-    instance_id = run_instance(
+    instance_id, _ = run_workstation(
         ami_id=ami,
         instance_type=instance_type,
         subnet_id=subnet_id,
         security_group_ids=[vpc_outputs.security_group_id],
         iam_instance_profile_name=vpc_outputs.instance_profile_name,
         name=workstation,
+        shutdown_after=shutdown_after,
         key_name=None,
         region=region,
         profile=profile,
     )
-
-    shutdown_hours = parse_duration(shutdown_after)
-    if shutdown_hours > 0:
-        shutdown_time = compute_shutdown_at(shutdown_hours)
-        set_shutdown_tag(instance_id, shutdown_time, region=region, profile=profile)
 
     click.echo()
     click.secho("Workstation created successfully!", fg="green", bold=True)

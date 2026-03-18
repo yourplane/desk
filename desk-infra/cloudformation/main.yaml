@@ -72,6 +72,8 @@ Resources:
                 - ec2:DescribeTags
                 - ec2:StartInstances
                 - ec2:StopInstances
+                - ec2:CreateTags
+                - ec2:DeleteTags
               Resource: "*"
             - Effect: Allow
               Action: cloudformation:DescribeStacks

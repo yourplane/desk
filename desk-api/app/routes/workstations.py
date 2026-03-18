@@ -1,4 +1,4 @@
-"""Instance management routes. All EC2 logic lives in desk-sdk."""
+"""Workstation management routes. All EC2 logic lives in desk-sdk."""
 
 import logging
 
@@ -7,31 +7,31 @@ from fastapi import APIRouter, HTTPException
 from desk.aws import (
     list_workstations,
     resolve_workstation,
-    start_instance,
+    start_workstation,
     stop_instance,
     terminate_instance,
 )
 from desk.config import get_default_profile, get_default_region
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["instances"])
+router = APIRouter(tags=["workstations"])
 
 
 def _region_profile():
     return get_default_region(), get_default_profile()
 
 
-@router.get("/instances")
-def list_instances():
-    """List workstation instances (tagged Type=workstation)."""
+@router.get("/workstations")
+def list_workstations_route():
+    """List workstations (EC2 instances tagged Type=workstation)."""
     region, profile = _region_profile()
-    logger.info("list_instances: region=%s profile=%s", region, profile)
+    logger.info("list_workstations: region=%s profile=%s", region, profile)
     try:
         workstations = list_workstations(region=region, profile=profile)
     except Exception as e:
         logger.exception("list_workstations failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
-    logger.info("list_instances: returning %d workstations", len(workstations))
+    logger.info("list_workstations: returning %d workstations", len(workstations))
     return [
         {
             "instance_id": w.instance_id,
@@ -43,9 +43,9 @@ def list_instances():
     ]
 
 
-@router.post("/instances/{name}/start")
-def start_instance_by_name(name: str):
-    """Start a stopped workstation by name or instance ID."""
+@router.post("/workstations/{name}/start")
+def start_workstation_by_name(name: str):
+    """Start a stopped workstation by name or instance ID. Sets auto-stop to 4 hours."""
     region, profile = _region_profile()
     try:
         instance_id = resolve_workstation(
@@ -53,12 +53,14 @@ def start_instance_by_name(name: str):
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    start_instance(instance_id, region=region, profile=profile)
-    return {"instance_id": instance_id}
+    instance_id, shutdown_at = start_workstation(
+        instance_id, shutdown_after="4h", region=region, profile=profile
+    )
+    return {"instance_id": instance_id, "shutdown_at": shutdown_at}
 
 
-@router.post("/instances/{name}/stop")
-def stop_instance_by_name(name: str):
+@router.post("/workstations/{name}/stop")
+def stop_workstation_by_name(name: str):
     """Stop a running workstation by name or instance ID."""
     region, profile = _region_profile()
     try:

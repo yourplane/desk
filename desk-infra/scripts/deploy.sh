@@ -15,6 +15,10 @@ CLOUDFORMATION_DIR="$INFRA_DIR/cloudformation"
 
 echo "==> Stack: $STACK_NAME, Repo root: $REPO_ROOT"
 
+# Build metadata for frontend (displayed in UI)
+export VITE_BUILD_AT=$(date +"%b %d, %Y %H:%M %Z")
+export VITE_BUILD_SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)
+
 # 0. Get stack outputs for frontend build (Cognito config)
 _get() { aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
 if _get FrontendBucketName >/dev/null 2>&1; then
