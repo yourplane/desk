@@ -73,7 +73,7 @@ def stop_workstation_by_name(name: str):
     return {"instance_id": instance_id}
 
 
-@router.post("/instances/{name}/kill")
+@router.post("/workstations/{name}/kill")
 def kill_instance_by_name(name: str):
     """Permanently terminate a workstation by name or instance ID."""
     region, profile = _region_profile()

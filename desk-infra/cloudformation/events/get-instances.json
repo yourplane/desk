@@ -1,13 +1,13 @@
 {
   "version": "2.0",
   "routeKey": "ANY /api/{proxy+}",
-  "rawPath": "/api/instances",
+  "rawPath": "/api/workstations",
   "rawQueryString": "",
   "headers": {},
   "requestContext": {
     "http": {
       "method": "GET",
-      "path": "/api/instances",
+      "path": "/api/workstations",
       "protocol": "HTTP/1.1",
       "sourceIp": "127.0.0.1"
     }
