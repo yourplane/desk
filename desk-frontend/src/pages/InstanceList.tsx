@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { listInstances, startInstance, stopInstance, type Instance } from '../api/client'
 import { logout } from '../auth'
 
-const POLL_INTERVAL_MS = 30_000
+const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
 
 function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: string; relative: string } {
@@ -113,7 +113,7 @@ export function InstanceList() {
     setError(null)
     try {
       await startInstance(name)
-      await load()
+      await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -126,7 +126,7 @@ export function InstanceList() {
     setError(null)
     try {
       await stopInstance(name)
-      await load()
+      await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
