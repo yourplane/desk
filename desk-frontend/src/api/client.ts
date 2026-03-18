@@ -1,4 +1,4 @@
-import { getToken } from '../auth'
+import { getToken, refreshIdToken } from '../auth'
 
 export interface Instance {
   instance_id: string
@@ -13,6 +13,25 @@ function authHeaders(): HeadersInit {
   return {}
 }
 
+function buildHeaders(existing?: HeadersInit): Headers {
+  const h = new Headers(existing)
+  const auth = authHeaders() as any
+  if (auth?.Authorization) h.set('Authorization', auth.Authorization)
+  else h.delete('Authorization')
+  return h
+}
+
+async function fetchWithAuthRetry(url: string, init: RequestInit): Promise<Response> {
+  let res = await fetch(url, { ...init, headers: buildHeaders(init.headers) })
+  if (res.status !== 401) return res
+
+  const refreshed = await refreshIdToken()
+  if (!refreshed) return res
+
+  res = await fetch(url, { ...init, headers: buildHeaders(init.headers) })
+  return res
+}
+
 function errorMessage(res: Response, text: string): string {
   if (res.status === 401) {
     return 'Session expired or invalid. Please log in again.'
@@ -21,7 +40,7 @@ function errorMessage(res: Response, text: string): string {
 }
 
 export async function listInstances(): Promise<Instance[]> {
-  const res = await fetch('/api/workstations', { headers: authHeaders() })
+  const res = await fetchWithAuthRetry('/api/workstations', { headers: authHeaders() })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(errorMessage(res, text))
@@ -30,7 +49,7 @@ export async function listInstances(): Promise<Instance[]> {
 }
 
 export async function startInstance(name: string): Promise<{ instance_id: string; shutdown_at?: string | null }> {
-  const res = await fetch(`/api/workstations/${encodeURIComponent(name)}/start`, {
+  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/start`, {
     method: 'POST',
     headers: authHeaders(),
   })
@@ -49,7 +68,7 @@ export async function startInstance(name: string): Promise<{ instance_id: string
 }
 
 export async function stopInstance(name: string): Promise<{ instance_id: string }> {
-  const res = await fetch(`/api/workstations/${encodeURIComponent(name)}/stop`, {
+  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/stop`, {
     method: 'POST',
     headers: authHeaders(),
   })
