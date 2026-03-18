@@ -194,32 +194,6 @@ Resources:
             CloudWatchMetricsEnabled: true
             MetricName: RateLimitRule
 
-  # ---- CloudFront Function: redirect to Cognito if no auth cookie ----
-  AuthFunction:
-    Type: AWS::CloudFront::Function
-    Properties:
-      Name: !Sub "${AWS::StackName}-auth"
-      AutoPublish: true
-      FunctionConfig:
-        Comment: Allow SPA to load when desk_token cookie is missing (SPA will refresh/login)
-        Runtime: cloudfront-js-1.0
-      FunctionCode: !Sub |
-        function handler(event) {
-          var request = event.request;
-          var uri = request.uri || '';
-          if (uri.indexOf('/api') === 0) return request;
-          if (uri.indexOf('/assets/') === 0) return request;
-          if (/\.(css|js|svg|ico|woff2?|ttf|eot|png|jpg|jpeg|gif|webp)(\?|$)/i.test(uri)) return request;
-          var qs = request.querystring || {};
-          if (qs.code && qs.code.value) return request;
-          var cookies = request.cookies || {};
-          var token = cookies.desk_token && cookies.desk_token.value;
-          // When token cookie is missing we still allow the SPA to load.
-          // The frontend can use refresh_token (if present) to renew id_token.
-          // API requests remain protected by the API Gateway JWT authorizer.
-          return request;
-        }
-
   # ---- CloudFront ----
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -249,9 +223,6 @@ Resources:
             QueryString: false
             Cookies:
               Forward: none
-          FunctionAssociations:
-            - EventType: viewer-request
-              FunctionARN: !GetAtt AuthFunction.FunctionARN
         CacheBehaviors:
           - PathPattern: /api/*
             TargetOriginId: ApiOrigin
