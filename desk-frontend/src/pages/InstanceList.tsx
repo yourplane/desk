@@ -84,11 +84,11 @@ export function InstanceList() {
   useEffect(() => {
     load()
 
-    let intervalId: ReturnType<typeof setInterval> | null = null
+    let intervalId: number | null = null
     let intervalMs = POLL_INTERVAL_MS
 
     const schedule = () => {
-      if (intervalId) clearInterval(intervalId)
+      if (intervalId !== null) window.clearInterval(intervalId)
       intervalId = window.setInterval(() => {
         if (loadInFlightRef.current || actingRef.current !== null) return
         load({ isBackgroundRefresh: true })
@@ -104,7 +104,7 @@ export function InstanceList() {
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
-      if (intervalId) clearInterval(intervalId)
+      if (intervalId !== null) window.clearInterval(intervalId)
     }
   }, [])
 
