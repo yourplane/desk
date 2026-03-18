@@ -51,7 +51,6 @@ Resources:
         - openid
         - email
         - profile
-        - offline_access
       AllowedOAuthFlowsUserPoolClient: true
 
   # ---- desk-api Lambda (SAM builds and deploys via sam build / sam deploy) ----
