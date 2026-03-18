@@ -3,10 +3,19 @@ import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from '
 import { InstanceList } from './pages/InstanceList'
 import './App.css'
 
+function buildInfo(): string | null {
+  const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
+  const sha = (import.meta.env.VITE_BUILD_SHA as string | undefined)?.trim()
+  if (!deployedAt && !sha) return null
+  if (deployedAt && sha) return `Built ${deployedAt} (${sha})`
+  return deployedAt ? `Built ${deployedAt}` : `Built (${sha})`
+}
+
 function App() {
   const [ready, setReady] = useState(false)
   const [isCallback, setIsCallback] = useState(false)
   const [callbackFailed, setCallbackFailed] = useState(false)
+  const info = buildInfo()
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -72,6 +81,7 @@ function App() {
   return (
     <div className="app">
       <InstanceList />
+      {info && <p className="build-info">{info}</p>}
     </div>
   )
 }
