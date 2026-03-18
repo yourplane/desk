@@ -30,7 +30,7 @@ function App() {
       setReady(true)
       return
     }
-    setReady(ensureAuth())
+    ensureAuth().then((ok) => setReady(ok))
   }, [])
 
   if (isCallback) {

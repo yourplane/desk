@@ -1,6 +1,12 @@
 /**
- * Minimal Cognito auth for production. When VITE_COGNITO_* env is set,
- * redirects to hosted UI and stores id_token; API client sends it.
+ * Minimal Cognito auth for production.
+ *
+ * When VITE_COGNITO_* env is set:
+ * - redirects to hosted UI (OAuth code + PKCE)
+ * - stores `id_token` in sessionStorage + a short-lived cookie
+ * - stores `refresh_token` in localStorage so we can renew the session
+ * - API calls use the id_token, and we refresh on 401s
+ *
  * Local dev: no env set, no auth.
  */
 
@@ -12,6 +18,7 @@ const CONFIG = {
 }
 
 const TOKEN_KEY = 'desk_id_token'
+const REFRESH_TOKEN_KEY = 'desk_refresh_token'
 const COOKIE_NAME = 'desk_token'
 const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
 const PKCE_VERIFIER_COOKIE = 'desk_pkce_verifier'
@@ -22,23 +29,75 @@ export function isAuthEnabled(): boolean {
 
 export function getToken(): string | null {
   const fromStorage = sessionStorage.getItem(TOKEN_KEY)
-  if (fromStorage) return fromStorage
-  const match = document.cookie.match(new RegExp('(^| )' + COOKIE_NAME + '=([^;]+)'))
-  return match ? decodeURIComponent(match[2]!) : null
+  const fromCookie = (() => {
+    const match = document.cookie.match(new RegExp('(^| )' + COOKIE_NAME + '=([^;]+)'))
+    return match ? decodeURIComponent(match[2]!) : null
+  })()
+  const token = fromStorage || fromCookie
+  if (!token) return null
+  // If we can tell it's expired, treat it as missing so callers can refresh.
+  return isIdTokenExpired(token) ? null : token
 }
 
-function setToken(token: string): void {
+function setIdToken(token: string): void {
   sessionStorage.setItem(TOKEN_KEY, token)
   const maxAge = 3600
   const secure = window.location.protocol === 'https:' ? '; Secure' : ''
   document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`
 }
 
+function getRefreshToken(): string | null {
+  try {
+    return localStorage.getItem(REFRESH_TOKEN_KEY)
+  } catch {
+    // localStorage may be blocked (e.g. 3rd party settings); fail closed.
+    return null
+  }
+}
+
+function setRefreshToken(token: string): void {
+  try {
+    localStorage.setItem(REFRESH_TOKEN_KEY, token)
+  } catch {
+    // If we can't persist refresh tokens, we still keep working for the current tab.
+  }
+}
+
 function clearToken(): void {
   sessionStorage.removeItem(TOKEN_KEY)
+  try {
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+  } catch {
+    // ignore
+  }
   sessionStorage.removeItem(PKCE_VERIFIER_KEY)
   document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
   document.cookie = `${PKCE_VERIFIER_COOKIE}=; path=/; max-age=0`
+}
+
+function parseJwtPayload(token: string): unknown | null {
+  const parts = token.split('.')
+  if (parts.length < 2) return null
+  const payloadB64Url = parts[1]!
+  const payloadB64 = payloadB64Url.replace(/-/g, '+').replace(/_/g, '/')
+  // Handle missing padding.
+  const padded = payloadB64.padEnd(payloadB64.length + ((4 - (payloadB64.length % 4)) % 4), '=')
+  try {
+    const json = atob(padded)
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
+function isIdTokenExpired(token: string): boolean {
+  const payload = parseJwtPayload(token) as any
+  const exp = typeof payload?.exp === 'number' ? payload.exp : null
+  if (!exp) return true
+  const nowMs = Date.now()
+  const expMs = exp * 1000
+  // Small buffer so we don't race expiry.
+  return expMs <= nowMs + 60_000
 }
 
 function getPkceVerifier(): string | null {
@@ -54,9 +113,54 @@ function clearPkceVerifier(): void {
 }
 
 /** Redirect to Cognito hosted UI if auth is enabled and no token. Call once at app load. */
-export function ensureAuth(): boolean {
+let refreshInFlight: Promise<boolean> | null = null
+
+async function refreshIdToken(): Promise<boolean> {
+  if (!isAuthEnabled()) return false
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) return false
+  if (refreshInFlight) return refreshInFlight
+
+  refreshInFlight = (async () => {
+    const region = import.meta.env.VITE_COGNITO_REGION || 'us-east-1'
+    const base = `https://${CONFIG.domain}.auth.${region}.amazoncognito.com`
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: CONFIG.clientId!,
+      refresh_token: refreshToken,
+    })
+    const res = await fetch(`${base}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    })
+    if (!res.ok) {
+      clearToken()
+      return false
+    }
+    const data = await res.json()
+    const idToken = data.id_token as string | undefined
+    if (!idToken) {
+      clearToken()
+      return false
+    }
+    setIdToken(idToken)
+    const newRefresh = data.refresh_token as string | undefined
+    if (newRefresh) setRefreshToken(newRefresh)
+    return true
+  })()
+
+  try {
+    return await refreshInFlight
+  } finally {
+    refreshInFlight = null
+  }
+}
+
+export async function ensureAuth(): Promise<boolean> {
   if (!isAuthEnabled()) return true
   if (getToken()) return true
+  if (await refreshIdToken()) return true
   goToLogin()
   return false
 }
@@ -72,7 +176,8 @@ export async function goToLogin(): Promise<void> {
   const params = new URLSearchParams({
     client_id: CONFIG.clientId!,
     response_type: 'code',
-    scope: 'openid email profile',
+    // offline_access ensures Cognito returns a refresh_token.
+    scope: 'openid email profile offline_access',
     redirect_uri: CONFIG.redirectUri!,
     code_challenge: challenge,
     code_challenge_method: 'S256',
@@ -103,9 +208,11 @@ export async function handleCallback(): Promise<boolean> {
   })
   if (!res.ok) return false
   const data = await res.json()
-  const idToken = data.id_token
+  const idToken = data.id_token as string | undefined
   if (!idToken) return false
-  setToken(idToken)
+  setIdToken(idToken)
+  const refreshToken = data.refresh_token as string | undefined
+  if (refreshToken) setRefreshToken(refreshToken)
   clearPkceVerifier()
   return true
 }
@@ -118,6 +225,8 @@ export function logout(): void {
     window.location.href = `${base}/logout?client_id=${CONFIG.clientId}&logout_uri=${encodeURIComponent(CONFIG.redirectUri!)}`
   }
 }
+
+export { refreshIdToken }
 
 function randomString(length: number): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'

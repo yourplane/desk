@@ -39,6 +39,8 @@ Resources:
         - ALLOW_USER_SRP_AUTH
       SupportedIdentityProviders:
         - COGNITO
+      # Keep refresh tokens long-lived so the SPA can renew the short-lived id_token.
+      RefreshTokenValidity: 39
       CallbackURLs:
         - !Ref CognitoCallbackURL
       LogoutURLs:
@@ -49,6 +51,7 @@ Resources:
         - openid
         - email
         - profile
+        - offline_access
       AllowedOAuthFlowsUserPoolClient: true
 
   # ---- desk-api Lambda (SAM builds and deploys via sam build / sam deploy) ----
@@ -198,7 +201,7 @@ Resources:
       Name: !Sub "${AWS::StackName}-auth"
       AutoPublish: true
       FunctionConfig:
-        Comment: Redirect to Cognito hosted UI when desk_token cookie is missing
+        Comment: Allow SPA to load when desk_token cookie is missing (SPA will refresh/login)
         Runtime: cloudfront-js-1.0
       FunctionCode: !Sub |
         function handler(event) {
@@ -211,13 +214,10 @@ Resources:
           if (qs.code && qs.code.value) return request;
           var cookies = request.cookies || {};
           var token = cookies.desk_token && cookies.desk_token.value;
-          if (token) return request;
-          var domain = '${UserPoolDomain}';
-          var region = '${AWS::Region}';
-          var clientId = '${UserPoolAppClient}';
-          var redirectUri = '${CognitoCallbackURL}';
-          var loginUrl = 'https://' + domain + '.auth.' + region + '.amazoncognito.com/oauth2/authorize?client_id=' + clientId + '&response_type=code&scope=openid+email+profile&redirect_uri=' + encodeURIComponent(redirectUri);
-          return { statusCode: 302, statusDescription: 'Found', headers: { location: { value: loginUrl } } };
+          // When token cookie is missing we still allow the SPA to load.
+          // The frontend can use refresh_token (if present) to renew id_token.
+          // API requests remain protected by the API Gateway JWT authorizer.
+          return request;
         }
 
   # ---- CloudFront ----
