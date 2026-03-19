@@ -114,6 +114,92 @@
   font-variant-numeric: tabular-nums;
 }
 
+.shutdown-cell--editable {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  position: relative;
+}
+
+.shutdown-clickable {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.shutdown-clickable:hover:not(:disabled) {
+  text-decoration: underline;
+  color: var(--text);
+}
+
+.shutdown-clickable:disabled {
+  cursor: not-allowed;
+}
+
+.btn-plus2h {
+  background: var(--border);
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.btn-plus2h:not(:disabled):hover {
+  background: var(--text-muted);
+  color: var(--surface);
+}
+
+.shutdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.25rem;
+  min-width: 10rem;
+  padding: 0.5rem 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  z-index: 10;
+}
+
+.shutdown-menu-title {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.shutdown-menu-item {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.shutdown-menu-item:hover {
+  background: var(--bg);
+}
+
+.shutdown-menu-item--clear {
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+  padding-top: 0.5rem;
+}
+
 .actions {
   display: inline-flex;
   gap: 0.6rem;

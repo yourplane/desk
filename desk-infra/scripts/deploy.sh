@@ -12,6 +12,11 @@ AWS_PROFILE=${2:-}
 CLOUDFORMATION_DIR="$INFRA_DIR/cloudformation"
 [ -n "$AWS_REGION" ] && export AWS_DEFAULT_REGION=$AWS_REGION
 [ -n "$AWS_PROFILE" ] && export AWS_PROFILE
+# Ensure SAM always has a region (falls back to configured default).
+if [ -z "$AWS_DEFAULT_REGION" ]; then
+  AWS_DEFAULT_REGION=$(aws configure get region 2>/dev/null || true)
+  [ -n "$AWS_DEFAULT_REGION" ] && export AWS_DEFAULT_REGION
+fi
 
 echo "==> Stack: $STACK_NAME, Repo root: $REPO_ROOT"
 
@@ -51,7 +56,7 @@ sam deploy \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --resolve-s3 \
   --no-confirm-changeset \
-  --no-fail-on-empty-changeset 2>/dev/null || true
+  --no-fail-on-empty-changeset
 
 # 3. Sync frontend to S3
 FRONTEND_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text 2>/dev/null || true)
