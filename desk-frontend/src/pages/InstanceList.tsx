@@ -50,6 +50,15 @@ function stateColor(state: string): string {
   }
 }
 
+function buildDurationFromTotalMinutes(totalMinutes: number): string {
+  const clamped = Math.max(1, Math.floor(totalMinutes))
+  const hours = Math.floor(clamped / 60)
+  const minutes = clamped % 60
+  if (hours > 0 && minutes > 0) return `${hours}h${minutes}m`
+  if (hours > 0) return `${hours}h`
+  return `${minutes}m`
+}
+
 export function InstanceList() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loading, setLoading] = useState(true)
@@ -185,12 +194,20 @@ export function InstanceList() {
     }
   }
 
-  const onPlus2h = async (name: string) => {
+  const onPlus2h = async (name: string, shutdownAt: string | null) => {
     setActing(name)
     setError(null)
     setOpenAutoStopFor(null)
     try {
-      await setAutoStop(name, { duration: '2h' })
+      let totalMinutes = 120
+      if (shutdownAt) {
+        const shutdownMs = new Date(shutdownAt).getTime()
+        if (!Number.isNaN(shutdownMs)) {
+          const remainingMinutes = Math.max(0, Math.ceil((shutdownMs - Date.now()) / 60000))
+          totalMinutes = remainingMinutes + 120
+        }
+      }
+      await setAutoStop(name, { duration: buildDurationFromTotalMinutes(totalMinutes) })
       await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -314,7 +331,7 @@ export function InstanceList() {
                             type="button"
                             className="btn btn-plus2h"
                             disabled={busy}
-                            onClick={() => onPlus2h(nameOrId)}
+                            onClick={() => onPlus2h(nameOrId, inst.shutdown_at)}
                             title="Set auto-stop to 2 hours from now"
                           >
                             +2h
