@@ -36,10 +36,25 @@ class AutoStopBody(BaseModel):
 def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profile: str):
     """Shared implementation for auto-stop endpoints (workstations + legacy instances)."""
     try:
-        instance_id = resolve_workstation(name, region=region, profile=profile)
+        # The frontend only shows the control for running/pending, but instances can
+        # transition quickly (e.g. running -> stopping) between render and click.
+        # Allow a slightly broader set of states to avoid spurious 404s.
+        instance_id = resolve_workstation(
+            name,
+            region=region,
+            profile=profile,
+            states=["running", "pending", "stopping", "stopped"],
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+    logger.info(
+        "auto-stop request name=%s resolved_instance_id=%s duration=%s clear=%s",
+        name,
+        instance_id,
+        body.duration,
+        body.clear,
+    )
     if body.clear:
         clear_shutdown_tag(instance_id, region=region, profile=profile)
         return {"instance_id": instance_id, "shutdown_cleared": True}
