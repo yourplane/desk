@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { listInstances, setAutoStop, startInstance, stopInstance, type Instance } from '../api/client'
-import { logout } from '../auth'
+import { listInstances, setAutoStop, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
+import { isAuthEnabled, logout } from '../auth'
+
+const POLL_INTERVAL_MS = 10_000
+const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
 
 const AUTO_STOP_PRESETS = [
   { label: '30m', value: '30m' },
@@ -51,31 +54,67 @@ export function InstanceList() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
   const [acting, setActing] = useState<string | null>(null)
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
+  const loadInFlightRef = useRef(false)
+  const actingRef = useRef<string | null>(null)
+  actingRef.current = acting
 
-  const load = async () => {
-    setLoading(true)
-    setError(null)
+  const load = async (opts?: { isBackgroundRefresh?: boolean }) => {
+    const isBackground = opts?.isBackgroundRefresh === true
+    if (loadInFlightRef.current) return
+    loadInFlightRef.current = true
+    if (!isBackground) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const list = await listInstances()
       setInstances(list)
+      setRefreshError(null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      if (!msg.trim()) {
-        setError('Unable to load workstations. Check the browser console or API logs.')
+      const fallback = 'Unable to load workstations. Check the browser console or API logs.'
+      if (isBackground) {
+        setRefreshError('Could not refresh. Will retry.')
+        console.error('InstanceList poll failed:', e)
       } else {
-        setError(msg)
+        setError(!msg.trim() ? fallback : msg)
+        console.error('InstanceList load failed:', e)
       }
-      console.error('InstanceList load failed:', e)
     } finally {
-      setLoading(false)
+      if (!isBackground) setLoading(false)
+      loadInFlightRef.current = false
     }
   }
 
   useEffect(() => {
     load()
+
+    let intervalId: number | null = null
+    let intervalMs = POLL_INTERVAL_MS
+
+    const schedule = () => {
+      if (intervalId !== null) window.clearInterval(intervalId)
+      intervalId = window.setInterval(() => {
+        if (loadInFlightRef.current || actingRef.current !== null) return
+        load({ isBackgroundRefresh: true })
+      }, intervalMs)
+    }
+    schedule()
+
+    const onVisibility = () => {
+      intervalMs = document.visibilityState === 'hidden' ? BACKGROUND_POLL_INTERVAL_MS : POLL_INTERVAL_MS
+      schedule()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (intervalId !== null) window.clearInterval(intervalId)
+    }
   }, [])
 
   const onStart = async (name: string) => {
@@ -83,7 +122,7 @@ export function InstanceList() {
     setError(null)
     try {
       await startInstance(name)
-      await load()
+      await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -96,7 +135,7 @@ export function InstanceList() {
     setError(null)
     try {
       await stopInstance(name)
-      await load()
+      await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -110,7 +149,21 @@ export function InstanceList() {
     setOpenAutoStopFor(null)
     try {
       await setAutoStop(name, { duration })
-      await load()
+      await load({ isBackgroundRefresh: true })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
+  const onKill = async (name: string) => {
+    if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
+    setActing(name)
+    setError(null)
+    try {
+      await killInstance(name)
+      await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -124,7 +177,7 @@ export function InstanceList() {
     setOpenAutoStopFor(null)
     try {
       await setAutoStop(name, { clear: true })
-      await load()
+      await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -135,9 +188,10 @@ export function InstanceList() {
   const onPlus2h = async (name: string) => {
     setActing(name)
     setError(null)
+    setOpenAutoStopFor(null)
     try {
       await setAutoStop(name, { duration: '2h' })
-      await load()
+      await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -156,10 +210,21 @@ export function InstanceList() {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [openAutoStopFor])
 
+  const pageHeader = (
+    <div className="page-header">
+      <h1 className="page-title">Workstations</h1>
+      {isAuthEnabled() && (
+        <button type="button" className="btn btn-secondary" onClick={() => logout()}>
+          Log out
+        </button>
+      )}
+    </div>
+  )
+
   if (loading) {
     return (
       <div className="instance-list">
-        <h1 className="page-title">Workstations</h1>
+        {pageHeader}
         <p className="loading">Loading instances…</p>
       </div>
     )
@@ -169,7 +234,7 @@ export function InstanceList() {
     const isAuthError = /session expired|invalid|log in again/i.test(error)
     return (
       <div className="instance-list">
-        <h1 className="page-title">Workstations</h1>
+        {pageHeader}
         <p className="error-message" role="alert">{error}</p>
         {isAuthError && (
           <button type="button" className="btn btn-start" onClick={() => logout()}>
@@ -182,7 +247,10 @@ export function InstanceList() {
 
   return (
     <div className="instance-list">
-      <h1 className="page-title">Workstations</h1>
+      {pageHeader}
+      {refreshError && (
+        <p className="refresh-error" role="status">{refreshError}</p>
+      )}
       <div className="table-wrap">
         <table className="instances-table">
           <thead>
@@ -298,6 +366,16 @@ export function InstanceList() {
                         onClick={() => onStop(inst.name || inst.instance_id)}
                       >
                         {acting === (inst.name || inst.instance_id) ? '…' : 'Stop'}
+                      </button>
+                    )}
+                    {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
+                      <button
+                        type="button"
+                        className="btn btn-kill"
+                        disabled={acting !== null}
+                        onClick={() => onKill(inst.name || inst.instance_id)}
+                      >
+                        {acting === (inst.name || inst.instance_id) ? '…' : 'Kill'}
                       </button>
                     )}
                   </td>

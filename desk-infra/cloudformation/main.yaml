@@ -39,6 +39,8 @@ Resources:
         - ALLOW_USER_SRP_AUTH
       SupportedIdentityProviders:
         - COGNITO
+      # Keep refresh tokens long-lived so the SPA can renew the short-lived id_token.
+      RefreshTokenValidity: 39
       CallbackURLs:
         - !Ref CognitoCallbackURL
       LogoutURLs:
@@ -72,6 +74,9 @@ Resources:
                 - ec2:DescribeTags
                 - ec2:StartInstances
                 - ec2:StopInstances
+                - ec2:TerminateInstances
+                - ec2:CreateTags
+                - ec2:DeleteTags
               Resource: "*"
             - Effect: Allow
               Action: cloudformation:DescribeStacks
@@ -189,35 +194,6 @@ Resources:
             CloudWatchMetricsEnabled: true
             MetricName: RateLimitRule
 
-  # ---- CloudFront Function: redirect to Cognito if no auth cookie ----
-  AuthFunction:
-    Type: AWS::CloudFront::Function
-    Properties:
-      Name: !Sub "${AWS::StackName}-auth"
-      AutoPublish: true
-      FunctionConfig:
-        Comment: Redirect to Cognito hosted UI when desk_token cookie is missing
-        Runtime: cloudfront-js-1.0
-      FunctionCode: !Sub |
-        function handler(event) {
-          var request = event.request;
-          var uri = request.uri || '';
-          if (uri.indexOf('/api') === 0) return request;
-          if (uri.indexOf('/assets/') === 0) return request;
-          if (/\.(css|js|svg|ico|woff2?|ttf|eot|png|jpg|jpeg|gif|webp)(\?|$)/i.test(uri)) return request;
-          var qs = request.querystring || {};
-          if (qs.code && qs.code.value) return request;
-          var cookies = request.cookies || {};
-          var token = cookies.desk_token && cookies.desk_token.value;
-          if (token) return request;
-          var domain = '${UserPoolDomain}';
-          var region = '${AWS::Region}';
-          var clientId = '${UserPoolAppClient}';
-          var redirectUri = '${CognitoCallbackURL}';
-          var loginUrl = 'https://' + domain + '.auth.' + region + '.amazoncognito.com/oauth2/authorize?client_id=' + clientId + '&response_type=code&scope=openid+email+profile&redirect_uri=' + encodeURIComponent(redirectUri);
-          return { statusCode: 302, statusDescription: 'Found', headers: { location: { value: loginUrl } } };
-        }
-
   # ---- CloudFront ----
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -247,9 +223,6 @@ Resources:
             QueryString: false
             Cookies:
               Forward: none
-          FunctionAssociations:
-            - EventType: viewer-request
-              FunctionARN: !GetAtt AuthFunction.FunctionARN
         CacheBehaviors:
           - PathPattern: /api/*
             TargetOriginId: ApiOrigin
