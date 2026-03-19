@@ -148,8 +148,9 @@ export async function setAutoStop(
   // If API returned HTML even with 200, surface a clearer error.
   if (!parsed || typeof parsed !== 'object') {
     if (trimmed.startsWith('<')) {
+      const rawSnippet = trimmed.length > 800 ? `${trimmed.slice(0, 800)}…` : trimmed
       throw new Error(
-        'Auto-stop request returned HTML. This usually means the API route is missing or access is denied.'
+        `Auto-stop request returned HTML. This usually means the API route is missing or access is denied. Raw response: ${rawSnippet}`
       )
     }
     throw new Error(trimmed || 'Auto-stop request failed.')
