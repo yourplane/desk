@@ -151,11 +151,3 @@ def set_auto_stop(name: str, body: AutoStopBody):
     """
     region, profile = _region_profile()
     return _set_or_clear_auto_stop(name, body, region=region, profile=profile)
-
-
-# Backward compatibility for older frontend builds that still call:
-#   POST /api/instances/{name}/auto-stop
-@router.post("/instances/{name}/auto-stop")
-def set_auto_stop_legacy_instances(name: str, body: AutoStopBody):
-    region, profile = _region_profile()
-    return _set_or_clear_auto_stop(name, body, region=region, profile=profile)
