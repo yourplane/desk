@@ -87,7 +87,7 @@ export async function stopInstance(name: string): Promise<{ instance_id: string 
 }
 
 export async function killInstance(name: string): Promise<{ instance_id: string }> {
-  const res = await fetch(`/api/workstations/${encodeURIComponent(name)}/kill`, {
+  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/kill`, {
     method: 'POST',
     headers: authHeaders(),
   })
