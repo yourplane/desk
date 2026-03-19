@@ -5,7 +5,7 @@
 1. User opens the app (CloudFront URL). CloudFront viewer-request function checks for `desk_token` cookie; if missing, redirects to Cognito hosted UI.
 2. User signs in at Cognito; Cognito redirects back to the app with `?code=...`.
 3. Frontend runs `handleCallback()`: reads `code` and PKCE `code_verifier` (from sessionStorage or cookie), POSTs to Cognito `/oauth2/token`, receives `id_token`, stores it in sessionStorage and `desk_token` cookie.
-4. App shows workstations list and calls `GET /api/instances` with header `Authorization: Bearer <id_token>`.
+4. App shows workstations list and calls `GET /api/workstations` with header `Authorization: Bearer <id_token>`.
 5. Request hits CloudFront → API Gateway (HTTP API). Origin Request Policy forwards `Authorization` to the origin. JWT authorizer validates token (issuer = Cognito User Pool URL, audience = app client ID). If valid, request reaches Lambda; if not, 401.
 
 ## Important details

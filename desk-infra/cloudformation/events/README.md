@@ -2,7 +2,7 @@
 
 Sample payloads for invoking the desk-api Lambda directly (API Gateway HTTP API payload 2.0).
 
-**Example – GET /api/instances:**
+**Example – GET /api/workstations:**
 
 ```bash
 aws lambda invoke --function-name desk-web-api \

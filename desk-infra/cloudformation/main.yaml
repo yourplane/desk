@@ -51,7 +51,6 @@ Resources:
         - openid
         - email
         - profile
-        - offline_access
       AllowedOAuthFlowsUserPoolClient: true
 
   # ---- desk-api Lambda (SAM builds and deploys via sam build / sam deploy) ----
@@ -75,6 +74,7 @@ Resources:
                 - ec2:DescribeTags
                 - ec2:StartInstances
                 - ec2:StopInstances
+                - ec2:TerminateInstances
                 - ec2:CreateTags
                 - ec2:DeleteTags
               Resource: "*"

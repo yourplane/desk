@@ -21,13 +21,14 @@ Running `uvicorn app.main:app` from the repo root without `--project desk-api` w
 
 - API: http://localhost:8000
 - Docs: http://localhost:8000/docs
-- Instances: http://localhost:8000/api/instances
+- Workstations: http://localhost:8000/api/workstations
 
 ## Endpoints
 
-- `GET /api/instances` — list workstations
-- `POST /api/instances/{name}/start` — start by name or instance ID
-- `POST /api/instances/{name}/stop` — stop by name or instance ID
+- `GET /api/workstations` — list workstations
+- `POST /api/workstations/{name}/start` — start by name or instance ID
+- `POST /api/workstations/{name}/stop` — stop by name or instance ID
+- `POST /api/workstations/{name}/kill` — permanently terminate by name or instance ID
 
 AWS region/profile come from env (`AWS_REGION`, `AWS_PROFILE`) or desk config.
 

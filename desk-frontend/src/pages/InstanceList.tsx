@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { listInstances, startInstance, stopInstance, type Instance } from '../api/client'
+import { listInstances, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
 import { isAuthEnabled, logout } from '../auth'
 
 const POLL_INTERVAL_MS = 10_000
@@ -134,6 +134,20 @@ export function InstanceList() {
     }
   }
 
+  const onKill = async (name: string) => {
+    if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
+    setActing(name)
+    setError(null)
+    try {
+      await killInstance(name)
+      await load({ isBackgroundRefresh: true })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
   const pageHeader = (
     <div className="page-header">
       <h1 className="page-title">Workstations</h1>
@@ -231,6 +245,16 @@ export function InstanceList() {
                         onClick={() => onStop(inst.name || inst.instance_id)}
                       >
                         {acting === (inst.name || inst.instance_id) ? '…' : 'Stop'}
+                      </button>
+                    )}
+                    {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
+                      <button
+                        type="button"
+                        className="btn btn-kill"
+                        disabled={acting !== null}
+                        onClick={() => onKill(inst.name || inst.instance_id)}
+                      >
+                        {acting === (inst.name || inst.instance_id) ? '…' : 'Kill'}
                       </button>
                     )}
                   </td>
