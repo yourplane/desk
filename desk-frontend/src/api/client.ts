@@ -122,16 +122,38 @@ export async function setAutoStop(
       body: JSON.stringify(body),
     }
   )
-  if (!res.ok) {
-    const text = await res.text()
-    let detail = text
+
+  // CloudFront is configured to return `index.html` (200) for some API errors (e.g. 403/404),
+  // which would break `res.json()`. Always parse as text first.
+  const text = await res.text()
+  const trimmed = text.trim()
+
+  let parsed: any = null
+  if (trimmed) {
     try {
-      const j = JSON.parse(text)
-      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+      parsed = JSON.parse(trimmed)
     } catch {
-      // use text as-is
+      // Not JSON (likely HTML).
     }
-    throw new Error(detail)
   }
-  return res.json()
+
+  if (!res.ok) {
+    const detail =
+      (parsed && (parsed.detail ?? parsed.error)) ||
+      trimmed ||
+      `Request failed (${res.status})`
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+
+  // If API returned HTML even with 200, surface a clearer error.
+  if (!parsed || typeof parsed !== 'object') {
+    if (trimmed.startsWith('<')) {
+      throw new Error(
+        'Auto-stop request returned HTML. This usually means the API route is missing or access is denied.'
+      )
+    }
+    throw new Error(trimmed || 'Auto-stop request failed.')
+  }
+
+  return parsed as SetAutoStopResult
 }
