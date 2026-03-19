@@ -269,7 +269,7 @@ export function InstanceList() {
             ) : (
               instances.map((inst) => (
                 <tr key={inst.instance_id}>
-                  <td className="name">{inst.name || inst.instance_id}</td>
+                  <td className="name">{inst.name && inst.name !== '-' ? inst.name : inst.instance_id}</td>
                   <td>
                     <span className="state-label" style={{ color: stateColor(inst.state) }}>
                       {inst.state}
@@ -279,7 +279,7 @@ export function InstanceList() {
                     {(() => {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
                       const isRunningOrPending = inst.state === 'running' || inst.state === 'pending'
-                      const nameOrId = inst.name || inst.instance_id
+                      const nameOrId = inst.name && inst.name !== '-' ? inst.name : inst.instance_id
                       const menuOpen = openAutoStopFor === nameOrId
                       const busy = acting !== null
                       if (!isRunningOrPending) {
@@ -353,9 +353,9 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-start"
                         disabled={acting !== null}
-                        onClick={() => onStart(inst.name || inst.instance_id)}
+                        onClick={() => onStart(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
                       >
-                        {acting === (inst.name || inst.instance_id) ? '…' : 'Start'}
+                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Start'}
                       </button>
                     )}
                     {(inst.state === 'running' || inst.state === 'pending') && (
@@ -363,9 +363,9 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-stop"
                         disabled={acting !== null}
-                        onClick={() => onStop(inst.name || inst.instance_id)}
+                        onClick={() => onStop(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
                       >
-                        {acting === (inst.name || inst.instance_id) ? '…' : 'Stop'}
+                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Stop'}
                       </button>
                     )}
                     {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
@@ -373,9 +373,9 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-kill"
                         disabled={acting !== null}
-                        onClick={() => onKill(inst.name || inst.instance_id)}
+                        onClick={() => onKill(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
                       >
-                        {acting === (inst.name || inst.instance_id) ? '…' : 'Kill'}
+                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Kill'}
                       </button>
                     )}
                   </td>
