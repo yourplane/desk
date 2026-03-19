@@ -115,22 +115,41 @@
 }
 
 .actions {
+  display: inline-flex;
+  gap: 0.6rem;
+  align-items: center;
   white-space: nowrap;
 }
 
 .btn {
-  padding: 0.4rem 0.9rem;
-  border: none;
-  border-radius: 6px;
+  padding: 0.45rem 0.95rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s;
+  line-height: 1;
+  transition:
+    background-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.12s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(2, 6, 23, 0.12);
+}
+
+.btn:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
 }
 
 .btn-start {
