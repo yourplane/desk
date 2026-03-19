@@ -33,6 +33,28 @@ class AutoStopBody(BaseModel):
     clear: bool = False
 
 
+def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profile: str):
+    """Shared implementation for auto-stop endpoints (workstations + legacy instances)."""
+    try:
+        instance_id = resolve_workstation(name, region=region, profile=profile)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    if body.clear:
+        clear_shutdown_tag(instance_id, region=region, profile=profile)
+        return {"instance_id": instance_id, "shutdown_cleared": True}
+
+    duration = body.duration or "4h"
+    try:
+        hours = parse_duration(duration)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    shutdown_at = compute_shutdown_at(hours)
+    set_shutdown_tag(instance_id, shutdown_at, region=region, profile=profile)
+    return {"instance_id": instance_id, "shutdown_at": shutdown_at}
+
+
 @router.get("/workstations")
 def list_workstations_route():
     """List workstations (EC2 instances tagged Type=workstation)."""
@@ -113,21 +135,12 @@ def set_auto_stop(name: str, body: AutoStopBody):
     Body: { "duration": "4h" } or { "clear": true }.
     """
     region, profile = _region_profile()
-    try:
-        instance_id = resolve_workstation(name, region=region, profile=profile)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+    return _set_or_clear_auto_stop(name, body, region=region, profile=profile)
 
-    if body.clear:
-        clear_shutdown_tag(instance_id, region=region, profile=profile)
-        return {"instance_id": instance_id, "shutdown_cleared": True}
 
-    duration = body.duration or "4h"
-    try:
-        hours = parse_duration(duration)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    shutdown_at = compute_shutdown_at(hours)
-    set_shutdown_tag(instance_id, shutdown_at, region=region, profile=profile)
-    return {"instance_id": instance_id, "shutdown_at": shutdown_at}
+# Backward compatibility for older frontend builds that still call:
+#   POST /api/instances/{name}/auto-stop
+@router.post("/instances/{name}/auto-stop")
+def set_auto_stop_legacy_instances(name: str, body: AutoStopBody):
+    region, profile = _region_profile()
+    return _set_or_clear_auto_stop(name, body, region=region, profile=profile)
