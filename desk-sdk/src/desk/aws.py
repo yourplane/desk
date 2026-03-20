@@ -263,6 +263,56 @@ def run_workstation(
     return (instance_id, shutdown_at)
 
 
+def create_workstation(
+    name: str,
+    instance_type: str = "t3.medium",
+    *,
+    ami_id: str | None = None,
+    shutdown_after: str = "4h",
+    region: str | None = None,
+    profile: str | None = None,
+) -> tuple[str, str | None]:
+    """Create a new workstation: validate name, resolve VPC/AMI, launch, and set auto-stop.
+
+    Raises ValueError if a non-terminated workstation with the same name exists.
+    Returns (instance_id, shutdown_at or None).
+    """
+    from desk.config import get_default_ami_prefix
+
+    existing = list_workstations(region=region, profile=profile)
+    duplicates = [w for w in existing if w.name == name and w.state != "terminated"]
+    if duplicates:
+        states = ", ".join(f"{w.instance_id} ({w.state})" for w in duplicates)
+        raise ValueError(
+            f"Workstation named '{name}' already exists: {states}. "
+            "Use a different name or terminate the existing workstation first."
+        )
+
+    vpc_outputs = get_desk_vpc_outputs(region=region, profile=profile)
+
+    if ami_id is None:
+        ami_prefix = get_default_ami_prefix()
+        if ami_prefix:
+            ami_id = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
+        if ami_id is None:
+            ami_id = get_latest_ubuntu_ami(region=region, profile=profile)
+
+    subnet_id = vpc_outputs.private_subnet_ids[0]
+
+    return run_workstation(
+        ami_id=ami_id,
+        instance_type=instance_type,
+        subnet_id=subnet_id,
+        security_group_ids=[vpc_outputs.security_group_id],
+        iam_instance_profile_name=vpc_outputs.instance_profile_name,
+        name=name,
+        shutdown_after=shutdown_after,
+        key_name=None,
+        region=region,
+        profile=profile,
+    )
+
+
 @dataclass
 class Workstation:
     """EC2 instance identified as a desk workstation."""
