@@ -9,4 +9,5 @@ unset VIRTUAL_ENV
 unset PYTHONPATH
 uv sync -q --extra dev
 .venv/bin/python -m pytest desk-sdk/tests -q "$@" || exit $?
-.venv/bin/python -m pytest desk-cli/tests -q "$@"
+.venv/bin/python -m pytest desk-cli/tests -q "$@" || exit $?
+.venv/bin/python -m pytest desk-api/tests -q "$@"

@@ -11,6 +11,7 @@ from desk.aws import (
     Workstation,
     create_ami,
     create_key_pair,
+    create_workstation,
     delete_key_pair,
     get_ami_state,
     get_desk_copy_bucket,
@@ -231,6 +232,154 @@ def test_run_workstation_success(mock_session: MagicMock) -> None:
     assert bdm[0]["Ebs"]["VolumeType"] == "gp3"
     assert bdm[0]["Ebs"]["DeleteOnTermination"] is True
     mock_ec2.create_tags.assert_called_once()
+
+
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_latest_ubuntu_ami")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_default_ami_prefix")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_success(
+    mock_list: MagicMock,
+    mock_ami_prefix: MagicMock,
+    mock_vpc: MagicMock,
+    mock_ubuntu_ami: MagicMock,
+    mock_run: MagicMock,
+) -> None:
+    """create_workstation validates name, resolves VPC/AMI, and launches."""
+    mock_list.return_value = []
+    mock_ami_prefix.return_value = None
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+    mock_ubuntu_ami.return_value = "ami-ubuntu"
+    mock_run.return_value = ("i-new123", "2026-03-20T20:00:00Z")
+
+    instance_id, shutdown_at = create_workstation("my-ws")
+
+    assert instance_id == "i-new123"
+    assert shutdown_at == "2026-03-20T20:00:00Z"
+    mock_run.assert_called_once()
+    kw = mock_run.call_args[1]
+    assert kw["ami_id"] == "ami-ubuntu"
+    assert kw["instance_type"] == "t3.medium"
+    assert kw["subnet_id"] == "subnet-a"
+    assert kw["name"] == "my-ws"
+    assert kw["shutdown_after"] == "4h"
+
+
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_latest_ami_by_name_prefix")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_default_ami_prefix")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_uses_ami_prefix(
+    mock_list: MagicMock,
+    mock_ami_prefix: MagicMock,
+    mock_vpc: MagicMock,
+    mock_ami_by_prefix: MagicMock,
+    mock_run: MagicMock,
+) -> None:
+    """create_workstation resolves AMI via configured prefix when available."""
+    mock_list.return_value = []
+    mock_ami_prefix.return_value = "default-desk-ami"
+    mock_ami_by_prefix.return_value = "ami-custom"
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+    mock_run.return_value = ("i-new456", "2026-03-20T20:00:00Z")
+
+    instance_id, _ = create_workstation("ws", ami_id=None)
+
+    kw = mock_run.call_args[1]
+    assert kw["ami_id"] == "ami-custom"
+
+
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_default_ami_prefix")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_explicit_ami(
+    mock_list: MagicMock,
+    mock_ami_prefix: MagicMock,
+    mock_vpc: MagicMock,
+    mock_run: MagicMock,
+) -> None:
+    """create_workstation skips AMI resolution when ami_id is provided."""
+    mock_list.return_value = []
+    mock_ami_prefix.return_value = "default-desk-ami"
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+    mock_run.return_value = ("i-new789", None)
+
+    create_workstation("ws", ami_id="ami-explicit", shutdown_after="0")
+
+    kw = mock_run.call_args[1]
+    assert kw["ami_id"] == "ami-explicit"
+
+
+@patch("desk.aws.list_workstations")
+def test_create_workstation_rejects_duplicate_running(mock_list: MagicMock) -> None:
+    """create_workstation raises ValueError for duplicate running workstation."""
+    mock_list.return_value = [
+        Workstation(instance_id="i-existing", name="my-ws", state="running"),
+    ]
+
+    with pytest.raises(ValueError, match="already exists"):
+        create_workstation("my-ws")
+
+
+@patch("desk.aws.list_workstations")
+def test_create_workstation_rejects_duplicate_stopped(mock_list: MagicMock) -> None:
+    """create_workstation raises ValueError for duplicate stopped workstation."""
+    mock_list.return_value = [
+        Workstation(instance_id="i-stopped", name="my-ws", state="stopped"),
+    ]
+
+    with pytest.raises(ValueError, match="already exists"):
+        create_workstation("my-ws")
+
+
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_latest_ubuntu_ami")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_default_ami_prefix")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_allows_terminated_duplicate(
+    mock_list: MagicMock,
+    mock_ami_prefix: MagicMock,
+    mock_vpc: MagicMock,
+    mock_ubuntu_ami: MagicMock,
+    mock_run: MagicMock,
+) -> None:
+    """create_workstation allows name reuse when existing workstation is terminated."""
+    mock_list.return_value = [
+        Workstation(instance_id="i-old", name="my-ws", state="terminated"),
+    ]
+    mock_ami_prefix.return_value = None
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+    mock_ubuntu_ami.return_value = "ami-ubuntu"
+    mock_run.return_value = ("i-new", "2026-03-20T20:00:00Z")
+
+    instance_id, _ = create_workstation("my-ws")
+
+    assert instance_id == "i-new"
+    mock_run.assert_called_once()
 
 
 def test_resolve_workstation_by_id() -> None:
