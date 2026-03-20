@@ -105,6 +105,37 @@ export async function killInstance(name: string): Promise<{ instance_id: string 
   return res.json()
 }
 
+export interface CostService {
+  name: string
+  amount: number
+  category: string
+}
+
+export interface CostMonth {
+  month: string
+  total: number
+  services: CostService[]
+}
+
+export interface DailyTotal {
+  date: string
+  total: number
+}
+
+export interface CostSummary {
+  months: CostMonth[]
+  daily_current_month: DailyTotal[]
+}
+
+export async function fetchCosts(): Promise<CostSummary> {
+  const res = await fetchWithAuthRetry('/api/costs', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }

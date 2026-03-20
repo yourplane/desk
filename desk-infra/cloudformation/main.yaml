@@ -81,6 +81,10 @@ Resources:
             - Effect: Allow
               Action: cloudformation:DescribeStacks
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - ce:GetCostAndUsage
+              Resource: "*"
     Metadata:
       BuildMethod: makefile
 

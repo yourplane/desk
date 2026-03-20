@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from './auth'
 import { InstanceList } from './pages/InstanceList'
+import { CostTracker } from './pages/CostTracker'
 import './App.css'
+
+type Page = 'workstations' | 'costs'
 
 function buildInfo(): string | null {
   const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
@@ -15,6 +18,7 @@ function App() {
   const [ready, setReady] = useState(false)
   const [isCallback, setIsCallback] = useState(false)
   const [callbackFailed, setCallbackFailed] = useState(false)
+  const [page, setPage] = useState<Page>('workstations')
   const info = buildInfo()
 
   useEffect(() => {
@@ -60,7 +64,7 @@ function App() {
     return (
       <div className="app">
         <h1 className="page-title">Sign-in failed</h1>
-        <p>We couldn’t complete sign-in. This can happen if the link was used twice or expired.</p>
+        <p>We couldn't complete sign-in. This can happen if the link was used twice or expired.</p>
         <button type="button" className="btn btn-start" onClick={() => goToLogin()}>
           Try again
         </button>
@@ -80,7 +84,24 @@ function App() {
   }
   return (
     <div className="app">
-      <InstanceList />
+      <nav className="app-nav">
+        <button
+          type="button"
+          className={`nav-tab${page === 'workstations' ? ' nav-tab--active' : ''}`}
+          onClick={() => setPage('workstations')}
+        >
+          Workstations
+        </button>
+        <button
+          type="button"
+          className={`nav-tab${page === 'costs' ? ' nav-tab--active' : ''}`}
+          onClick={() => setPage('costs')}
+        >
+          Costs
+        </button>
+      </nav>
+      {page === 'workstations' && <InstanceList />}
+      {page === 'costs' && <CostTracker />}
       {info && <p className="build-info">{info}</p>}
     </div>
   )
