@@ -8,7 +8,7 @@ This repo is a **monorepo** with three subprojects:
 |------------|-------------|
 | **desk-sdk**   | Shared library (AWS, config, keys, logging, tab/control workflows). Used by the CLI and by Lambdas. |
 | **desk-cli**   | CLI application. Depends on desk-sdk. Provides the `desk` command. |
-| **desk-infra** | CloudFormation templates and Lambda code (reaper, control). Depends on desk-sdk only (uv pip install). |
+| **desk-infra** | CloudFormation templates and Lambda code (reaper). Depends on desk-sdk only (uv pip install). |
 
 The root is a **uv** workspace that links desk-sdk and desk-cli.
 
@@ -181,7 +181,7 @@ ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations 
 
 ## Infrastructure
 
-VPC, reaper Lambda, and control-plane Lambda are in **desk-infra**. See [desk-infra/README.md](desk-infra/README.md) for how to deploy the CloudFormation stacks and how to invoke the control Lambda (e.g. `desk list`).
+VPC and reaper Lambda are in **desk-infra**. See [desk-infra/README.md](desk-infra/README.md) for how to deploy the CloudFormation stacks.
 
 ---
 
