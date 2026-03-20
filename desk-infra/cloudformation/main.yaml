@@ -100,6 +100,10 @@ Resources:
                 - s3:DeleteObject
               Resource: !Sub "${DataBucket.Arn}/*"
             - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt DataBucket.Arn
+            - Effect: Allow
               Action: iam:PassRole
               Resource: "*"
               Condition:
