@@ -81,7 +81,7 @@ function extractParamNames(script: string): string[] {
 function renderTemplate(template: string, params: Record<string, string>): string {
   let result = template
   for (const [key, value] of Object.entries(params)) {
-    result = result.replaceAll(`{{${key}}}`, value)
+    result = result.split(`{{${key}}}`).join(value)
   }
   return result
 }
