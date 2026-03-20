@@ -88,6 +88,12 @@ Resources:
                 - ce:GetCostAndUsage
               Resource: "*"
             - Effect: Allow
+              Action:
+                - ssm:DescribeInstanceInformation
+                - ssm:SendCommand
+                - ssm:GetCommandInvocation
+              Resource: "*"
+            - Effect: Allow
               Action: iam:PassRole
               Resource: "*"
               Condition:
