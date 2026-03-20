@@ -108,7 +108,6 @@ export function CommandPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const pollingRef = useRef<Map<string, number>>(new Map())
-  const outputEndRef = useRef<HTMLDivElement>(null)
   const historyRef = useRef(history)
   historyRef.current = history
 
@@ -235,7 +234,6 @@ export function CommandPage() {
       })
       pollCommand(entry.id, entry.workstation, entry.commandId)
       if (!selectedSavedId) setScript('')
-      setTimeout(() => outputEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -364,168 +362,185 @@ export function CommandPage() {
         </div>
       </div>
 
-      {/* Saved commands section */}
-      <div className="saved-commands-section">
-        <div className="saved-commands-row">
-          <div className="command-control-group">
-            <label className="command-label" htmlFor="cmd-saved">Saved Command</label>
-            <select
-              id="cmd-saved"
-              className="command-select"
-              value={selectedSavedId}
-              onChange={(e) => handleSelectSaved(e.target.value)}
-              disabled={submitting}
-            >
-              <option value="">— None —</option>
-              {savedCommands.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="saved-commands-actions">
-            {selectedSavedId && (
+      <section className="command-section command-section-edit">
+        <div className="command-section-header">
+          <h2 className="command-section-title">Create / Edit Saved Command</h2>
+          <p className="command-section-description">
+            Choose a saved command, adjust parameters, and save reusable updates.
+          </p>
+        </div>
+        {/* Saved commands section */}
+        <div className="saved-commands-section">
+          <div className="saved-commands-row">
+            <div className="command-control-group">
+              <label className="command-label" htmlFor="cmd-saved">Saved Command</label>
+              <select
+                id="cmd-saved"
+                className="command-select"
+                value={selectedSavedId}
+                onChange={(e) => handleSelectSaved(e.target.value)}
+                disabled={submitting}
+              >
+                <option value="">— None —</option>
+                {savedCommands.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="saved-commands-actions">
+              {selectedSavedId && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleDeleteSaved}
+                  disabled={submitting}
+                >
+                  Delete
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={handleDeleteSaved}
-                disabled={submitting}
+                onClick={handleOpenSaveForm}
+                disabled={submitting || !script.trim()}
+                title="Save current script as a reusable command"
               >
-                Delete
+                Save as…
               </button>
-            )}
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={handleOpenSaveForm}
-              disabled={submitting || !script.trim()}
-              title="Save current script as a reusable command"
-            >
-              Save as…
-            </button>
-          </div>
-        </div>
-
-        {/* Parameter inputs */}
-        {selectedSaved && currentParams.length > 0 && (
-          <div className="saved-params">
-            <span className="command-label">Parameters</span>
-            <div className="saved-params-grid">
-              {currentParams.map((p) => (
-                <div key={p.name} className="saved-param-field">
-                  <label className="saved-param-label" htmlFor={`param-${p.name}`}>
-                    {p.name}
-                  </label>
-                  <input
-                    id={`param-${p.name}`}
-                    className="saved-param-input"
-                    type="text"
-                    value={paramValues[p.name] ?? ''}
-                    onChange={(e) =>
-                      setParamValues((prev) => ({ ...prev, [p.name]: e.target.value }))
-                    }
-                    placeholder={p.default ?? ''}
-                    disabled={submitting}
-                  />
-                </div>
-              ))}
             </div>
           </div>
-        )}
-      </div>
 
-      {/* Save form */}
-      {showSaveForm && (
-        <div className="save-form">
-          <div className="save-form-header">
-            <span className="command-label">Save Command</span>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setShowSaveForm(false)}
-            >
-              Cancel
-            </button>
-          </div>
-          <div className="save-form-fields">
-            <input
-              className="save-form-input"
-              type="text"
-              value={saveName}
-              onChange={(e) => setSaveName(e.target.value)}
-              placeholder="Command name"
-              disabled={saving}
-            />
-            <input
-              className="save-form-input"
-              type="text"
-              value={saveDescription}
-              onChange={(e) => setSaveDescription(e.target.value)}
-              placeholder="Description (optional)"
-              disabled={saving}
-            />
-          </div>
-          {detectedParamsForSave.length > 0 && (
-            <div className="save-form-params">
-              <span className="save-form-params-label">
-                Detected parameters ({`{{name}}`} syntax):
-              </span>
+          {/* Parameter inputs */}
+          {selectedSaved && currentParams.length > 0 && (
+            <div className="saved-params">
+              <span className="command-label">Parameters</span>
               <div className="saved-params-grid">
-                {detectedParamsForSave.map((name) => (
-                  <div key={name} className="saved-param-field">
-                    <label className="saved-param-label">{name}</label>
+                {currentParams.map((p) => (
+                  <div key={p.name} className="saved-param-field">
+                    <label className="saved-param-label" htmlFor={`param-${p.name}`}>
+                      {p.name}
+                    </label>
                     <input
+                      id={`param-${p.name}`}
                       className="saved-param-input"
                       type="text"
-                      value={saveParamDefaults[name] ?? ''}
+                      value={paramValues[p.name] ?? ''}
                       onChange={(e) =>
-                        setSaveParamDefaults((prev) => ({ ...prev, [name]: e.target.value }))
+                        setParamValues((prev) => ({ ...prev, [p.name]: e.target.value }))
                       }
-                      placeholder="Default value (optional)"
-                      disabled={saving}
+                      placeholder={p.default ?? ''}
+                      disabled={submitting}
                     />
                   </div>
                 ))}
               </div>
             </div>
           )}
-          {saveError && <p className="command-error" role="alert">{saveError}</p>}
+        </div>
+        {/* Save form */}
+        {showSaveForm && (
+          <div className="save-form">
+            <div className="save-form-header">
+              <span className="command-label">Save Command</span>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowSaveForm(false)}
+              >
+                Cancel
+              </button>
+            </div>
+            <div className="save-form-fields">
+              <input
+                className="save-form-input"
+                type="text"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                placeholder="Command name"
+                disabled={saving}
+              />
+              <input
+                className="save-form-input"
+                type="text"
+                value={saveDescription}
+                onChange={(e) => setSaveDescription(e.target.value)}
+                placeholder="Description (optional)"
+                disabled={saving}
+              />
+            </div>
+            {detectedParamsForSave.length > 0 && (
+              <div className="save-form-params">
+                <span className="save-form-params-label">
+                  Detected parameters ({`{{name}}`} syntax):
+                </span>
+                <div className="saved-params-grid">
+                  {detectedParamsForSave.map((name) => (
+                    <div key={name} className="saved-param-field">
+                      <label className="saved-param-label">{name}</label>
+                      <input
+                        className="saved-param-input"
+                        type="text"
+                        value={saveParamDefaults[name] ?? ''}
+                        onChange={(e) =>
+                          setSaveParamDefaults((prev) => ({ ...prev, [name]: e.target.value }))
+                        }
+                        placeholder="Default value (optional)"
+                        disabled={saving}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {saveError && <p className="command-error" role="alert">{saveError}</p>}
+            <button
+              type="button"
+              className="btn btn-start btn-sm"
+              onClick={handleSaveCommand}
+              disabled={saving || !saveName.trim() || !script.trim()}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="command-section command-section-run">
+        <div className="command-section-header">
+          <h2 className="command-section-title">Run Command</h2>
+          <p className="command-section-description">
+            Execute the current command on the selected workstation.
+          </p>
+        </div>
+        <div className="run-command-actions">
           <button
             type="button"
-            className="btn btn-start btn-sm"
-            onClick={handleSaveCommand}
-            disabled={saving || !saveName.trim() || !script.trim()}
+            className="btn btn-run"
+            disabled={submitting || !script.trim() || runningInstances.length === 0}
+            onClick={handleSubmit}
+            title="Run (Ctrl+Enter)"
           >
-            {saving ? 'Saving…' : 'Save'}
+            {submitting ? 'Sending…' : 'Run'}
           </button>
         </div>
-      )}
-
-      <div className="terminal-input-wrap">
-        <div className="terminal-prompt">$</div>
-        <textarea
-          className="terminal-input"
-          value={script}
-          onChange={(e) => setScript(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Enter command or script… Use {{param}} for parameters"
-          rows={3}
-          disabled={submitting || runningInstances.length === 0}
-          spellCheck={false}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-        />
-        <button
-          type="button"
-          className="btn btn-run"
-          disabled={submitting || !script.trim() || runningInstances.length === 0}
-          onClick={handleSubmit}
-          title="Run (Ctrl+Enter)"
-        >
-          {submitting ? 'Sending…' : 'Run'}
-        </button>
-      </div>
-      {submitError && <p className="command-error" role="alert">{submitError}</p>}
+        <div className="terminal-input-wrap">
+          <div className="terminal-prompt">$</div>
+          <textarea
+            className="terminal-input"
+            value={script}
+            onChange={(e) => setScript(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Enter command or script… Use {{param}} for parameters"
+            rows={3}
+            disabled={submitting || runningInstances.length === 0}
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+          />
+        </div>
+        {submitError && <p className="command-error" role="alert">{submitError}</p>}
+      </section>
 
       <div className="command-history">
         {history.map((entry) => (
@@ -556,7 +571,6 @@ export function CommandPage() {
             </pre>
           </div>
         ))}
-        <div ref={outputEndRef} />
       </div>
     </div>
   )
