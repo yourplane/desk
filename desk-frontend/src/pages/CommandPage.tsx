@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  createSavedCommand,
+  deleteSavedCommand,
   getCommandStatus,
   listInstances,
+  listSavedCommands,
   runCommand,
   type CommandStatus,
   type Instance,
+  type SavedCommandItem,
+  type SavedCommandParam,
 } from '../api/client'
 
 const TERMINAL_STATES = new Set(['Success', 'Failed', 'TimedOut', 'Cancelled', 'Cancelling'])
@@ -61,6 +66,26 @@ function statusColor(status: string): string {
   }
 }
 
+function extractParamNames(script: string): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const m of script.matchAll(/\{\{(\w+)\}\}/g)) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1])
+      result.push(m[1])
+    }
+  }
+  return result
+}
+
+function renderTemplate(template: string, params: Record<string, string>): string {
+  let result = template
+  for (const [key, value] of Object.entries(params)) {
+    result = result.split(`{{${key}}}`).join(value)
+  }
+  return result
+}
+
 export function CommandPage() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loadingInstances, setLoadingInstances] = useState(true)
@@ -71,6 +96,17 @@ export function CommandPage() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
 
+  // Saved commands state
+  const [savedCommands, setSavedCommands] = useState<SavedCommandItem[]>([])
+  const [selectedSavedId, setSelectedSavedId] = useState('')
+  const [paramValues, setParamValues] = useState<Record<string, string>>({})
+  const [showSaveForm, setShowSaveForm] = useState(false)
+  const [saveName, setSaveName] = useState('')
+  const [saveDescription, setSaveDescription] = useState('')
+  const [saveParamDefaults, setSaveParamDefaults] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
   const pollingRef = useRef<Map<string, number>>(new Map())
   const outputEndRef = useRef<HTMLDivElement>(null)
   const historyRef = useRef(history)
@@ -80,6 +116,10 @@ export function CommandPage() {
     (i) => i.state === 'running' || i.state === 'pending',
   )
 
+  const selectedSaved = savedCommands.find((c) => c.id === selectedSavedId) ?? null
+  const currentParams = selectedSaved?.parameters ?? []
+
+  // Load instances and saved commands on mount
   useEffect(() => {
     let cancelled = false
     setLoadingInstances(true)
@@ -96,6 +136,14 @@ export function CommandPage() {
       .finally(() => { if (!cancelled) setLoadingInstances(false) })
     return () => { cancelled = true }
   }, [])
+
+  const fetchSavedCommands = useCallback(() => {
+    listSavedCommands()
+      .then(setSavedCommands)
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => { fetchSavedCommands() }, [fetchSavedCommands])
 
   const updateHistoryEntry = useCallback((id: string, patch: Partial<HistoryEntry>) => {
     setHistory((prev) => {
@@ -132,7 +180,6 @@ export function CommandPage() {
     [updateHistoryEntry],
   )
 
-  // Resume polling for in-progress entries on mount
   useEffect(() => {
     for (const entry of historyRef.current) {
       if (!TERMINAL_STATES.has(entry.status)) {
@@ -145,16 +192,33 @@ export function CommandPage() {
     }
   }, [pollCommand])
 
+  const handleSelectSaved = (id: string) => {
+    setSelectedSavedId(id)
+    if (!id) return
+    const cmd = savedCommands.find((c) => c.id === id)
+    if (!cmd) return
+    setScript(cmd.script)
+    const defaults: Record<string, string> = {}
+    for (const p of cmd.parameters) {
+      defaults[p.name] = p.default ?? ''
+    }
+    setParamValues(defaults)
+  }
+
   const handleSubmit = async () => {
     if (!selectedWorkstation || !script.trim()) return
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const result = await runCommand(selectedWorkstation, script, user || undefined)
+      let finalScript = script
+      if (selectedSavedId && currentParams.length > 0) {
+        finalScript = renderTemplate(script, paramValues)
+      }
+      const result = await runCommand(selectedWorkstation, finalScript, user || undefined)
       const entry: HistoryEntry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         workstation: selectedWorkstation,
-        script,
+        script: finalScript,
         user: user || 'root',
         submittedAt: new Date().toISOString(),
         commandId: result.command_id,
@@ -170,7 +234,7 @@ export function CommandPage() {
         return next
       })
       pollCommand(entry.id, entry.workstation, entry.commandId)
-      setScript('')
+      if (!selectedSavedId) setScript('')
       setTimeout(() => outputEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e))
@@ -190,6 +254,62 @@ export function CommandPage() {
     setHistory([])
     saveHistory([])
   }
+
+  const handleDeleteSaved = async () => {
+    if (!selectedSavedId) return
+    if (!window.confirm(`Delete saved command "${selectedSaved?.name}"?`)) return
+    try {
+      await deleteSavedCommand(selectedSavedId)
+      setSelectedSavedId('')
+      setScript('')
+      setParamValues({})
+      fetchSavedCommands()
+    } catch {
+      // ignore
+    }
+  }
+
+  const handleOpenSaveForm = () => {
+    setSaveName('')
+    setSaveDescription('')
+    setSaveError(null)
+    const params = extractParamNames(script)
+    const defaults: Record<string, string> = {}
+    for (const p of params) defaults[p] = ''
+    setSaveParamDefaults(defaults)
+    setShowSaveForm(true)
+  }
+
+  const handleSaveCommand = async () => {
+    if (!saveName.trim() || !script.trim()) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const detectedParams = extractParamNames(script)
+      const params: SavedCommandParam[] = detectedParams.map((name) => ({
+        name,
+        ...(saveParamDefaults[name] ? { default: saveParamDefaults[name] } : {}),
+      }))
+      const created = await createSavedCommand({
+        name: saveName.trim(),
+        script,
+        description: saveDescription.trim(),
+        parameters: params,
+      })
+      setShowSaveForm(false)
+      fetchSavedCommands()
+      setSelectedSavedId(created.id)
+      const defaults: Record<string, string> = {}
+      for (const p of created.parameters) defaults[p.name] = p.default ?? ''
+      setParamValues(defaults)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const detectedParamsForSave = extractParamNames(script)
 
   return (
     <div className="command-page">
@@ -244,6 +364,142 @@ export function CommandPage() {
         </div>
       </div>
 
+      {/* Saved commands section */}
+      <div className="saved-commands-section">
+        <div className="saved-commands-row">
+          <div className="command-control-group">
+            <label className="command-label" htmlFor="cmd-saved">Saved Command</label>
+            <select
+              id="cmd-saved"
+              className="command-select"
+              value={selectedSavedId}
+              onChange={(e) => handleSelectSaved(e.target.value)}
+              disabled={submitting}
+            >
+              <option value="">— None —</option>
+              {savedCommands.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="saved-commands-actions">
+            {selectedSavedId && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleDeleteSaved}
+                disabled={submitting}
+              >
+                Delete
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleOpenSaveForm}
+              disabled={submitting || !script.trim()}
+              title="Save current script as a reusable command"
+            >
+              Save as…
+            </button>
+          </div>
+        </div>
+
+        {/* Parameter inputs */}
+        {selectedSaved && currentParams.length > 0 && (
+          <div className="saved-params">
+            <span className="command-label">Parameters</span>
+            <div className="saved-params-grid">
+              {currentParams.map((p) => (
+                <div key={p.name} className="saved-param-field">
+                  <label className="saved-param-label" htmlFor={`param-${p.name}`}>
+                    {p.name}
+                  </label>
+                  <input
+                    id={`param-${p.name}`}
+                    className="saved-param-input"
+                    type="text"
+                    value={paramValues[p.name] ?? ''}
+                    onChange={(e) =>
+                      setParamValues((prev) => ({ ...prev, [p.name]: e.target.value }))
+                    }
+                    placeholder={p.default ?? ''}
+                    disabled={submitting}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Save form */}
+      {showSaveForm && (
+        <div className="save-form">
+          <div className="save-form-header">
+            <span className="command-label">Save Command</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowSaveForm(false)}
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="save-form-fields">
+            <input
+              className="save-form-input"
+              type="text"
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              placeholder="Command name"
+              disabled={saving}
+            />
+            <input
+              className="save-form-input"
+              type="text"
+              value={saveDescription}
+              onChange={(e) => setSaveDescription(e.target.value)}
+              placeholder="Description (optional)"
+              disabled={saving}
+            />
+          </div>
+          {detectedParamsForSave.length > 0 && (
+            <div className="save-form-params">
+              <span className="save-form-params-label">
+                Detected parameters ({`{{name}}`} syntax):
+              </span>
+              <div className="saved-params-grid">
+                {detectedParamsForSave.map((name) => (
+                  <div key={name} className="saved-param-field">
+                    <label className="saved-param-label">{name}</label>
+                    <input
+                      className="saved-param-input"
+                      type="text"
+                      value={saveParamDefaults[name] ?? ''}
+                      onChange={(e) =>
+                        setSaveParamDefaults((prev) => ({ ...prev, [name]: e.target.value }))
+                      }
+                      placeholder="Default value (optional)"
+                      disabled={saving}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {saveError && <p className="command-error" role="alert">{saveError}</p>}
+          <button
+            type="button"
+            className="btn btn-start btn-sm"
+            onClick={handleSaveCommand}
+            disabled={saving || !saveName.trim() || !script.trim()}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      )}
+
       <div className="terminal-input-wrap">
         <div className="terminal-prompt">$</div>
         <textarea
@@ -251,7 +507,7 @@ export function CommandPage() {
           value={script}
           onChange={(e) => setScript(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Enter command or script…"
+          placeholder="Enter command or script… Use {{param}} for parameters"
           rows={3}
           disabled={submitting || runningInstances.length === 0}
           spellCheck={false}

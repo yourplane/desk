@@ -712,6 +712,136 @@
   padding: 0.45rem 0;
 }
 
+/* ---- Saved Commands ---- */
+
+.saved-commands-section {
+  margin-bottom: 1rem;
+}
+
+.saved-commands-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.saved-commands-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding-bottom: 0.1rem;
+}
+
+.btn-sm {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8125rem;
+}
+
+.saved-params {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.saved-params-grid {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.saved-param-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 8rem;
+}
+
+.saved-param-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.saved-param-input {
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  background: var(--surface);
+  color: var(--text);
+  width: 12rem;
+}
+
+.saved-param-input:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.saved-param-input:disabled {
+  opacity: 0.6;
+}
+
+/* ---- Save Form ---- */
+
+.save-form {
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.save-form-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.save-form-fields {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.save-form-input {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  background: var(--surface);
+  color: var(--text);
+  flex: 1;
+  min-width: 10rem;
+}
+
+.save-form-input:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.save-form-input:disabled {
+  opacity: 0.6;
+}
+
+.save-form-params {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.save-form-params-label {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
 .terminal-input-wrap {
   display: flex;
   align-items: flex-start;
