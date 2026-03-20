@@ -16,7 +16,7 @@ desk-cli = { workspace = true }
 desk-api = { workspace = true }
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0"]
+dev = ["pytest>=7.0.0", "httpx>=0.24.0"]
 
 [tool.uv.workspace]
 members = ["desk-sdk", "desk-cli", "desk-api"]
@@ -25,4 +25,9 @@ members = ["desk-sdk", "desk-cli", "desk-api"]
 # SDK and CLI tests live in desk-sdk/tests and desk-cli/tests (separate runs to avoid conftest conflict).
 # Run all tests with: ./run_tests.sh  or  uv run pytest desk-sdk/tests && uv run pytest desk-cli/tests
 testpaths = []
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]
 

@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from './auth'
 import { InstanceList } from './pages/InstanceList'
 import { CostTracker } from './pages/CostTracker'
+import { ReaperPage } from './pages/ReaperPage'
 import './App.css'
 
-type Page = 'workstations' | 'costs'
+type Page = 'workstations' | 'costs' | 'reaper'
 
 function buildInfo(): string | null {
   const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
@@ -87,21 +88,29 @@ function App() {
       <nav className="app-nav">
         <button
           type="button"
-          className={`nav-tab${page === 'workstations' ? ' nav-tab--active' : ''}`}
+          className={`app-nav-tab${page === 'workstations' ? ' app-nav-tab--active' : ''}`}
           onClick={() => setPage('workstations')}
         >
           Workstations
         </button>
         <button
           type="button"
-          className={`nav-tab${page === 'costs' ? ' nav-tab--active' : ''}`}
+          className={`app-nav-tab${page === 'costs' ? ' app-nav-tab--active' : ''}`}
           onClick={() => setPage('costs')}
         >
           Costs
         </button>
+        <button
+          type="button"
+          className={`app-nav-tab${page === 'reaper' ? ' app-nav-tab--active' : ''}`}
+          onClick={() => setPage('reaper')}
+        >
+          Reaper
+        </button>
       </nav>
       {page === 'workstations' && <InstanceList />}
       {page === 'costs' && <CostTracker />}
+      {page === 'reaper' && <ReaperPage />}
       {info && <p className="build-info">{info}</p>}
     </div>
   )

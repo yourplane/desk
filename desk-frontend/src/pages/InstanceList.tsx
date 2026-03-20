@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { listInstances, setAutoStop, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
+import { createWorkstation, listInstances, setAutoStop, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
 import { isAuthEnabled, logout } from '../auth'
 
 const POLL_INTERVAL_MS = 10_000
@@ -59,6 +59,17 @@ function buildDurationFromTotalMinutes(totalMinutes: number): string {
   return `${minutes}m`
 }
 
+function toDatetimeLocalValue(isoUtc: string | null): string {
+  const d = isoUtc ? new Date(isoUtc) : null
+  const base = d && !Number.isNaN(d.getTime()) ? d : new Date(Date.now() + 2 * 3600_000)
+  const y = base.getFullYear()
+  const mo = String(base.getMonth() + 1).padStart(2, '0')
+  const day = String(base.getDate()).padStart(2, '0')
+  const h = String(base.getHours()).padStart(2, '0')
+  const mi = String(base.getMinutes()).padStart(2, '0')
+  return `${y}-${mo}-${day}T${h}:${mi}`
+}
+
 export function InstanceList() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loading, setLoading] = useState(true)
@@ -66,6 +77,12 @@ export function InstanceList() {
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [acting, setActing] = useState<string | null>(null)
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
+  const [customTime, setCustomTime] = useState('')
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [createInstanceType, setCreateInstanceType] = useState('t3.medium')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const loadInFlightRef = useRef(false)
   const actingRef = useRef<string | null>(null)
@@ -194,6 +211,21 @@ export function InstanceList() {
     }
   }
 
+  const onSetAutoStopAt = async (name: string, localDatetime: string) => {
+    setActing(name)
+    setError(null)
+    setOpenAutoStopFor(null)
+    try {
+      const utcIso = new Date(localDatetime).toISOString()
+      await setAutoStop(name, { shutdown_at: utcIso })
+      await load({ isBackgroundRefresh: true })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
   const onPlus2h = async (name: string, shutdownAt: string | null) => {
     setActing(name)
     setError(null)
@@ -216,6 +248,25 @@ export function InstanceList() {
     }
   }
 
+  const onCreate = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const trimmed = createName.trim()
+    if (!trimmed) return
+    setCreating(true)
+    setCreateError(null)
+    try {
+      await createWorkstation(trimmed, createInstanceType || undefined)
+      setShowCreateForm(false)
+      setCreateName('')
+      setCreateInstanceType('t3.medium')
+      await load()
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   useEffect(() => {
     if (openAutoStopFor === null) return
     const handleClickOutside = (e: MouseEvent) => {
@@ -231,8 +282,59 @@ export function InstanceList() {
     <div className="page-header">
       <h1 className="page-title">Workstations</h1>
       {isAuthEnabled() && (
-        <button type="button" className="btn btn-secondary" onClick={() => logout()}>
-          Log out
+        <div className="page-header-actions">
+          <button type="button" className="btn btn-secondary" onClick={() => logout()}>
+            Log out
+          </button>
+        </div>
+      )}
+    </div>
+  )
+
+  const createSection = (
+    <div className="create-section">
+      {showCreateForm ? (
+        <form className="create-form" onSubmit={onCreate}>
+          <div className="create-form-fields">
+            <input
+              className="create-input"
+              type="text"
+              placeholder="Workstation name"
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              required
+              autoFocus
+              disabled={creating}
+            />
+            <input
+              className="create-input create-input--narrow"
+              type="text"
+              placeholder="Instance type"
+              value={createInstanceType}
+              onChange={(e) => setCreateInstanceType(e.target.value)}
+              disabled={creating}
+            />
+            <button type="submit" className="btn btn-start" disabled={creating || !createName.trim()}>
+              {creating ? 'Creating…' : 'Launch'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => { setShowCreateForm(false); setCreateError(null) }}
+              disabled={creating}
+            >
+              Cancel
+            </button>
+          </div>
+          {createError && <p className="create-error" role="alert">{createError}</p>}
+        </form>
+      ) : (
+        <button
+          type="button"
+          className="btn btn-start"
+          onClick={() => { setShowCreateForm(true); setCreateError(null) }}
+        >
+          Create
         </button>
       )}
     </div>
@@ -258,6 +360,7 @@ export function InstanceList() {
             Log in again
           </button>
         )}
+        {createSection}
       </div>
     )
   }
@@ -315,7 +418,13 @@ export function InstanceList() {
                             type="button"
                             className="shutdown-clickable"
                             disabled={busy}
-                            onClick={() => setOpenAutoStopFor((prev) => (prev === nameOrId ? null : nameOrId))}
+                            onClick={() => {
+                              setOpenAutoStopFor((prev) => {
+                                if (prev === nameOrId) return null
+                                setCustomTime(toDatetimeLocalValue(inst.shutdown_at))
+                                return nameOrId
+                              })
+                            }}
                             title="Set auto-stop time"
                           >
                             {relative ? (
@@ -350,6 +459,22 @@ export function InstanceList() {
                                   {label}
                                 </button>
                               ))}
+                              <div className="shutdown-menu-custom">
+                                <input
+                                  type="datetime-local"
+                                  className="shutdown-menu-datetime"
+                                  value={customTime}
+                                  onChange={(e) => setCustomTime(e.target.value)}
+                                />
+                                <button
+                                  type="button"
+                                  className="btn btn-set-time"
+                                  disabled={!customTime}
+                                  onClick={() => onSetAutoStopAt(nameOrId, customTime)}
+                                >
+                                  Set
+                                </button>
+                              </div>
                               <button
                                 type="button"
                                 role="menuitem"
@@ -402,6 +527,7 @@ export function InstanceList() {
           </tbody>
         </table>
       </div>
+      {createSection}
     </div>
   )
 }

@@ -4,4 +4,3 @@
 *__pycache__*
 .aws-sam
 infrastructure/reaper/desk
-infrastructure/control/desk
