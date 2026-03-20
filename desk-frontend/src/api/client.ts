@@ -105,6 +105,37 @@ export async function killInstance(name: string): Promise<{ instance_id: string 
   return res.json()
 }
 
+export interface CreateWorkstationResult {
+  instance_id: string
+  name: string
+  shutdown_at: string | null
+}
+
+export async function createWorkstation(
+  name: string,
+  instanceType?: string,
+): Promise<CreateWorkstationResult> {
+  const body: Record<string, string> = { name }
+  if (instanceType) body.instance_type = instanceType
+  const res = await fetchWithAuthRetry('/api/workstations', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }

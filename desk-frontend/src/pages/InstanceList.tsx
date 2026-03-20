@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { listInstances, setAutoStop, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
+import { createWorkstation, listInstances, setAutoStop, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
 import { isAuthEnabled, logout } from '../auth'
 
 const POLL_INTERVAL_MS = 10_000
@@ -66,6 +66,11 @@ export function InstanceList() {
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [acting, setActing] = useState<string | null>(null)
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [createInstanceType, setCreateInstanceType] = useState('t3.medium')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const loadInFlightRef = useRef(false)
   const actingRef = useRef<string | null>(null)
@@ -216,6 +221,25 @@ export function InstanceList() {
     }
   }
 
+  const onCreate = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const trimmed = createName.trim()
+    if (!trimmed) return
+    setCreating(true)
+    setCreateError(null)
+    try {
+      await createWorkstation(trimmed, createInstanceType || undefined)
+      setShowCreateForm(false)
+      setCreateName('')
+      setCreateInstanceType('t3.medium')
+      await load()
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   useEffect(() => {
     if (openAutoStopFor === null) return
     const handleClickOutside = (e: MouseEvent) => {
@@ -231,8 +255,59 @@ export function InstanceList() {
     <div className="page-header">
       <h1 className="page-title">Workstations</h1>
       {isAuthEnabled() && (
-        <button type="button" className="btn btn-secondary" onClick={() => logout()}>
-          Log out
+        <div className="page-header-actions">
+          <button type="button" className="btn btn-secondary" onClick={() => logout()}>
+            Log out
+          </button>
+        </div>
+      )}
+    </div>
+  )
+
+  const createSection = (
+    <div className="create-section">
+      {showCreateForm ? (
+        <form className="create-form" onSubmit={onCreate}>
+          <div className="create-form-fields">
+            <input
+              className="create-input"
+              type="text"
+              placeholder="Workstation name"
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              required
+              autoFocus
+              disabled={creating}
+            />
+            <input
+              className="create-input create-input--narrow"
+              type="text"
+              placeholder="Instance type"
+              value={createInstanceType}
+              onChange={(e) => setCreateInstanceType(e.target.value)}
+              disabled={creating}
+            />
+            <button type="submit" className="btn btn-start" disabled={creating || !createName.trim()}>
+              {creating ? 'Creating…' : 'Launch'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => { setShowCreateForm(false); setCreateError(null) }}
+              disabled={creating}
+            >
+              Cancel
+            </button>
+          </div>
+          {createError && <p className="create-error" role="alert">{createError}</p>}
+        </form>
+      ) : (
+        <button
+          type="button"
+          className="btn btn-start"
+          onClick={() => { setShowCreateForm(true); setCreateError(null) }}
+        >
+          Create
         </button>
       )}
     </div>
@@ -258,6 +333,7 @@ export function InstanceList() {
             Log in again
           </button>
         )}
+        {createSection}
       </div>
     )
   }
@@ -402,6 +478,7 @@ export function InstanceList() {
           </tbody>
         </table>
       </div>
+      {createSection}
     </div>
   )
 }
