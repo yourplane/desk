@@ -242,6 +242,94 @@ export async function getCommandStatus(
   return res.json()
 }
 
+// ---- Saved Commands ----
+
+export interface SavedCommandParam {
+  name: string
+  default?: string
+}
+
+export interface SavedCommandItem {
+  id: string
+  name: string
+  script: string
+  description: string
+  parameters: SavedCommandParam[]
+}
+
+export async function listSavedCommands(): Promise<SavedCommandItem[]> {
+  const res = await fetchWithAuthRetry('/api/saved-commands', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function createSavedCommand(
+  body: { name: string; script: string; description?: string; parameters?: SavedCommandParam[] },
+): Promise<SavedCommandItem> {
+  const res = await fetchWithAuthRetry('/api/saved-commands', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
+export async function updateSavedCommand(
+  id: string,
+  body: { name?: string; script?: string; description?: string; parameters?: SavedCommandParam[] },
+): Promise<SavedCommandItem> {
+  const res = await fetchWithAuthRetry(`/api/saved-commands/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
+export async function deleteSavedCommand(id: string): Promise<{ deleted: boolean }> {
+  const res = await fetchWithAuthRetry(`/api/saved-commands/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }
