@@ -640,3 +640,219 @@
   color: var(--text-muted);
   font-size: 0.875rem;
 }
+
+/* ---- Command Page ---- */
+
+.command-page {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: 1.5rem 1.75rem;
+}
+
+.command-controls {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.command-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.command-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.command-select {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 12rem;
+}
+
+.command-select:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.command-user-input {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  background: var(--surface);
+  color: var(--text);
+  width: 8rem;
+}
+
+.command-user-input:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.command-hint {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  padding: 0.45rem 0;
+}
+
+.terminal-input-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  background: #1e1e2e;
+  border-radius: 10px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.terminal-prompt {
+  color: #a6e3a1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  padding: 0.3rem 0.5rem 0.3rem 0.25rem;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.terminal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #cdd6f4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  padding: 0.3rem 0.4rem;
+  resize: vertical;
+  min-height: 2.5rem;
+  outline: none;
+}
+
+.terminal-input::placeholder {
+  color: #585b70;
+}
+
+.terminal-input:disabled {
+  opacity: 0.5;
+}
+
+.btn-run {
+  background: #a6e3a1;
+  color: #1e1e2e;
+  font-weight: 600;
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-left: 0.5rem;
+}
+
+.btn-run:not(:disabled):hover {
+  background: #94e2d5;
+}
+
+.btn-run:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.command-error {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--danger);
+}
+
+.command-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.terminal-output-block {
+  background: #1e1e2e;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.terminal-output-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #181825;
+  font-size: 0.8125rem;
+  flex-wrap: wrap;
+}
+
+.terminal-output-ws {
+  color: #89b4fa;
+  font-weight: 600;
+}
+
+.terminal-output-user {
+  color: #a6adc8;
+}
+
+.terminal-output-status {
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.terminal-output-time {
+  color: #6c7086;
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-output-script {
+  padding: 0.4rem 0.75rem;
+  color: #a6e3a1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875rem;
+  border-bottom: 1px solid #313244;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.terminal-output-content {
+  margin: 0;
+  padding: 0.75rem;
+  color: #cdd6f4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 24rem;
+  overflow-y: auto;
+  min-height: 1.5rem;
+}
+
+.terminal-stderr {
+  color: #f38ba8;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.terminal-cursor {
+  color: #a6e3a1;
+  animation: blink 1s step-end infinite;
+}
