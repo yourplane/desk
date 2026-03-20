@@ -16,7 +16,7 @@ desk-cli = { workspace = true }
 desk-api = { workspace = true }
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0"]
+dev = ["pytest>=7.0.0", "httpx>=0.24.0"]
 
 [tool.uv.workspace]
 members = ["desk-sdk", "desk-cli", "desk-api"]

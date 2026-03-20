@@ -23,11 +23,64 @@
   margin: 0;
 }
 
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
 .page-title {
   margin: 0 0 1.25rem;
   font-size: 1.5rem;
   font-weight: 600;
   color: var(--text);
+}
+
+.create-form {
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.create-form-fields {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.create-input {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 10rem;
+  flex: 1;
+}
+
+.create-input--narrow {
+  max-width: 10rem;
+  flex: 0 1 auto;
+}
+
+.create-input:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.create-input:disabled {
+  opacity: 0.6;
+}
+
+.create-error {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  color: var(--danger);
 }
 
 .loading,
