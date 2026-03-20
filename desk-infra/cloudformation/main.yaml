@@ -84,6 +84,10 @@ Resources:
               Action: cloudformation:DescribeStacks
               Resource: "*"
             - Effect: Allow
+              Action:
+                - ce:GetCostAndUsage
+              Resource: "*"
+            - Effect: Allow
               Action: iam:PassRole
               Resource: "*"
               Condition:

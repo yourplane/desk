@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from './auth'
 import { InstanceList } from './pages/InstanceList'
+import { CostTracker } from './pages/CostTracker'
 import { ReaperPage } from './pages/ReaperPage'
 import './App.css'
 
-type Page = 'workstations' | 'reaper'
+type Page = 'workstations' | 'costs' | 'reaper'
 
 function buildInfo(): string | null {
   const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
@@ -64,7 +65,7 @@ function App() {
     return (
       <div className="app">
         <h1 className="page-title">Sign-in failed</h1>
-        <p>We couldn’t complete sign-in. This can happen if the link was used twice or expired.</p>
+        <p>We couldn't complete sign-in. This can happen if the link was used twice or expired.</p>
         <button type="button" className="btn btn-start" onClick={() => goToLogin()}>
           Try again
         </button>
@@ -94,6 +95,13 @@ function App() {
         </button>
         <button
           type="button"
+          className={`app-nav-tab${page === 'costs' ? ' app-nav-tab--active' : ''}`}
+          onClick={() => setPage('costs')}
+        >
+          Costs
+        </button>
+        <button
+          type="button"
           className={`app-nav-tab${page === 'reaper' ? ' app-nav-tab--active' : ''}`}
           onClick={() => setPage('reaper')}
         >
@@ -101,6 +109,7 @@ function App() {
         </button>
       </nav>
       {page === 'workstations' && <InstanceList />}
+      {page === 'costs' && <CostTracker />}
       {page === 'reaper' && <ReaperPage />}
       {info && <p className="build-info">{info}</p>}
     </div>

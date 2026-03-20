@@ -443,3 +443,200 @@
   color: var(--text-muted);
   text-align: center;
 }
+
+/* ---- Cost Tracker ---- */
+
+.cost-tracker {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: 1.5rem 1.75rem;
+}
+
+.cost-cards {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.75rem;
+  flex-wrap: wrap;
+}
+
+.cost-card {
+  flex: 1 1 0;
+  min-width: 10rem;
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.cost-card-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.cost-card-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-card-sub {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.delta-up {
+  color: var(--danger) !important;
+}
+
+.delta-down {
+  color: var(--state-running) !important;
+}
+
+.cost-section {
+  margin-bottom: 1.75rem;
+}
+
+.cost-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 0.75rem;
+}
+
+/* Monthly bar chart */
+
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  height: 10rem;
+  padding-top: 1.25rem;
+}
+
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+.bar-value {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bar-track {
+  flex: 1;
+  width: 100%;
+  max-width: 3.5rem;
+  display: flex;
+  align-items: flex-end;
+}
+
+.bar-fill {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 4px 4px 0 0;
+  min-height: 2px;
+  transition: height 0.3s ease;
+}
+
+.bar-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.35rem;
+  white-space: nowrap;
+}
+
+/* Daily chart */
+
+.daily-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 7rem;
+  padding-top: 0.5rem;
+}
+
+.daily-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  min-width: 0;
+}
+
+.daily-track {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.daily-fill {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  opacity: 0.75;
+  transition: height 0.3s ease;
+}
+
+.daily-col:hover .daily-fill {
+  opacity: 1;
+}
+
+.daily-label {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
+
+/* Cost tables */
+
+.cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.cost-table th,
+.cost-table td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.cost-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.cost-table tbody tr:hover {
+  background: var(--bg);
+}
+
+.cost-table .num-col {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-table .category-label {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
