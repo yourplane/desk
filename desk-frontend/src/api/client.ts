@@ -121,15 +121,53 @@ export async function reapWorkstations(): Promise<ReapResult> {
   return res.json()
 }
 
+export interface CreateWorkstationResult {
+  instance_id: string
+  name: string
+  shutdown_at: string | null
+}
+
+export async function createWorkstation(
+  name: string,
+  instanceType?: string,
+): Promise<CreateWorkstationResult> {
+  const body: Record<string, string> = { name }
+  if (instanceType) body.instance_type = instanceType
+  const res = await fetchWithAuthRetry('/api/workstations', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }
 
 export async function setAutoStop(
   name: string,
-  options: { duration?: string; clear?: boolean }
+  options: { duration?: string; shutdown_at?: string; clear?: boolean }
 ): Promise<SetAutoStopResult> {
-  const body = options.clear ? { clear: true } : { duration: options.duration ?? '4h' }
+  let body: Record<string, unknown>
+  if (options.clear) {
+    body = { clear: true }
+  } else if (options.shutdown_at) {
+    body = { shutdown_at: options.shutdown_at }
+  } else {
+    body = { duration: options.duration ?? '4h' }
+  }
   const res = await fetchWithAuthRetry(
     `/api/workstations/${encodeURIComponent(name)}/auto-stop`,
     {

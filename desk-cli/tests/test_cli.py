@@ -135,14 +135,13 @@ def test_desk_create_help() -> None:
     assert "WORKSTATION" in output
 
 
-@patch("desk_cli.commands.create.list_workstations")
-def test_desk_create_rejects_duplicate_name_running(mock_list_workstations: object) -> None:
+@patch("desk_cli.commands.create.create_workstation")
+def test_desk_create_rejects_duplicate_name_running(mock_create: object) -> None:
     """desk create fails when workstation with same name is running."""
-    from desk.aws import Workstation
-
-    mock_list_workstations.return_value = [
-        Workstation(instance_id="i-existing", name="main", state="running"),
-    ]
+    mock_create.side_effect = ValueError(
+        "Workstation named 'main' already exists: i-existing (running). "
+        "Use a different name or terminate the existing workstation first."
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "main"])
@@ -153,14 +152,13 @@ def test_desk_create_rejects_duplicate_name_running(mock_list_workstations: obje
     assert "running" in result.output
 
 
-@patch("desk_cli.commands.create.list_workstations")
-def test_desk_create_rejects_duplicate_name_stopped(mock_list_workstations: object) -> None:
+@patch("desk_cli.commands.create.create_workstation")
+def test_desk_create_rejects_duplicate_name_stopped(mock_create: object) -> None:
     """desk create fails when workstation with same name is stopped."""
-    from desk.aws import Workstation
-
-    mock_list_workstations.return_value = [
-        Workstation(instance_id="i-stopped", name="myws", state="stopped"),
-    ]
+    mock_create.side_effect = ValueError(
+        "Workstation named 'myws' already exists: i-stopped (stopped). "
+        "Use a different name or terminate the existing workstation first."
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "myws"])
@@ -171,14 +169,13 @@ def test_desk_create_rejects_duplicate_name_stopped(mock_list_workstations: obje
     assert "stopped" in result.output
 
 
-@patch("desk_cli.commands.create.list_workstations")
-def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: object) -> None:
+@patch("desk_cli.commands.create.create_workstation")
+def test_desk_create_rejects_duplicate_name_stopping(mock_create: object) -> None:
     """desk create fails when workstation with same name is stopping."""
-    from desk.aws import Workstation
-
-    mock_list_workstations.return_value = [
-        Workstation(instance_id="i-stopping", name="myws", state="stopping"),
-    ]
+    mock_create.side_effect = ValueError(
+        "Workstation named 'myws' already exists: i-stopping (stopping). "
+        "Use a different name or terminate the existing workstation first."
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "myws"])
@@ -188,35 +185,16 @@ def test_desk_create_rejects_duplicate_name_stopping(mock_list_workstations: obj
     assert "stopping" in result.output
 
 
-@patch("desk_cli.commands.create.run_workstation")
-@patch("desk_cli.commands.create.get_latest_ubuntu_ami")
-@patch("desk_cli.commands.create.get_desk_vpc_outputs")
-@patch("desk_cli.commands.create.list_workstations")
-def test_desk_create_allows_duplicate_name_when_terminated(
-    mock_list_workstations: object,
-    mock_vpc: object,
-    mock_ami: object,
-    mock_run: object,
-) -> None:
+@patch("desk_cli.commands.create.create_workstation")
+def test_desk_create_allows_duplicate_name_when_terminated(mock_create: object) -> None:
     """desk create succeeds when only terminated workstations have same name."""
-    from desk.aws import Workstation
-
-    mock_list_workstations.return_value = [
-        Workstation(instance_id="i-old", name="main", state="terminated"),
-    ]
-    mock_vpc.return_value = type("V", (), {
-        "private_subnet_ids": ["subnet-1"],
-        "security_group_id": "sg-1",
-        "instance_profile_name": "profile-1",
-    })()
-    mock_ami.return_value = "ami-123"
-    mock_run.return_value = ("i-new123", "2026-02-07T20:00:00Z")
+    mock_create.return_value = ("i-new123", "2026-02-07T20:00:00Z")
 
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "main"])
 
     assert result.exit_code == 0
-    mock_run.assert_called_once()
+    mock_create.assert_called_once()
     assert "created successfully" in result.output
 
 
@@ -1914,58 +1892,28 @@ def test_desk_start_shutdown_zero_skips_tag(
     mock_start.assert_called_once_with("i-abc123", shutdown_after="0", region=None, profile=None)
 
 
-@patch("desk_cli.commands.create.run_workstation")
-@patch("desk_cli.commands.create.get_latest_ubuntu_ami")
-@patch("desk_cli.commands.create.get_desk_vpc_outputs")
-@patch("desk_cli.commands.create.list_workstations")
-def test_desk_create_sets_shutdown_tag(
-    mock_list_workstations: object,
-    mock_vpc: object,
-    mock_ami: object,
-    mock_run: object,
-) -> None:
-    """desk create sets a shutdown tag on the new instance via SDK."""
-    mock_list_workstations.return_value = []
-    mock_vpc.return_value = type("V", (), {
-        "private_subnet_ids": ["subnet-1"],
-        "security_group_id": "sg-1",
-        "instance_profile_name": "profile-1",
-    })()
-    mock_ami.return_value = "ami-123"
-    mock_run.return_value = ("i-new123", "2026-02-07T20:00:00Z")
+@patch("desk_cli.commands.create.create_workstation")
+def test_desk_create_sets_shutdown_tag(mock_create: object) -> None:
+    """desk create passes default shutdown_after=4h to SDK."""
+    mock_create.return_value = ("i-new123", "2026-02-07T20:00:00Z")
 
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "main"])
     assert result.exit_code == 0
-    mock_run.assert_called_once()
-    call_kw = mock_run.call_args[1]
+    mock_create.assert_called_once()
+    call_kw = mock_create.call_args[1]
     assert call_kw["shutdown_after"] == "4h"
 
 
-@patch("desk_cli.commands.create.run_workstation")
-@patch("desk_cli.commands.create.get_latest_ubuntu_ami")
-@patch("desk_cli.commands.create.get_desk_vpc_outputs")
-@patch("desk_cli.commands.create.list_workstations")
-def test_desk_create_shutdown_zero_skips_tag(
-    mock_list_workstations: object,
-    mock_vpc: object,
-    mock_ami: object,
-    mock_run: object,
-) -> None:
+@patch("desk_cli.commands.create.create_workstation")
+def test_desk_create_shutdown_zero_skips_tag(mock_create: object) -> None:
     """desk create --shutdown 0 passes 0 to SDK (no tag set)."""
-    mock_list_workstations.return_value = []
-    mock_vpc.return_value = type("V", (), {
-        "private_subnet_ids": ["subnet-1"],
-        "security_group_id": "sg-1",
-        "instance_profile_name": "profile-1",
-    })()
-    mock_ami.return_value = "ami-123"
-    mock_run.return_value = ("i-new123", None)
+    mock_create.return_value = ("i-new123", None)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["create", "main", "--shutdown", "0"])
     assert result.exit_code == 0
-    call_kw = mock_run.call_args[1]
+    call_kw = mock_create.call_args[1]
     assert call_kw["shutdown_after"] == "0"
 
 
