@@ -36,8 +36,11 @@
   color: var(--text);
 }
 
+.create-section {
+  margin-top: 1.25rem;
+}
+
 .create-form {
-  margin-bottom: 1.25rem;
   padding: 1rem;
   background: var(--bg);
   border-radius: 8px;
