@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from desk.aws import (
     clear_shutdown_tag,
     compute_shutdown_at,
+    create_workstation,
     list_workstations,
     parse_duration,
     resolve_workstation,
@@ -25,6 +26,14 @@ router = APIRouter(tags=["workstations"])
 
 def _region_profile():
     return get_default_region(), get_default_profile()
+
+
+class CreateWorkstationBody(BaseModel):
+    """Request body for POST /workstations."""
+
+    name: str
+    instance_type: str = "t3.medium"
+    shutdown_after: str = "4h"
 
 
 class AutoStopBody(BaseModel):
@@ -92,6 +101,33 @@ def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profi
     shutdown_at = compute_shutdown_at(hours)
     set_shutdown_tag(instance_id, shutdown_at, region=region, profile=profile)
     return {"instance_id": instance_id, "shutdown_at": shutdown_at}
+
+
+@router.post("/workstations")
+def create_workstation_route(body: CreateWorkstationBody):
+    """Create a new workstation instance."""
+    region, profile = _region_profile()
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Workstation name must not be empty.")
+
+    try:
+        instance_id, shutdown_at = create_workstation(
+            name,
+            body.instance_type,
+            shutdown_after=body.shutdown_after,
+            region=region,
+            profile=profile,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("create workstation failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    logger.info("created workstation name=%s instance_id=%s", name, instance_id)
+    return {"instance_id": instance_id, "name": name, "shutdown_at": shutdown_at}
 
 
 @router.get("/workstations")

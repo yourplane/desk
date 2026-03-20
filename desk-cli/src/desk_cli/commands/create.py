@@ -4,15 +4,8 @@ from __future__ import annotations
 
 import click
 
-from desk.aws import (
-    DeskVpcOutputs,
-    get_desk_vpc_outputs,
-    get_latest_ami_by_name_prefix,
-    get_latest_ubuntu_ami,
-    list_workstations,
-    run_workstation,
-)
-from desk.config import get_default_ami_prefix, get_default_profile, get_default_region
+from desk.aws import create_workstation
+from desk.config import get_default_profile, get_default_region
 
 
 @click.command("create")
@@ -29,13 +22,6 @@ from desk.config import get_default_ami_prefix, get_default_profile, get_default
     "-a",
     default=None,
     help="AMI ID. Default: latest AMI matching config ami_prefix, or latest Ubuntu 24.04 LTS.",
-)
-@click.option(
-    "--stack",
-    "-s",
-    default="desk",
-    show_default=True,
-    help="CloudFormation stack name for desk VPC.",
 )
 @click.option(
     "--region",
@@ -63,7 +49,6 @@ def create(
     workstation: str,
     instance_type: str,
     ami: str | None,
-    stack: str,
     region: str | None,
     profile: str | None,
     shutdown_after: str,
@@ -79,55 +64,18 @@ def create(
     region = region or get_default_region()
     profile = profile or get_default_profile()
 
-    # Check for duplicate workstation names (only terminated state allows duplicates)
-    existing = list_workstations(region=region, profile=profile)
-    duplicates = [
-        w for w in existing
-        if w.name == workstation and w.state != "terminated"
-    ]
-    if duplicates:
-        states = ", ".join(f"{w.instance_id} ({w.state})" for w in duplicates)
-        raise click.ClickException(
-            f"Workstation named '{workstation}' already exists: {states}. "
-            "Use a different name or terminate the existing workstation first."
-        )
-
-    click.echo("Fetching desk VPC configuration...")
-    vpc_outputs: DeskVpcOutputs = get_desk_vpc_outputs(
-        stack_name=stack,
-        region=region,
-        profile=profile,
-    )
-
-    if ami:
-        click.echo(f"Using specified AMI: {ami}")
-    else:
-        ami_prefix = get_default_ami_prefix()
-        if ami_prefix:
-            click.echo(f"Looking up latest AMI with name prefix '{ami_prefix}'...")
-            ami = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
-        else:
-            ami = None
-        if not ami:
-            click.echo("Looking up latest Ubuntu 24.04 LTS AMI...")
-            ami = get_latest_ubuntu_ami(region=region, profile=profile)
-
-    # Use first private subnet
-    subnet_id = vpc_outputs.private_subnet_ids[0]
-
     click.echo(f"Launching instance '{workstation}' ({instance_type})...")
-    instance_id, _ = run_workstation(
-        ami_id=ami,
-        instance_type=instance_type,
-        subnet_id=subnet_id,
-        security_group_ids=[vpc_outputs.security_group_id],
-        iam_instance_profile_name=vpc_outputs.instance_profile_name,
-        name=workstation,
-        shutdown_after=shutdown_after,
-        key_name=None,
-        region=region,
-        profile=profile,
-    )
+    try:
+        instance_id, _ = create_workstation(
+            workstation,
+            instance_type,
+            ami_id=ami or None,
+            shutdown_after=shutdown_after,
+            region=region,
+            profile=profile,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
 
     click.echo()
     click.secho("Workstation created successfully!", fg="green", bold=True)

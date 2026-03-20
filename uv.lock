@@ -157,6 +157,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "pytest" },
 ]
 
@@ -170,6 +171,7 @@ requires-dist = [
     { name = "desk-api", editable = "desk-api" },
     { name = "desk-cli", editable = "desk-cli" },
     { name = "desk-sdk", editable = "desk-sdk" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
 ]
 provides-extras = ["dev"]
