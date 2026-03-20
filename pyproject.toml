@@ -26,3 +26,8 @@ members = ["desk-sdk", "desk-cli", "desk-api"]
 # Run all tests with: ./run_tests.sh  or  uv run pytest desk-sdk/tests && uv run pytest desk-cli/tests
 testpaths = []
 
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]
+

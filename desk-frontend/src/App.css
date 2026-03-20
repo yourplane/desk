@@ -193,6 +193,45 @@
   background: var(--bg);
 }
 
+.shutdown-menu-custom {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+  padding-top: 0.5rem;
+}
+
+.shutdown-menu-datetime {
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  min-width: 0;
+  flex: 1;
+}
+
+.shutdown-menu-datetime:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 1px;
+}
+
+.btn-set-time {
+  background: var(--accent);
+  color: #fff;
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  padding: 0.3rem 0.65rem;
+}
+
+.btn-set-time:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
 .shutdown-menu-item--clear {
   color: var(--text-muted);
   border-top: 1px solid var(--border);

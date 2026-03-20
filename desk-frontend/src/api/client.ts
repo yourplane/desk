@@ -111,9 +111,16 @@ export type SetAutoStopResult =
 
 export async function setAutoStop(
   name: string,
-  options: { duration?: string; clear?: boolean }
+  options: { duration?: string; shutdown_at?: string; clear?: boolean }
 ): Promise<SetAutoStopResult> {
-  const body = options.clear ? { clear: true } : { duration: options.duration ?? '4h' }
+  let body: Record<string, unknown>
+  if (options.clear) {
+    body = { clear: true }
+  } else if (options.shutdown_at) {
+    body = { shutdown_at: options.shutdown_at }
+  } else {
+    body = { duration: options.duration ?? '4h' }
+  }
   const res = await fetchWithAuthRetry(
     `/api/workstations/${encodeURIComponent(name)}/auto-stop`,
     {
