@@ -105,6 +105,22 @@ export async function killInstance(name: string): Promise<{ instance_id: string 
   return res.json()
 }
 
+export interface ReapResult {
+  stopped: { instance_id: string; name: string; shutdown_at: string | null }[]
+}
+
+export async function reapWorkstations(): Promise<ReapResult> {
+  const res = await fetchWithAuthRetry('/api/workstations/reap', {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }

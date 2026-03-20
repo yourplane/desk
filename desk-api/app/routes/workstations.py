@@ -10,6 +10,7 @@ from desk.aws import (
     compute_shutdown_at,
     list_workstations,
     parse_duration,
+    reap_overdue,
     resolve_workstation,
     set_shutdown_tag,
     start_workstation,
@@ -141,6 +142,28 @@ def kill_instance_by_name(name: str):
         logger.exception("terminate_instance failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
     return {"instance_id": instance_id}
+
+
+@router.post("/workstations/reap")
+def reap_workstations():
+    """Stop all workstations past their auto-stop time. Returns the list of stopped workstations."""
+    region, profile = _region_profile()
+    logger.info("reap_workstations: region=%s profile=%s", region, profile)
+    try:
+        overdue = reap_overdue(region=region, profile=profile)
+    except Exception as e:
+        logger.exception("reap_workstations failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    stopped = [
+        {
+            "instance_id": w.instance_id,
+            "name": w.name or "-",
+            "shutdown_at": w.shutdown_at,
+        }
+        for w in overdue
+    ]
+    logger.info("reap_workstations: stopped %d workstation(s)", len(stopped))
+    return {"stopped": stopped}
 
 
 @router.post("/workstations/{name}/auto-stop")
