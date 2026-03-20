@@ -1,6 +1,7 @@
 """Workstation management routes. All EC2 logic lives in desk-sdk."""
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -39,15 +40,32 @@ class AutoStopBody(BaseModel):
     """Request body for POST /workstations/{name}/auto-stop."""
 
     duration: str | None = None
+    shutdown_at: str | None = None
     clear: bool = False
+
+
+def _parse_shutdown_at(value: str) -> str:
+    """Validate and normalise an ISO 8601 timestamp to ``YYYY-MM-DDTHH:MM:SSZ``."""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid shutdown_at timestamp: {value!r}. Use ISO 8601 format.",
+        ) from e
+    utc = dt.astimezone(timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profile: str):
     """Shared implementation for auto-stop endpoints (workstations + legacy instances)."""
+    if body.duration and body.shutdown_at:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'duration' or 'shutdown_at', not both.",
+        )
+
     try:
-        # The frontend only shows the control for running/pending, but instances can
-        # transition quickly (e.g. running -> stopping) between render and click.
-        # Allow a slightly broader set of states to avoid spurious 404s.
         instance_id = resolve_workstation(
             name,
             region=region,
@@ -58,15 +76,21 @@ def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profi
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     logger.info(
-        "auto-stop request name=%s resolved_instance_id=%s duration=%s clear=%s",
+        "auto-stop request name=%s resolved_instance_id=%s duration=%s shutdown_at=%s clear=%s",
         name,
         instance_id,
         body.duration,
+        body.shutdown_at,
         body.clear,
     )
     if body.clear:
         clear_shutdown_tag(instance_id, region=region, profile=profile)
         return {"instance_id": instance_id, "shutdown_cleared": True}
+
+    if body.shutdown_at:
+        shutdown_at = _parse_shutdown_at(body.shutdown_at)
+        set_shutdown_tag(instance_id, shutdown_at, region=region, profile=profile)
+        return {"instance_id": instance_id, "shutdown_at": shutdown_at}
 
     duration = body.duration or "4h"
     try:
@@ -183,7 +207,8 @@ def kill_instance_by_name(name: str):
 def set_auto_stop(name: str, body: AutoStopBody):
     """Set or clear the auto-stop time for a workstation.
 
-    Body: { "duration": "4h" } or { "clear": true }.
+    Body: { "duration": "4h" }, { "shutdown_at": "2025-06-01T17:30:00Z" },
+    or { "clear": true }.
     """
     region, profile = _region_profile()
     return _set_or_clear_auto_stop(name, body, region=region, profile=profile)
