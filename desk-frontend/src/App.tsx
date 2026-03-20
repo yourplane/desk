@@ -3,9 +3,10 @@ import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from '
 import { InstanceList } from './pages/InstanceList'
 import { CostTracker } from './pages/CostTracker'
 import { ReaperPage } from './pages/ReaperPage'
+import { CommandPage } from './pages/CommandPage'
 import './App.css'
 
-type Page = 'workstations' | 'costs' | 'reaper'
+type Page = 'workstations' | 'costs' | 'reaper' | 'command'
 
 function buildInfo(): string | null {
   const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
@@ -107,10 +108,18 @@ function App() {
         >
           Reaper
         </button>
+        <button
+          type="button"
+          className={`app-nav-tab${page === 'command' ? ' app-nav-tab--active' : ''}`}
+          onClick={() => setPage('command')}
+        >
+          Command
+        </button>
       </nav>
       {page === 'workstations' && <InstanceList />}
       {page === 'costs' && <CostTracker />}
       {page === 'reaper' && <ReaperPage />}
+      {page === 'command' && <CommandPage />}
       {info && <p className="build-info">{info}</p>}
     </div>
   )

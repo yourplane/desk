@@ -10,10 +10,13 @@ from desk.aws import (
     clear_shutdown_tag,
     compute_shutdown_at,
     create_workstation,
+    get_command_invocation,
+    is_ssm_ready,
     list_workstations,
     parse_duration,
     reap_overdue,
     resolve_workstation,
+    send_ssm_command,
     set_shutdown_tag,
     start_workstation,
     stop_instance,
@@ -35,6 +38,14 @@ class CreateWorkstationBody(BaseModel):
     name: str
     instance_type: str = "t3.medium"
     shutdown_after: str = "4h"
+
+
+class RunCommandBody(BaseModel):
+    """Request body for POST /workstations/{name}/run."""
+
+    script: str
+    user: str | None = None
+    timeout: int = 3600
 
 
 class AutoStopBody(BaseModel):
@@ -235,3 +246,80 @@ def set_auto_stop(name: str, body: AutoStopBody):
     """
     region, profile = _region_profile()
     return _set_or_clear_auto_stop(name, body, region=region, profile=profile)
+
+
+def _shell_quote(s: str) -> str:
+    escaped = s.replace("'", "'\"'\"'")
+    return f"'{escaped}'"
+
+
+@router.post("/workstations/{name}/run")
+def run_command(name: str, body: RunCommandBody):
+    """Send a shell command to a workstation via SSM.
+
+    Returns the command_id so the client can poll for results.
+    """
+    region, profile = _region_profile()
+
+    script = body.script.strip()
+    if not script:
+        raise HTTPException(status_code=400, detail="Script must not be empty.")
+
+    try:
+        instance_id = resolve_workstation(name, region=region, profile=profile)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    if not is_ssm_ready(instance_id, region=region, profile=profile):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workstation {name} ({instance_id}) is not SSM-ready.",
+        )
+
+    script_content = script
+    if body.user:
+        script_content = f"sudo -u {body.user} bash -c {_shell_quote(script)}"
+
+    try:
+        command_id = send_ssm_command(
+            instance_id,
+            script_content,
+            region=region,
+            profile=profile,
+            timeout_seconds=body.timeout,
+        )
+    except Exception as e:
+        logger.exception("send_ssm_command failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    logger.info(
+        "run_command name=%s instance_id=%s command_id=%s", name, instance_id, command_id
+    )
+    return {"command_id": command_id, "instance_id": instance_id}
+
+
+@router.get("/workstations/{name}/commands/{command_id}")
+def get_command_status(name: str, command_id: str):
+    """Poll the status and output of a previously-submitted command."""
+    region, profile = _region_profile()
+
+    try:
+        instance_id = resolve_workstation(name, region=region, profile=profile)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    try:
+        result = get_command_invocation(
+            command_id, instance_id, region=region, profile=profile
+        )
+    except Exception as e:
+        logger.exception("get_command_invocation failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return {
+        "command_id": result.command_id,
+        "status": result.status,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "exit_code": result.exit_code,
+    }

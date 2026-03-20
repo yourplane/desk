@@ -183,6 +183,65 @@ export async function createWorkstation(
   return res.json()
 }
 
+export interface RunCommandResult {
+  command_id: string
+  instance_id: string
+}
+
+export interface CommandStatus {
+  command_id: string
+  status: string
+  stdout: string
+  stderr: string
+  exit_code: number | null
+}
+
+export async function runCommand(
+  name: string,
+  script: string,
+  user?: string,
+  timeout?: number,
+): Promise<RunCommandResult> {
+  const body: Record<string, unknown> = { script }
+  if (user) body.user = user
+  if (timeout !== undefined) body.timeout = timeout
+  const res = await fetchWithAuthRetry(
+    `/api/workstations/${encodeURIComponent(name)}/run`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
+export async function getCommandStatus(
+  name: string,
+  commandId: string,
+): Promise<CommandStatus> {
+  const res = await fetchWithAuthRetry(
+    `/api/workstations/${encodeURIComponent(name)}/commands/${encodeURIComponent(commandId)}`,
+    { headers: authHeaders() },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }
