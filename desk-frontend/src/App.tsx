@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from './auth'
 import { InstanceList } from './pages/InstanceList'
+import { ReaperPage } from './pages/ReaperPage'
 import './App.css'
+
+type Page = 'workstations' | 'reaper'
 
 function buildInfo(): string | null {
   const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
@@ -15,6 +18,7 @@ function App() {
   const [ready, setReady] = useState(false)
   const [isCallback, setIsCallback] = useState(false)
   const [callbackFailed, setCallbackFailed] = useState(false)
+  const [page, setPage] = useState<Page>('workstations')
   const info = buildInfo()
 
   useEffect(() => {
@@ -80,7 +84,24 @@ function App() {
   }
   return (
     <div className="app">
-      <InstanceList />
+      <nav className="app-nav">
+        <button
+          type="button"
+          className={`app-nav-tab${page === 'workstations' ? ' app-nav-tab--active' : ''}`}
+          onClick={() => setPage('workstations')}
+        >
+          Workstations
+        </button>
+        <button
+          type="button"
+          className={`app-nav-tab${page === 'reaper' ? ' app-nav-tab--active' : ''}`}
+          onClick={() => setPage('reaper')}
+        >
+          Reaper
+        </button>
+      </nav>
+      {page === 'workstations' && <InstanceList />}
+      {page === 'reaper' && <ReaperPage />}
       {info && <p className="build-info">{info}</p>}
     </div>
   )
