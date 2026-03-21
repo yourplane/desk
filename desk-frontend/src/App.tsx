@@ -7,6 +7,7 @@ import { CommandPage } from './pages/CommandPage'
 import './App.css'
 
 type Page = 'workstations' | 'costs' | 'reaper' | 'command'
+type CommandSection = 'manage' | 'run'
 
 function buildInfo(): string | null {
   const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
@@ -21,6 +22,7 @@ function App() {
   const [isCallback, setIsCallback] = useState(false)
   const [callbackFailed, setCallbackFailed] = useState(false)
   const [page, setPage] = useState<Page>('workstations')
+  const [commandSection, setCommandSection] = useState<CommandSection>('manage')
   const info = buildInfo()
 
   useEffect(() => {
@@ -111,7 +113,10 @@ function App() {
         <button
           type="button"
           className={`app-nav-tab${page === 'command' ? ' app-nav-tab--active' : ''}`}
-          onClick={() => setPage('command')}
+          onClick={() => {
+            setPage('command')
+            setCommandSection('manage')
+          }}
         >
           Command
         </button>
@@ -119,7 +124,11 @@ function App() {
       {page === 'workstations' && <InstanceList />}
       {page === 'costs' && <CostTracker />}
       {page === 'reaper' && <ReaperPage />}
-      {page === 'command' && <CommandPage />}
+      {page === 'command' && (
+        <CommandPage
+          initialSection={commandSection}
+        />
+      )}
       {info && <p className="build-info">{info}</p>}
     </div>
   )
