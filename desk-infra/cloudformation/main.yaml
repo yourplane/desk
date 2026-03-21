@@ -109,9 +109,19 @@ Resources:
               Condition:
                 StringEquals:
                   iam:PassedToService: ec2.amazonaws.com
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: !Ref CommandWorkflowStateMachine
+            - Effect: Allow
+              Action:
+                - states:DescribeExecution
+                - states:StopExecution
+              Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${AWS::StackName}-command-workflow:*"
       Environment:
         Variables:
           DESK_DATA_BUCKET: !Ref DataBucket
+          WORKFLOW_STATE_MACHINE_ARN: !Ref CommandWorkflowStateMachine
     Metadata:
       BuildMethod: makefile
 
@@ -179,6 +189,129 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+  WorkflowStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-api-gateway-for-workflow
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/POST/api/workstations/*/run"
+                  - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/GET/api/workstations/*/commands/*"
+
+  CommandWorkflowStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${AWS::StackName}-command-workflow"
+      RoleArn: !GetAtt WorkflowStateMachineRole.Arn
+      DefinitionString: !Sub |
+        {
+          "StartAt": "RunSteps",
+          "States": {
+            "RunSteps": {
+              "Type": "Map",
+              "ItemsPath": "$.steps",
+              "MaxConcurrency": 1,
+              "Iterator": {
+                "StartAt": "RunCommand",
+                "States": {
+                  "RunCommand": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::apigateway:invoke",
+                    "Parameters": {
+                      "ApiEndpoint": "${HttpApi}.execute-api.${AWS::Region}.amazonaws.com",
+                      "Stage": "$default",
+                      "Method": "POST",
+                      "Path.$": "States.Format('/api/workstations/{}/run', $.workstation)",
+                      "AuthType": "IAM_ROLE",
+                      "Headers": {
+                        "Content-Type": ["application/json"]
+                      },
+                      "RequestBody": {
+                        "script.$": "$.script",
+                        "user.$": "$.user",
+                        "timeout.$": "$.timeout"
+                      }
+                    },
+                    "ResultPath": "$.run",
+                    "Next": "WaitBeforePoll"
+                  },
+                  "WaitBeforePoll": {
+                    "Type": "Wait",
+                    "SecondsPath": "$.poll_interval_seconds",
+                    "Next": "PollCommand"
+                  },
+                  "PollCommand": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::apigateway:invoke",
+                    "Parameters": {
+                      "ApiEndpoint": "${HttpApi}.execute-api.${AWS::Region}.amazonaws.com",
+                      "Stage": "$default",
+                      "Method": "GET",
+                      "Path.$": "States.Format('/api/workstations/{}/commands/{}', $.workstation, $.run.ResponseBody.command_id)",
+                      "AuthType": "IAM_ROLE"
+                    },
+                    "ResultPath": "$.poll",
+                    "Next": "CheckStatus"
+                  },
+                  "CheckStatus": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Variable": "$.poll.ResponseBody.status",
+                        "StringEquals": "Success",
+                        "Next": "StepSucceeded"
+                      },
+                      {
+                        "Or": [
+                          {"Variable": "$.poll.ResponseBody.status", "StringEquals": "Failed"},
+                          {"Variable": "$.poll.ResponseBody.status", "StringEquals": "TimedOut"},
+                          {"Variable": "$.poll.ResponseBody.status", "StringEquals": "Cancelled"},
+                          {"Variable": "$.poll.ResponseBody.status", "StringEquals": "Cancelling"}
+                        ],
+                        "Next": "StepFailed"
+                      }
+                    ],
+                    "Default": "WaitBeforePoll"
+                  },
+                  "StepSucceeded": {
+                    "Type": "Pass",
+                    "Parameters": {
+                      "workstation.$": "$.workstation",
+                      "command_id.$": "$.run.ResponseBody.command_id",
+                      "instance_id.$": "$.run.ResponseBody.instance_id",
+                      "status.$": "$.poll.ResponseBody.status",
+                      "stdout.$": "$.poll.ResponseBody.stdout",
+                      "stderr.$": "$.poll.ResponseBody.stderr",
+                      "exit_code.$": "$.poll.ResponseBody.exit_code"
+                    },
+                    "End": true
+                  },
+                  "StepFailed": {
+                    "Type": "Fail",
+                    "Error": "CommandStepFailed",
+                    "Cause": "A command step finished with a non-success terminal status."
+                  }
+                }
+              },
+              "ResultPath": "$.results",
+              "End": true
+            }
+          }
+        }
 
   # ---- S3 data bucket (saved commands, etc.) ----
   DataBucket:

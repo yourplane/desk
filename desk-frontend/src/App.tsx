@@ -4,9 +4,10 @@ import { InstanceList } from './pages/InstanceList'
 import { CostTracker } from './pages/CostTracker'
 import { ReaperPage } from './pages/ReaperPage'
 import { CommandPage } from './pages/CommandPage'
+import { WorkflowPage } from './pages/WorkflowPage'
 import './App.css'
 
-type Page = 'workstations' | 'costs' | 'reaper' | 'command'
+type Page = 'workstations' | 'costs' | 'reaper' | 'command' | 'workflow'
 type CommandSection = 'manage' | 'run'
 
 function buildInfo(): string | null {
@@ -120,6 +121,13 @@ function App() {
         >
           Command
         </button>
+        <button
+          type="button"
+          className={`app-nav-tab${page === 'workflow' ? ' app-nav-tab--active' : ''}`}
+          onClick={() => setPage('workflow')}
+        >
+          Workflow
+        </button>
       </nav>
       {page === 'workstations' && <InstanceList />}
       {page === 'costs' && <CostTracker />}
@@ -129,6 +137,7 @@ function App() {
           initialSection={commandSection}
         />
       )}
+      {page === 'workflow' && <WorkflowPage />}
       {info && <p className="build-info">{info}</p>}
     </div>
   )

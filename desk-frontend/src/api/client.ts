@@ -390,3 +390,87 @@ export async function setAutoStop(
 
   return parsed as SetAutoStopResult
 }
+
+export interface WorkflowMethod {
+  id: string
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+}
+
+export interface WorkflowStepInput {
+  method_id: 'workstations.run_command'
+  workstation: string
+  script: string
+  user?: string
+  timeout?: number
+  poll_interval_seconds?: number
+}
+
+export interface WorkflowRunStart {
+  execution_arn: string
+  start_date: string
+  status: string
+}
+
+export interface WorkflowRunStatus {
+  execution_arn: string
+  state_machine_arn: string | null
+  status: string
+  is_terminal: boolean
+  start_date: string
+  stop_date: string | null
+  input: unknown
+  output: unknown
+}
+
+export async function listWorkflowMethods(): Promise<WorkflowMethod[]> {
+  const res = await fetchWithAuthRetry('/api/workflow/methods', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function startWorkflowRun(
+  steps: WorkflowStepInput[],
+  name?: string,
+): Promise<WorkflowRunStart> {
+  const body: Record<string, unknown> = { steps }
+  if (name) body.name = name
+  const res = await fetchWithAuthRetry('/api/workflow/runs', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function getWorkflowRunStatus(executionArn: string): Promise<WorkflowRunStatus> {
+  const res = await fetchWithAuthRetry(
+    `/api/workflow/runs/${encodeURIComponent(executionArn)}`,
+    { headers: authHeaders() },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function cancelWorkflowRun(executionArn: string): Promise<{ execution_arn: string; status: string }> {
+  const res = await fetchWithAuthRetry(
+    `/api/workflow/runs/${encodeURIComponent(executionArn)}/cancel`,
+    { method: 'POST', headers: authHeaders() },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
