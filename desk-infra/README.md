@@ -1,70 +1,59 @@
 # desk-infra
 
-CloudFormation templates and Lambda functions for desk: VPC/networking and auto-stop reaper.
-
-Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) for building and deploying the Lambda. Build uses `uv pip install` to install desk-sdk into the Lambda package.
+CloudFormation templates for desk: app infrastructure and scheduled auto-stop reaper.
 
 ---
 
 ## Deploy CloudFormation stacks
 
-Deploy in this order: VPC first, then the reaper Lambda.
+Deploy in this order: app infrastructure first, then the reaper schedule stack.
 
-### 1. VPC and networking
+### 1. App infrastructure
 
 From the repo root:
 
 ```bash
 aws cloudformation deploy \
   --stack-name desk \
-  --template-file desk-infra/desk-vpc.yaml \
+  --template-file desk-infra/cloudformation/main.yaml \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
 The template provides:
 
-- **VPC** with private subnets (2 AZs)
-- **NAT Gateway** for outbound internet (SSM and S3 traffic use the NAT)
-- **Security group** for workstations (no inbound rules)
-- **IAM instance profile** (`AmazonSSMManagedInstanceCore`)
+- **HTTP API + Lambda** for desk API routes
+- **Cognito/JWT auth** for user-facing API routes
+- **AWS_IAM protected reap route** at `POST /api/workstations/reap`
+- **S3/CloudFront/WAF** frontend infrastructure
 
 `desk create` (CLI) uses the stack outputs automatically.
 
-### 2. Reaper Lambda (auto-stop)
+### 2. Reaper schedule (auto-stop)
 
-The reaper runs every 10 minutes and stops workstations past their `desk:shutdown-at` time.
+The reaper schedule runs every 10 minutes and invokes `POST /api/workstations/reap` through API Gateway IAM auth. The API Lambda performs the reap logic.
 
-Run these commands from the **repo root** (the directory that contains `desk-infra/`). Use **`--build-in-source`** so the reaper Makefile finds `../../desk-sdk`; a plain `sam build` from `desk-infra` would run in a scratch dir without desk-sdk. For first-time deploy you may need `--resolve-s3` (or `--guided`) so SAM can upload the artifact to S3.
-
-First-time deploy (guided setup):
+After the `desk` stack deploys, get the API ID and deploy the schedule stack:
 
 ```bash
-cd desk-infra
-sam build --build-in-source --template desk-reaper.yaml
-sam deploy --guided --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM --resolve-s3
+API_ID=$(aws cloudformation describe-stacks \
+  --stack-name desk \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiId'].OutputValue" \
+  --output text)
+
+aws cloudformation deploy \
+  --stack-name reaper \
+  --template-file desk-infra/desk-reaper.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides HttpApiId="$API_ID" ApiStageName="\$default"
 ```
 
-On subsequent deploys (after the guided config is saved to `samconfig.toml`):
+**CloudWatch logs:** inspect the desk API Lambda log group (`/aws/lambda/<stack-name>-api`).
 
 ```bash
-cd desk-infra
-sam build --build-in-source --template desk-reaper.yaml
-sam deploy --template-file .aws-sam/build/template.yaml --stack-name reaper --capabilities CAPABILITY_IAM --resolve-s3
-```
-
-**Invoke and test:**
-
-```bash
-aws lambda invoke --cli-binary-format raw-in-base64-out --function-name desk-reaper --payload '{}' --region us-east-1 out.json && cat out.json
-```
-
-Response: `{"stopped": []}` when no workstations are overdue, or `{"stopped": [{"instance_id": "...", "name": "...", "shutdown_at": "..."}]}` when some were stopped.
-
-**CloudWatch logs:** Log group `/aws/lambda/desk-reaper`. List recent streams and get events:
-
-```bash
-aws logs describe-log-streams --log-group-name /aws/lambda/desk-reaper --order-by LastEventTime --descending --max-items 1 --region us-east-1
-aws logs get-log-events --log-group-name /aws/lambda/desk-reaper --log-stream-name "<stream-name>" --region us-east-1
+STACK_NAME=desk
+LOG_GROUP="/aws/lambda/${STACK_NAME}-api"
+aws logs describe-log-streams --log-group-name "$LOG_GROUP" --order-by LastEventTime --descending --max-items 1 --region us-east-1
+aws logs get-log-events --log-group-name "$LOG_GROUP" --log-stream-name "<stream-name>" --region us-east-1
 ```
 
 ---
@@ -72,7 +61,7 @@ aws logs get-log-events --log-group-name /aws/lambda/desk-reaper --log-stream-na
 ## Lint CloudFormation
 
 ```bash
-cfn-lint desk-infra/desk-vpc.yaml desk-infra/desk-reaper.yaml
+cfn-lint desk-infra/cloudformation/main.yaml desk-infra/desk-reaper.yaml desk-infra/desk-vpc.yaml
 ```
 
 Run from the repo root, or pass paths to the templates from your current directory.

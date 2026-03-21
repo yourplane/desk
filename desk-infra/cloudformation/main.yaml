@@ -165,6 +165,14 @@ Resources:
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub "integrations/${ApiIntegration}"
 
+  ApiReapRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /api/workstations/reap"
+      AuthorizationType: AWS_IAM
+      Target: !Sub "integrations/${ApiIntegration}"
+
   ApiStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
@@ -321,3 +329,5 @@ Outputs:
     Value: !Ref UserPoolDomain
   ApiEndpoint:
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  ApiId:
+    Value: !Ref HttpApi

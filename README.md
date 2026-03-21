@@ -8,7 +8,7 @@ This repo is a **monorepo** with three subprojects:
 |------------|-------------|
 | **desk-sdk**   | Shared library (AWS, config, keys, logging, tab/control workflows). Used by the CLI and by Lambdas. |
 | **desk-cli**   | CLI application. Depends on desk-sdk. Provides the `desk` command. |
-| **desk-infra** | CloudFormation templates and Lambda code (reaper). Depends on desk-sdk only (uv pip install). |
+| **desk-infra** | CloudFormation templates for app infrastructure and scheduled reaper automation. |
 
 The root is a **uv** workspace that links desk-sdk and desk-cli.
 
@@ -181,7 +181,7 @@ ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations 
 
 ## Infrastructure
 
-VPC and reaper Lambda are in **desk-infra**. See [desk-infra/README.md](desk-infra/README.md) for how to deploy the CloudFormation stacks.
+VPC/app infrastructure and the reaper schedule stack are in **desk-infra**. See [desk-infra/README.md](desk-infra/README.md) for deployment.
 
 ---
 
@@ -201,7 +201,7 @@ desk auto-stop main 6h         # reset to 6h from now
 desk auto-stop main 30m        # 30 minutes from now
 desk auto-stop main --clear    # remove timer
 
-# Manually stop overdue instances (also runs automatically via Lambda)
+# Manually stop overdue instances (also runs automatically via scheduled API invocation)
 desk reap                      # stop all overdue
 desk reap --dry-run            # preview without stopping
 ```

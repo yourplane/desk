@@ -1,6 +1,6 @@
 # Desk Web App Stack
 
-CloudFormation (SAM) stack for the desk web app: **basic Cognito** (username/password, no Google), **desk-api Lambda** (built with SAM from `desk-api/`), API Gateway with **built-in JWT authorizer**, S3, CloudFront with **viewer-request auth** (redirect to Cognito if no cookie), WAF.
+CloudFormation (SAM) stack for the desk web app: **basic Cognito** (username/password, no Google), **desk-api Lambda** (built with SAM from `desk-api/`), API Gateway with **built-in JWT authorizer** plus an **AWS_IAM-protected reap route**, S3, CloudFront with **viewer-request auth** (redirect to Cognito if no cookie), WAF.
 
 Auth is handled at the edge: a **CloudFront Function** checks for the `desk_token` cookie and redirects to Cognito hosted UI when missing. API Gateway validates the JWT (Cognito User Pool) with no custom authorizer code.
 

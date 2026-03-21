@@ -1,38 +1,53 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
-Description: Lambda that stops desk workstations past their auto-stop time, triggered every 10 minutes
+Description: EventBridge schedule that invokes the Desk API reap endpoint through IAM auth
+
+Parameters:
+  HttpApiId:
+    Type: String
+    Description: HTTP API ID from the desk main infrastructure stack
+  ApiStageName:
+    Type: String
+    Default: "$default"
+    Description: API stage name
+  ReaperScheduleExpression:
+    Type: String
+    Default: rate(10 minutes)
+    Description: EventBridge schedule expression for auto-reap runs
 
 Resources:
-  ReaperFunction:
-    Type: AWS::Serverless::Function
+  ReaperScheduleInvokeRole:
+    Type: AWS::IAM::Role
     Properties:
-      FunctionName: desk-reaper
-      Description: Stops desk workstations past their desk:shutdown-at time
-      Runtime: python3.12
-      CodeUri: reaper/
-      Handler: handler.handler
-      Timeout: 60
-      MemorySize: 128
+      Description: Allows EventBridge to invoke the reap API route with SigV4 IAM auth
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
       Policies:
-        - Statement:
-            - Effect: Allow
-              Action:
-                - ec2:DescribeInstances
-                - ec2:StopInstances
-              Resource: "*"
-      Tags:
-        desk:managed: "true"
-      Events:
-        ScheduleRule:
-          Type: Schedule
-          Properties:
-            Schedule: rate(10 minutes)
-            Description: Trigger desk-reaper every 10 minutes
-            Enabled: true
-    Metadata:
-      BuildMethod: makefile
+        - PolicyName: invoke-reap-api
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: execute-api:Invoke
+                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApiId}/${ApiStageName}/POST/api/workstations/reap"
+
+  ReaperScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Trigger the Desk API reap endpoint every 10 minutes
+      ScheduleExpression: !Ref ReaperScheduleExpression
+      State: ENABLED
+      Targets:
+        - Id: DeskApiReapEndpoint
+          Arn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApiId}/${ApiStageName}/POST/api/workstations/reap"
+          RoleArn: !GetAtt ReaperScheduleInvokeRole.Arn
+          Input: "{}"
 
 Outputs:
-  ReaperFunctionArn:
-    Description: ARN of the desk-reaper Lambda function
-    Value: !GetAtt ReaperFunction.Arn
+  ReaperScheduleRuleArn:
+    Description: ARN of the EventBridge schedule rule targeting the Desk API
+    Value: !GetAtt ReaperScheduleRule.Arn
