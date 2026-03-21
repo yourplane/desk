@@ -70,11 +70,7 @@ function toDatetimeLocalValue(isoUtc: string | null): string {
   return `${y}-${mo}-${day}T${h}:${mi}`
 }
 
-interface InstanceListProps {
-  onOpenCommand?: (workstation: string) => void
-}
-
-export function InstanceList({ onOpenCommand }: InstanceListProps) {
+export function InstanceList() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -502,18 +498,6 @@ export function InstanceList({ onOpenCommand }: InstanceListProps) {
                         onClick={() => onStart(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
                       >
                         {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Start'}
-                      </button>
-                    )}
-                    {(inst.state === 'running' || inst.state === 'pending') && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={acting !== null}
-                        onClick={() =>
-                          onOpenCommand?.(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)
-                        }
-                      >
-                        Command
                       </button>
                     )}
                     {(inst.state === 'running' || inst.state === 'pending') && (

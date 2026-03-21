@@ -88,14 +88,10 @@ function renderTemplate(template: string, params: Record<string, string>): strin
 
 interface CommandPageProps {
   initialSection?: 'manage' | 'run'
-  preselectedWorkstation?: string
-  contextVersion?: number
 }
 
 export function CommandPage({
   initialSection = 'manage',
-  preselectedWorkstation = '',
-  contextVersion = 0,
 }: CommandPageProps) {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loadingInstances, setLoadingInstances] = useState(true)
@@ -117,6 +113,8 @@ export function CommandPage({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<'manage' | 'run'>(initialSection)
+  const [runComposerOpen, setRunComposerOpen] = useState(false)
+  const [runInputType, setRunInputType] = useState<'custom' | 'saved'>('custom')
 
   const pollingRef = useRef<Map<string, number>>(new Map())
   const historyRef = useRef(history)
@@ -128,6 +126,8 @@ export function CommandPage({
 
   const selectedSaved = savedCommands.find((c) => c.id === selectedSavedId) ?? null
   const currentParams = selectedSaved?.parameters ?? []
+  const renderedSavedScript = selectedSaved ? renderTemplate(selectedSaved.script, paramValues) : ''
+  const runnableScript = runInputType === 'saved' ? renderedSavedScript : script
   const visibleHistory = selectedWorkstation
     ? history.filter((entry) => entry.workstation === selectedWorkstation)
     : history
@@ -152,10 +152,7 @@ export function CommandPage({
 
   useEffect(() => {
     setActiveSection(initialSection)
-    if (preselectedWorkstation) {
-      setSelectedWorkstation(preselectedWorkstation)
-    }
-  }, [contextVersion, initialSection, preselectedWorkstation])
+  }, [initialSection])
 
   const fetchSavedCommands = useCallback(() => {
     listSavedCommands()
@@ -217,7 +214,7 @@ export function CommandPage({
     if (!id) return
     const cmd = savedCommands.find((c) => c.id === id)
     if (!cmd) return
-    setScript(cmd.script)
+    if (activeSection === 'manage') setScript(cmd.script)
     const defaults: Record<string, string> = {}
     for (const p of cmd.parameters) {
       defaults[p.name] = p.default ?? ''
@@ -226,14 +223,11 @@ export function CommandPage({
   }
 
   const handleSubmit = async () => {
-    if (!selectedWorkstation || !script.trim()) return
+    if (!selectedWorkstation || !runnableScript.trim()) return
     setSubmitting(true)
     setSubmitError(null)
     try {
-      let finalScript = script
-      if (selectedSavedId && currentParams.length > 0) {
-        finalScript = renderTemplate(script, paramValues)
-      }
+      const finalScript = runnableScript
       const result = await runCommand(selectedWorkstation, finalScript, user || undefined)
       const entry: HistoryEntry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -254,7 +248,7 @@ export function CommandPage({
         return next
       })
       pollCommand(entry.id, entry.workstation, entry.commandId)
-      if (!selectedSavedId) setScript('')
+      if (runInputType === 'custom') setScript('')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -263,6 +257,7 @@ export function CommandPage({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!runComposerOpen || activeSection !== 'run' || runInputType !== 'custom') return
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault()
       handleSubmit()
@@ -568,33 +563,114 @@ export function CommandPage({
                 Execute the current command on the selected workstation.
               </p>
             </div>
-            <div className="run-command-actions">
+            {!runComposerOpen ? (
               <button
                 type="button"
-                className="btn btn-run"
-                disabled={submitting || !script.trim() || runningInstances.length === 0}
-                onClick={handleSubmit}
-                title="Run (Ctrl+Enter)"
+                className="btn btn-start"
+                onClick={() => setRunComposerOpen(true)}
+                disabled={runningInstances.length === 0}
               >
-                {submitting ? 'Sending…' : 'Run'}
+                Run command
               </button>
-            </div>
-            <div className="terminal-input-wrap">
-              <div className="terminal-prompt">$</div>
-              <textarea
-                className="terminal-input"
-                value={script}
-                onChange={(e) => setScript(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Enter command or script… Use {{param}} for parameters"
-                rows={3}
-                disabled={submitting || runningInstances.length === 0}
-                spellCheck={false}
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-              />
-            </div>
+            ) : (
+              <>
+                <div className="run-mode-controls">
+                  <label className="command-label" htmlFor="run-input-type">Command type</label>
+                  <select
+                    id="run-input-type"
+                    className="command-select"
+                    value={runInputType}
+                    onChange={(e) => setRunInputType(e.target.value as 'custom' | 'saved')}
+                    disabled={submitting}
+                  >
+                    <option value="custom">Custom command</option>
+                    <option value="saved">Saved command</option>
+                  </select>
+                </div>
+                {runInputType === 'custom' ? (
+                  <div className="terminal-input-wrap">
+                    <div className="terminal-prompt">$</div>
+                    <textarea
+                      className="terminal-input"
+                      value={script}
+                      onChange={(e) => setScript(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Enter command or script…"
+                      rows={3}
+                      disabled={submitting || runningInstances.length === 0}
+                      spellCheck={false}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                    />
+                  </div>
+                ) : (
+                  <div className="saved-commands-section">
+                    <div className="command-control-group">
+                      <label className="command-label" htmlFor="run-saved">Saved Command</label>
+                      <select
+                        id="run-saved"
+                        className="command-select"
+                        value={selectedSavedId}
+                        onChange={(e) => handleSelectSaved(e.target.value)}
+                        disabled={submitting}
+                      >
+                        <option value="">— Select saved command —</option>
+                        {savedCommands.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {selectedSaved && currentParams.length > 0 && (
+                      <div className="saved-params">
+                        <span className="command-label">Parameters</span>
+                        <div className="saved-params-grid">
+                          {currentParams.map((p) => (
+                            <div key={p.name} className="saved-param-field">
+                              <label className="saved-param-label" htmlFor={`run-param-${p.name}`}>
+                                {p.name}
+                              </label>
+                              <input
+                                id={`run-param-${p.name}`}
+                                className="saved-param-input"
+                                type="text"
+                                value={paramValues[p.name] ?? ''}
+                                onChange={(e) =>
+                                  setParamValues((prev) => ({ ...prev, [p.name]: e.target.value }))
+                                }
+                                placeholder={p.default ?? ''}
+                                disabled={submitting}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="readonly-command-wrap">
+                      <span className="command-label">Command preview</span>
+                      <pre className="readonly-command-content">{selectedSaved ? runnableScript : ''}</pre>
+                    </div>
+                  </div>
+                )}
+                <div className="run-command-actions">
+                  <button
+                    type="button"
+                    className="btn btn-run"
+                    disabled={
+                      submitting ||
+                      !selectedWorkstation ||
+                      !runnableScript.trim() ||
+                      runningInstances.length === 0 ||
+                      (runInputType === 'saved' && !selectedSavedId)
+                    }
+                    onClick={handleSubmit}
+                    title="Run (Ctrl+Enter)"
+                  >
+                    {submitting ? 'Sending…' : 'Run'}
+                  </button>
+                </div>
+              </>
+            )}
             {submitError && <p className="command-error" role="alert">{submitError}</p>}
           </section>
           <div className="command-history">
