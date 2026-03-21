@@ -390,3 +390,90 @@ export async function setAutoStop(
 
   return parsed as SetAutoStopResult
 }
+
+// ---- AMI cloud builds (Step Functions) ----
+
+export interface AmiRecipe {
+  recipe_id: string
+  name: string
+  body: Record<string, unknown>
+  updated_at: string
+  created_at?: string
+}
+
+export interface AmiBuild {
+  build_id: string
+  recipe_id: string
+  recipe_name: string
+  status: string
+  workstation_name?: string | null
+  instance_id?: string | null
+  ami_id?: string | null
+  ami_name?: string | null
+  execution_arn?: string | null
+  error_message?: string | null
+  updated_at: string
+  created_at?: string
+  execution_status?: string | null
+}
+
+export async function listAmiRecipes(): Promise<AmiRecipe[]> {
+  const res = await fetchWithAuthRetry('/api/ami-recipes', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function createAmiRecipe(
+  name: string,
+  body: Record<string, unknown>,
+): Promise<AmiRecipe & { recipe_id: string }> {
+  const res = await fetchWithAuthRetry('/api/ami-recipes', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, body }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
+export async function listAmiBuilds(): Promise<AmiBuild[]> {
+  const res = await fetchWithAuthRetry('/api/ami-builds', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function startAmiBuild(recipeId: string): Promise<{ build_id: string; status: string }> {
+  const res = await fetchWithAuthRetry('/api/ami-builds', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipe_id: recipeId }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}

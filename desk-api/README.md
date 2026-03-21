@@ -30,6 +30,13 @@ Running `uvicorn app.main:app` from the repo root without `--project desk-api` w
 - `POST /api/workstations/{name}/stop` — stop by name or instance ID
 - `POST /api/workstations/{name}/kill` — permanently terminate by name or instance ID
 
+### Cloud AMI build (Step Functions)
+
+Requires `DESK_AMI_RECIPES_TABLE`, `DESK_AMI_BUILDS_TABLE`, `DESK_AMI_BUILD_STATE_MACHINE_ARN` (set by the SAM stack).
+
+- `GET/POST /api/ami-recipes`, `GET/PUT/DELETE /api/ami-recipes/{id}` — recipe CRUD (body matches `desk ami build` JSON; cloud builds require `s3://` copy sources)
+- `GET/POST /api/ami-builds`, `GET /api/ami-builds/{id}` — list builds, start execution, optional Step Functions status on get
+
 AWS region/profile come from env (`AWS_REGION`, `AWS_PROFILE`) or desk config.
 
 ## Lambda

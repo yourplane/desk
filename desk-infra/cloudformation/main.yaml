@@ -109,11 +109,121 @@ Resources:
               Condition:
                 StringEquals:
                   iam:PassedToService: ec2.amazonaws.com
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt AmiRecipesTable.Arn
+                - !GetAtt AmiBuildsTable.Arn
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: !GetAtt AmiBuildStateMachine.Arn
+            - Effect: Allow
+              Action:
+                - states:DescribeExecution
+              Resource: "*"
       Environment:
         Variables:
           DESK_DATA_BUCKET: !Ref DataBucket
+          DESK_AMI_RECIPES_TABLE: !Ref AmiRecipesTable
+          DESK_AMI_BUILDS_TABLE: !Ref AmiBuildsTable
+          DESK_AMI_BUILD_STATE_MACHINE_ARN: !GetAtt AmiBuildStateMachine.Arn
     Metadata:
       BuildMethod: makefile
+
+  # ---- AMI build: DynamoDB + Step Functions + task Lambda ----
+  AmiRecipesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-ami-recipes"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: recipe_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: recipe_id
+          KeyType: HASH
+
+  AmiBuildsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-ami-builds"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: build_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: build_id
+          KeyType: HASH
+
+  AmiBuildTasksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-ami-build-tasks"
+      Runtime: python3.12
+      Handler: handler.handler
+      CodeUri: ../ami-build
+      Timeout: 900
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AmiRecipesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AmiBuildsTable
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+        - Statement:
+            - Effect: Allow
+              Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ec2:DescribeInstances
+                - ec2:DescribeTags
+                - ec2:DescribeImages
+                - ec2:TerminateInstances
+                - ec2:RunInstances
+                - ec2:CreateTags
+                - ec2:CreateImage
+              Resource: "*"
+            - Effect: Allow
+              Action: cloudformation:DescribeStacks
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ssm:DescribeInstanceInformation
+                - ssm:SendCommand
+                - ssm:GetCommandInvocation
+              Resource: "*"
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  iam:PassedToService: ec2.amazonaws.com
+      Environment:
+        Variables:
+          DESK_AMI_RECIPES_TABLE: !Ref AmiRecipesTable
+          DESK_AMI_BUILDS_TABLE: !Ref AmiBuildsTable
+          DESK_DATA_BUCKET: !Ref DataBucket
+    Metadata:
+      BuildMethod: makefile
+
+  AmiBuildStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-ami-build"
+      DefinitionUri: ../ami-build/ami-build.asl.json
+      DefinitionSubstitutions:
+        AmiBuildTasksArn: !GetAtt AmiBuildTasksFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AmiBuildTasksFunction
 
   # ---- API Gateway (JWT authorizer = Cognito, no custom Lambda) ----
   HttpApi:
@@ -321,3 +431,10 @@ Outputs:
     Value: !Ref UserPoolDomain
   ApiEndpoint:
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  AmiBuildStateMachineArn:
+    Description: Step Functions state machine for cloud AMI builds
+    Value: !GetAtt AmiBuildStateMachine.Arn
+  AmiRecipesTableName:
+    Value: !Ref AmiRecipesTable
+  AmiBuildsTableName:
+    Value: !Ref AmiBuildsTable

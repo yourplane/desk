@@ -1,0 +1,235 @@
+{
+  "Comment": "Desk cloud AMI build: validate, EC2 builder, SSM steps, create AMI, terminate",
+  "StartAt": "ValidateAndLoad",
+  "States": {
+    "ValidateAndLoad": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "ValidateAndLoad",
+        "payload.$": "$"
+      },
+      "ResultPath": "$",
+      "Next": "CreateBuilder",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "ValidateFailCleanup"
+        }
+      ]
+    },
+    "ValidateFailCleanup": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "CleanupAndFail",
+        "payload": {
+          "build_id.$": "$.build_id",
+          "error.$": "$.error"
+        }
+      },
+      "End": true
+    },
+    "CreateBuilder": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "CreateBuilder",
+        "payload.$": "$"
+      },
+      "ResultPath": "$",
+      "Next": "WaitForSSM",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "FailureCleanup"
+        }
+      ]
+    },
+    "WaitForSSM": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "WaitForSSM",
+        "payload.$": "$"
+      },
+      "ResultPath": "$",
+      "Next": "BuildSteps",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "FailureCleanup"
+        }
+      ]
+    },
+    "BuildSteps": {
+      "Type": "Map",
+      "ItemsPath": "$.steps",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "step.$": "$$.Map.Item.Value",
+        "instance_id.$": "$.instance_id",
+        "build_id.$": "$.build_id"
+      },
+      "Iterator": {
+        "StartAt": "DispatchStep",
+        "States": {
+          "DispatchStep": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.step.run",
+                "IsPresent": true,
+                "Next": "RunStepTask"
+              }
+            ],
+            "Default": "CopyStepTask"
+          },
+          "RunStepTask": {
+            "Type": "Task",
+            "Resource": "${AmiBuildTasksArn}",
+            "Parameters": {
+              "action": "RunStep",
+              "payload.$": "$"
+            },
+            "End": true
+          },
+          "CopyStepTask": {
+            "Type": "Task",
+            "Resource": "${AmiBuildTasksArn}",
+            "Parameters": {
+              "action": "CopyStep",
+              "payload.$": "$"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "CreateAmi",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "FailureCleanup"
+        }
+      ]
+    },
+    "CreateAmi": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "CreateAmi",
+        "payload.$": "$"
+      },
+      "ResultPath": "$",
+      "Next": "PollAmi",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "FailureCleanup"
+        }
+      ]
+    },
+    "PollAmi": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "PollAmi",
+        "payload.$": "$"
+      },
+      "ResultPath": "$",
+      "Next": "AmiReadyChoice",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "FailureCleanup"
+        }
+      ]
+    },
+    "AmiReadyChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ami_ready",
+          "BooleanEquals": true,
+          "Next": "AmiTerminalChoice"
+        }
+      ],
+      "Default": "WaitForAmiProgress"
+    },
+    "WaitForAmiProgress": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "PollAmi"
+    },
+    "AmiTerminalChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ami_failed",
+          "BooleanEquals": true,
+          "Next": "AmiFailedCleanup"
+        }
+      ],
+      "Default": "TerminateBuilder"
+    },
+    "AmiFailedCleanup": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "CleanupAndFail",
+        "payload": {
+          "build_id.$": "$.build_id",
+          "instance_id.$": "$.instance_id",
+          "error_message": "AMI creation failed (image error or deregistered)"
+        }
+      },
+      "End": true
+    },
+    "TerminateBuilder": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "TerminateBuilder",
+        "payload.$": "$"
+      },
+      "ResultPath": "$",
+      "Next": "FinalizeSuccess",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "FailureCleanup"
+        }
+      ]
+    },
+    "FinalizeSuccess": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "FinalizeSuccess",
+        "payload.$": "$"
+      },
+      "End": true
+    },
+    "FailureCleanup": {
+      "Type": "Task",
+      "Resource": "${AmiBuildTasksArn}",
+      "Parameters": {
+        "action": "CleanupAndFail",
+        "payload": {
+          "build_id.$": "$.build_id",
+          "instance_id.$": "$.instance_id",
+          "error.$": "$.error"
+        }
+      },
+      "End": true
+    }
+  }
+}

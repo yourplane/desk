@@ -14,6 +14,7 @@ from typing import Any
 
 import click
 
+from desk.ami_recipe import normalize_recipe_steps
 from desk.aws import (
     create_ami,
     get_ami_state,
@@ -43,67 +44,16 @@ def _load_build_config(path: str) -> dict[str, Any]:
         data = json.load(f)
     if not isinstance(data, dict):
         raise click.ClickException("Config must be a JSON object.")
-    steps = data.get("steps")
-    if steps is not None:
-        if not isinstance(steps, list):
-            raise click.ClickException("Config 'steps' must be a list.")
-        for i, step in enumerate(steps):
-            if not isinstance(step, dict):
-                raise click.ClickException(
-                    f"Config 'steps[{i}]' must be an object (with 'run' or 'copy')."
-                )
-            if "run" in step and "copy" in step:
-                raise click.ClickException(
-                    f"Config 'steps[{i}]' must have either 'run' or 'copy', not both."
-                )
-            if "run" in step:
-                if not isinstance(step["run"], str):
-                    raise click.ClickException(
-                        f"Config 'steps[{i}].run' must be a string."
-                    )
-            elif "copy" in step:
-                c = step["copy"]
-                if not isinstance(c, dict) or "source" not in c or "dest" not in c:
-                    raise click.ClickException(
-                        f"Config 'steps[{i}].copy' must be an object with 'source' and 'dest'."
-                    )
-            else:
-                raise click.ClickException(
-                    f"Config 'steps[{i}]' must have 'run' or 'copy'."
-                )
-    else:
-        # Legacy: separate copy and run lists
-        copy_list = data.get("copy")
-        if copy_list is not None and not isinstance(copy_list, list):
-            raise click.ClickException("Config 'copy' must be a list.")
-        run_list = data.get("run")
-        if run_list is not None and not isinstance(run_list, list):
-            raise click.ClickException("Config 'run' must be a list.")
-        run_before_copy = data.get("run_before_copy")
-        if run_before_copy is not None and not isinstance(run_before_copy, list):
-            raise click.ClickException("Config 'run_before_copy' must be a list.")
-        for i, item in enumerate(copy_list or []):
-            if not isinstance(item, dict) or "source" not in item or "dest" not in item:
-                raise click.ClickException(
-                    f"Config 'copy[{i}]' must be an object with 'source' and 'dest'."
-                )
+    try:
+        normalize_recipe_steps(data)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
     return data
 
 
 def _get_build_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
     """Return normalized list of steps (each has 'run' or 'copy') from config."""
-    steps = config.get("steps")
-    if steps is not None:
-        return steps
-    # Legacy: run_before_copy, then all copies, then all runs
-    out: list[dict[str, Any]] = []
-    for cmd in config.get("run_before_copy") or []:
-        out.append({"run": cmd})
-    for item in config.get("copy") or []:
-        out.append({"copy": item})
-    for cmd in config.get("run") or []:
-        out.append({"run": cmd})
-    return out
+    return normalize_recipe_steps(config)
 
 
 def _builder_name(ami_name: str) -> str:
