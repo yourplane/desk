@@ -330,6 +330,112 @@ export async function deleteSavedCommand(id: string): Promise<{ deleted: boolean
   return res.json()
 }
 
+export interface WorkflowStep {
+  action: string
+  target: string
+  script?: string
+  user?: string
+  timeout?: number
+}
+
+export interface WorkflowVersion {
+  version: number
+  created_at: string
+  steps: WorkflowStep[]
+}
+
+export interface WorkflowItem {
+  id: string
+  name: string
+  description: string
+  created_at: string
+  updated_at: string
+  status: 'active' | 'archived'
+  versions: WorkflowVersion[]
+}
+
+export interface WorkflowRunStep {
+  index: number
+  action: string
+  target: string
+  status: string
+  started_at?: string | null
+  finished_at?: string | null
+  error?: string | null
+}
+
+export interface WorkflowRunItem {
+  id: string
+  workflow_id: string
+  workflow_version: number
+  status: string
+  created_at: string
+  started_at?: string | null
+  finished_at?: string | null
+  cancel_requested: boolean
+  current_step_index: number
+  step_results: WorkflowRunStep[]
+  error?: string | null
+}
+
+export async function listWorkflows(): Promise<WorkflowItem[]> {
+  const res = await fetchWithAuthRetry('/api/workflows', { headers: authHeaders() })
+  if (!res.ok) throw new Error(errorMessage(res, await res.text()))
+  return res.json()
+}
+
+export async function createWorkflow(body: {
+  name: string
+  description?: string
+  steps: WorkflowStep[]
+}): Promise<WorkflowItem> {
+  const res = await fetchWithAuthRetry('/api/workflows', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(errorMessage(res, await res.text()))
+  return res.json()
+}
+
+export async function cloneWorkflowVersion(workflowId: string, version: number): Promise<{ version: number }> {
+  const res = await fetchWithAuthRetry(
+    `/api/workflows/${encodeURIComponent(workflowId)}/versions/${version}/clone`,
+    { method: 'POST', headers: authHeaders() },
+  )
+  if (!res.ok) throw new Error(errorMessage(res, await res.text()))
+  return res.json()
+}
+
+export async function startWorkflowRun(
+  workflowId: string,
+  workflowVersion?: number,
+): Promise<WorkflowRunItem> {
+  const body = workflowVersion ? { workflow_version: workflowVersion } : {}
+  const res = await fetchWithAuthRetry(`/api/workflows/${encodeURIComponent(workflowId)}/runs`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(errorMessage(res, await res.text()))
+  return res.json()
+}
+
+export async function listWorkflowRuns(): Promise<WorkflowRunItem[]> {
+  const res = await fetchWithAuthRetry('/api/workflow-runs', { headers: authHeaders() })
+  if (!res.ok) throw new Error(errorMessage(res, await res.text()))
+  return res.json()
+}
+
+export async function cancelWorkflowRun(runId: string): Promise<WorkflowRunItem> {
+  const res = await fetchWithAuthRetry(`/api/workflow-runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(errorMessage(res, await res.text()))
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }
