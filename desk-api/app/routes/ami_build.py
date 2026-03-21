@@ -1,4 +1,4 @@
-"""AMI recipe CRUD and Step Functions–backed cloud AMI builds."""
+"""AMI recipe CRUD and Step Functions–backed cloud AMI builds (metadata in S3)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -18,13 +19,15 @@ from desk.ami_recipe import validate_recipe_body
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ami-build"])
 
-RECIPES_TABLE = os.environ.get("DESK_AMI_RECIPES_TABLE", "")
-BUILDS_TABLE = os.environ.get("DESK_AMI_BUILDS_TABLE", "")
+DATA_BUCKET = os.environ.get("DESK_DATA_BUCKET", "")
+# Object keys: {prefix}/{id}.json under DESK_DATA_BUCKET
+RECIPES_PREFIX = os.environ.get("DESK_AMI_RECIPES_PREFIX", "ami-recipes").strip().strip("/")
+BUILDS_PREFIX = os.environ.get("DESK_AMI_BUILDS_PREFIX", "ami-builds").strip().strip("/")
 SFN_ARN = os.environ.get("DESK_AMI_BUILD_STATE_MACHINE_ARN", "")
 
 
-def _ddb():
-    return boto3.client("dynamodb")
+def _s3():
+    return boto3.client("s3")
 
 
 def _sfn():
@@ -35,11 +38,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _recipe_key(recipe_id: str) -> str:
+    return f"{RECIPES_PREFIX}/{recipe_id}.json"
+
+
+def _build_key(build_id: str) -> str:
+    return f"{BUILDS_PREFIX}/{build_id}.json"
+
+
 def _require_ami_config() -> None:
-    if not RECIPES_TABLE or not BUILDS_TABLE or not SFN_ARN:
+    if not DATA_BUCKET or not SFN_ARN:
         raise HTTPException(
             status_code=503,
-            detail="AMI build is not configured (missing table or state machine env).",
+            detail="AMI build is not configured (missing data bucket or state machine env).",
         )
 
 
@@ -57,58 +68,78 @@ class StartBuildBody(BaseModel):
     recipe_id: str
 
 
-def _item_to_recipe(item: dict[str, Any]) -> dict[str, Any]:
-    body_raw = item.get("body", {}).get("S", "{}")
-    try:
-        body = json.loads(body_raw)
-    except json.JSONDecodeError:
+def _load_recipe_obj(data: dict[str, Any]) -> dict[str, Any]:
+    body = data.get("body")
+    if not isinstance(body, dict):
         body = {}
     return {
-        "recipe_id": item["recipe_id"]["S"],
-        "name": item.get("name", {}).get("S", ""),
-        "body": body if isinstance(body, dict) else {},
-        "updated_at": item.get("updated_at", {}).get("S", ""),
-        "created_at": item.get("created_at", {}).get("S", ""),
+        "recipe_id": data.get("recipe_id", ""),
+        "name": data.get("name", "") or "",
+        "body": body,
+        "updated_at": data.get("updated_at", "") or "",
+        "created_at": data.get("created_at", "") or "",
     }
 
 
-def _item_to_build(item: dict[str, Any]) -> dict[str, Any]:
-    def _s(key: str) -> str | None:
-        v = item.get(key, {})
-        if "S" in v:
-            return v["S"]
-        return None
-
-    out = {
-        "build_id": item["build_id"]["S"],
-        "recipe_id": _s("recipe_id") or "",
-        "recipe_name": _s("recipe_name") or "",
-        "status": _s("status") or "unknown",
-        "workstation_name": _s("workstation_name"),
-        "instance_id": _s("instance_id"),
-        "ami_id": _s("ami_id"),
-        "ami_name": _s("ami_name"),
-        "execution_arn": _s("execution_arn"),
-        "error_message": _s("error_message"),
-        "updated_at": _s("updated_at") or "",
-        "created_at": _s("created_at") or "",
+def _load_build_obj(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "build_id": data.get("build_id", ""),
+        "recipe_id": data.get("recipe_id", "") or "",
+        "recipe_name": data.get("recipe_name", "") or "",
+        "status": data.get("status", "unknown") or "unknown",
+        "workstation_name": data.get("workstation_name"),
+        "instance_id": data.get("instance_id"),
+        "ami_id": data.get("ami_id"),
+        "ami_name": data.get("ami_name"),
+        "execution_arn": data.get("execution_arn"),
+        "error_message": data.get("error_message"),
+        "updated_at": data.get("updated_at", "") or "",
+        "created_at": data.get("created_at", "") or "",
     }
-    return out
+
+
+def _get_json_or_404(
+    bucket: str, key: str, *, not_found_detail: str = "Not found."
+) -> dict[str, Any]:
+    try:
+        r = _s3().get_object(Bucket=bucket, Key=key)
+        raw = r["Body"].read().decode("utf-8")
+        return json.loads(raw)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("NoSuchKey", "404"):
+            raise HTTPException(status_code=404, detail=not_found_detail) from e
+        raise
 
 
 @router.get("/ami-recipes")
 def list_recipes():
     """List saved AMI recipes."""
     _require_ami_config()
+    prefix = f"{RECIPES_PREFIX}/"
     try:
-        r = _ddb().scan(TableName=RECIPES_TABLE)
+        paginator = _s3().get_paginator("list_objects_v2")
+        keys: list[str] = []
+        for page in paginator.paginate(Bucket=DATA_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                k = obj.get("Key", "")
+                if k.endswith(".json"):
+                    keys.append(k)
+        recipes: list[dict[str, Any]] = []
+        for key in keys:
+            try:
+                r = _s3().get_object(Bucket=DATA_BUCKET, Key=key)
+                data = json.loads(r["Body"].read().decode("utf-8"))
+                recipes.append(_load_recipe_obj(data))
+            except Exception as e:
+                logger.warning("skip recipe key=%s: %s", key, e)
+        recipes.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+        return recipes
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("list_recipes: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
-    items = r.get("Items", [])
-    recipes = [_item_to_recipe(i) for i in items]
-    recipes.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
-    return recipes
 
 
 @router.post("/ami-recipes")
@@ -124,16 +155,19 @@ def create_recipe(body: CreateRecipeBody):
         raise HTTPException(status_code=400, detail=str(e)) from e
     rid = str(uuid.uuid4())
     ts = _now_iso()
+    doc = {
+        "recipe_id": rid,
+        "name": name,
+        "body": body.body,
+        "created_at": ts,
+        "updated_at": ts,
+    }
     try:
-        _ddb().put_item(
-            TableName=RECIPES_TABLE,
-            Item={
-                "recipe_id": {"S": rid},
-                "name": {"S": name},
-                "body": {"S": json.dumps(body.body)},
-                "created_at": {"S": ts},
-                "updated_at": {"S": ts},
-            },
+        _s3().put_object(
+            Bucket=DATA_BUCKET,
+            Key=_recipe_key(rid),
+            Body=json.dumps(doc).encode("utf-8"),
+            ContentType="application/json",
         )
     except Exception as e:
         logger.exception("create_recipe: %s", e)
@@ -144,20 +178,19 @@ def create_recipe(body: CreateRecipeBody):
 @router.get("/ami-recipes/{recipe_id}")
 def get_recipe(recipe_id: str):
     _require_ami_config()
-    r = _ddb().get_item(
-        TableName=RECIPES_TABLE,
-        Key={"recipe_id": {"S": recipe_id}},
-        ConsistentRead=True,
+    data = _get_json_or_404(
+        DATA_BUCKET, _recipe_key(recipe_id), not_found_detail="Recipe not found."
     )
-    if "Item" not in r:
-        raise HTTPException(status_code=404, detail="Recipe not found.")
-    return _item_to_recipe(r["Item"])
+    return _load_recipe_obj(data)
 
 
 @router.put("/ami-recipes/{recipe_id}")
 def update_recipe(recipe_id: str, body: UpdateRecipeBody):
     _require_ami_config()
-    existing = get_recipe(recipe_id)
+    existing_raw = _get_json_or_404(
+        DATA_BUCKET, _recipe_key(recipe_id), not_found_detail="Recipe not found."
+    )
+    existing = _load_recipe_obj(existing_raw)
     new_name = body.name.strip() if body.name is not None else existing["name"]
     new_body = body.body if body.body is not None else existing["body"]
     try:
@@ -165,15 +198,18 @@ def update_recipe(recipe_id: str, body: UpdateRecipeBody):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     ts = _now_iso()
-    _ddb().put_item(
-        TableName=RECIPES_TABLE,
-        Item={
-            "recipe_id": {"S": recipe_id},
-            "name": {"S": new_name},
-            "body": {"S": json.dumps(new_body)},
-            "created_at": {"S": existing.get("created_at") or ts},
-            "updated_at": {"S": ts},
-        },
+    doc = {
+        "recipe_id": recipe_id,
+        "name": new_name,
+        "body": new_body,
+        "created_at": existing.get("created_at") or ts,
+        "updated_at": ts,
+    }
+    _s3().put_object(
+        Bucket=DATA_BUCKET,
+        Key=_recipe_key(recipe_id),
+        Body=json.dumps(doc).encode("utf-8"),
+        ContentType="application/json",
     )
     return {**existing, "name": new_name, "body": new_body, "updated_at": ts}
 
@@ -181,10 +217,11 @@ def update_recipe(recipe_id: str, body: UpdateRecipeBody):
 @router.delete("/ami-recipes/{recipe_id}")
 def delete_recipe(recipe_id: str):
     _require_ami_config()
-    _ddb().delete_item(
-        TableName=RECIPES_TABLE,
-        Key={"recipe_id": {"S": recipe_id}},
-    )
+    try:
+        _s3().delete_object(Bucket=DATA_BUCKET, Key=_recipe_key(recipe_id))
+    except Exception as e:
+        logger.exception("delete_recipe: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
     return {"deleted": True, "recipe_id": recipe_id}
 
 
@@ -195,14 +232,14 @@ def start_build(body: StartBuildBody):
     recipe_id = body.recipe_id.strip()
     if not recipe_id:
         raise HTTPException(status_code=400, detail="recipe_id required.")
-    r = _ddb().get_item(
-        TableName=RECIPES_TABLE,
-        Key={"recipe_id": {"S": recipe_id}},
-        ConsistentRead=True,
-    )
-    if "Item" not in r:
-        raise HTTPException(status_code=404, detail="Recipe not found.")
-    recipe = _item_to_recipe(r["Item"])
+    try:
+        r = _s3().get_object(Bucket=DATA_BUCKET, Key=_recipe_key(recipe_id))
+        recipe_data = json.loads(r["Body"].read().decode("utf-8"))
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            raise HTTPException(status_code=404, detail="Recipe not found.") from e
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    recipe = _load_recipe_obj(recipe_data)
     try:
         validate_recipe_body(recipe["body"], cloud=True)
     except ValueError as e:
@@ -210,48 +247,50 @@ def start_build(body: StartBuildBody):
 
     build_id = str(uuid.uuid4())
     ts = _now_iso()
-    _ddb().put_item(
-        TableName=BUILDS_TABLE,
-        Item={
-            "build_id": {"S": build_id},
-            "recipe_id": {"S": recipe_id},
-            "recipe_name": {"S": recipe.get("name") or ""},
-            "status": {"S": "queued"},
-            "created_at": {"S": ts},
-            "updated_at": {"S": ts},
-        },
-    )
+    build_doc = {
+        "build_id": build_id,
+        "recipe_id": recipe_id,
+        "recipe_name": recipe.get("name") or "",
+        "status": "queued",
+        "created_at": ts,
+        "updated_at": ts,
+    }
     try:
+        _s3().put_object(
+            Bucket=DATA_BUCKET,
+            Key=_build_key(build_id),
+            Body=json.dumps(build_doc).encode("utf-8"),
+            ContentType="application/json",
+        )
         resp = _sfn().start_execution(
             stateMachineArn=SFN_ARN,
             name=build_id,
             input=json.dumps({"build_id": build_id, "recipe_id": recipe_id}),
         )
         arn = resp["executionArn"]
-        _ddb().update_item(
-            TableName=BUILDS_TABLE,
-            Key={"build_id": {"S": build_id}},
-            UpdateExpression="SET execution_arn = :e, #s = :st, updated_at = :u",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={
-                ":e": {"S": arn},
-                ":st": {"S": "running"},
-                ":u": {"S": _now_iso()},
-            },
+        build_doc["execution_arn"] = arn
+        build_doc["status"] = "running"
+        build_doc["updated_at"] = _now_iso()
+        _s3().put_object(
+            Bucket=DATA_BUCKET,
+            Key=_build_key(build_id),
+            Body=json.dumps(build_doc).encode("utf-8"),
+            ContentType="application/json",
         )
     except Exception as e:
         logger.exception("start_execution: %s", e)
-        _ddb().update_item(
-            TableName=BUILDS_TABLE,
-            Key={"build_id": {"S": build_id}},
-            UpdateExpression="SET #s = :st, error_message = :err, updated_at = :u",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={
-                ":st": {"S": "failed"},
-                ":err": {"S": str(e)[:8000]},
-                ":u": {"S": _now_iso()},
-            },
-        )
+        build_doc["status"] = "failed"
+        build_doc["error_message"] = str(e)[:8000]
+        build_doc["updated_at"] = _now_iso()
+        try:
+            _s3().put_object(
+                Bucket=DATA_BUCKET,
+                Key=_build_key(build_id),
+                Body=json.dumps(build_doc).encode("utf-8"),
+                ContentType="application/json",
+            )
+        except Exception:
+            logger.exception("failed to persist build failure")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     return {"build_id": build_id, "execution_arn": arn, "status": "running"}
@@ -260,27 +299,37 @@ def start_build(body: StartBuildBody):
 @router.get("/ami-builds")
 def list_builds():
     _require_ami_config()
+    prefix = f"{BUILDS_PREFIX}/"
     try:
-        r = _ddb().scan(TableName=BUILDS_TABLE)
+        paginator = _s3().get_paginator("list_objects_v2")
+        keys: list[str] = []
+        for page in paginator.paginate(Bucket=DATA_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                k = obj.get("Key", "")
+                if k.endswith(".json"):
+                    keys.append(k)
+        items: list[dict[str, Any]] = []
+        for key in keys:
+            try:
+                r = _s3().get_object(Bucket=DATA_BUCKET, Key=key)
+                data = json.loads(r["Body"].read().decode("utf-8"))
+                items.append(_load_build_obj(data))
+            except Exception as e:
+                logger.warning("skip build key=%s: %s", key, e)
+        items.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+        return items
     except Exception as e:
         logger.exception("list_builds: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
-    items = [_item_to_build(i) for i in r.get("Items", [])]
-    items.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
-    return items
 
 
 @router.get("/ami-builds/{build_id}")
 def get_build(build_id: str):
     _require_ami_config()
-    r = _ddb().get_item(
-        TableName=BUILDS_TABLE,
-        Key={"build_id": {"S": build_id}},
-        ConsistentRead=True,
+    data = _get_json_or_404(
+        DATA_BUCKET, _build_key(build_id), not_found_detail="Build not found."
     )
-    if "Item" not in r:
-        raise HTTPException(status_code=404, detail="Build not found.")
-    out = _item_to_build(r["Item"])
+    out = _load_build_obj(data)
     arn = out.get("execution_arn")
     if arn:
         try:

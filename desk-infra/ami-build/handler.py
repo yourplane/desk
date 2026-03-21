@@ -1,4 +1,4 @@
-"""Step Functions task Lambda for cloud AMI builds (desk data bucket + DynamoDB)."""
+"""Step Functions task Lambda for cloud AMI builds (recipe/build metadata in S3)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 # Vendored desk SDK (SAM copies desk/ into artifact)
 from desk.ami_recipe import validate_recipe_body
@@ -26,17 +27,21 @@ from desk.aws import (
     wait_for_ssm_ready,
 )
 
-RECIPES_TABLE = os.environ.get("DESK_AMI_RECIPES_TABLE", "")
-BUILDS_TABLE = os.environ.get("DESK_AMI_BUILDS_TABLE", "")
 DATA_BUCKET = os.environ.get("DESK_DATA_BUCKET", "")
-
-
-def _ddb():
-    return boto3.client("dynamodb")
+RECIPES_PREFIX = os.environ.get("DESK_AMI_RECIPES_PREFIX", "ami-recipes").strip().strip("/")
+BUILDS_PREFIX = os.environ.get("DESK_AMI_BUILDS_PREFIX", "ami-builds").strip().strip("/")
 
 
 def _s3():
     return boto3.client("s3")
+
+
+def _recipe_key(recipe_id: str) -> str:
+    return f"{RECIPES_PREFIX}/{recipe_id}.json"
+
+
+def _build_key(build_id: str) -> str:
+    return f"{BUILDS_PREFIX}/{build_id}.json"
 
 
 def _now_iso() -> str:
@@ -63,66 +68,53 @@ def _versioned_ami_name(ami_name: str) -> str:
     return f"{base}-{timestamp}"
 
 
-def _ddb_attr(v: Any) -> dict[str, Any]:
-    if isinstance(v, (dict, list)):
-        return {"S": json.dumps(v)}
-    if isinstance(v, bool):
-        return {"BOOL": v}
-    if isinstance(v, int):
-        return {"N": str(v)}
-    return {"S": str(v)}
-
-
 def _update_build(build_id: str, **fields: Any) -> None:
-    if not BUILDS_TABLE:
+    if not DATA_BUCKET or not BUILDS_PREFIX:
         return
-    names: dict[str, str] = {}
-    values: dict[str, dict] = {}
-    sets = []
-    i = 0
+    key = _build_key(build_id)
+    s3 = _s3()
+    try:
+        r = s3.get_object(Bucket=DATA_BUCKET, Key=key)
+        data = json.loads(r["Body"].read().decode("utf-8"))
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            data = {"build_id": build_id}
+        else:
+            raise
+    except json.JSONDecodeError:
+        data = {"build_id": build_id}
     for k, v in fields.items():
         if v is None:
             continue
-        nk = f"#k{i}"
-        vk = f":v{i}"
-        names[nk] = k
-        values[vk] = _ddb_attr(v)
-        sets.append(f"{nk} = {vk}")
-        i += 1
-    if not sets:
-        return
-    names["#ua"] = "updated_at"
-    values[":ua"] = {"S": _now_iso()}
-    sets.append("#ua = :ua")
-    _ddb().update_item(
-        TableName=BUILDS_TABLE,
-        Key={"build_id": {"S": build_id}},
-        UpdateExpression="SET " + ", ".join(sets),
-        ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
+        data[k] = v
+    data["updated_at"] = _now_iso()
+    s3.put_object(
+        Bucket=DATA_BUCKET,
+        Key=key,
+        Body=json.dumps(data, default=str).encode("utf-8"),
+        ContentType="application/json",
     )
 
 
 def _get_recipe(recipe_id: str) -> dict[str, Any] | None:
-    if not RECIPES_TABLE:
+    if not DATA_BUCKET or not RECIPES_PREFIX:
         return None
-    r = _ddb().get_item(
-        TableName=RECIPES_TABLE,
-        Key={"recipe_id": {"S": recipe_id}},
-        ConsistentRead=True,
-    )
-    item = r.get("Item")
-    if not item:
-        return None
-    body_raw = item.get("body", {}).get("S", "{}")
     try:
-        body = json.loads(body_raw)
+        r = _s3().get_object(Bucket=DATA_BUCKET, Key=_recipe_key(recipe_id))
+        raw = json.loads(r["Body"].read().decode("utf-8"))
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            return None
+        raise
     except json.JSONDecodeError:
+        return None
+    body = raw.get("body")
+    if not isinstance(body, dict):
         body = {}
     return {
-        "recipe_id": item["recipe_id"]["S"],
-        "name": item.get("name", {}).get("S", ""),
-        "body": body if isinstance(body, dict) else {},
+        "recipe_id": raw.get("recipe_id", recipe_id),
+        "name": raw.get("name", "") or "",
+        "body": body,
     }
 
 

@@ -32,7 +32,7 @@ Running `uvicorn app.main:app` from the repo root without `--project desk-api` w
 
 ### Cloud AMI build (Step Functions)
 
-Requires `DESK_AMI_RECIPES_TABLE`, `DESK_AMI_BUILDS_TABLE`, `DESK_AMI_BUILD_STATE_MACHINE_ARN` (set by the SAM stack).
+Requires `DESK_DATA_BUCKET`, `DESK_AMI_BUILD_STATE_MACHINE_ARN`, and optional `DESK_AMI_RECIPES_PREFIX` / `DESK_AMI_BUILDS_PREFIX` (defaults `ami-recipes`, `ami-builds`). Recipe and build records are JSON objects in S3 at `{prefix}/{id}.json`.
 
 - `GET/POST /api/ami-recipes`, `GET/PUT/DELETE /api/ami-recipes/{id}` — recipe CRUD (body matches `desk ami build` JSON; cloud builds require `s3://` copy sources)
 - `GET/POST /api/ami-builds`, `GET /api/ami-builds/{id}` — list builds, start execution, optional Step Functions status on get

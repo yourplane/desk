@@ -111,16 +111,6 @@ Resources:
                   iam:PassedToService: ec2.amazonaws.com
             - Effect: Allow
               Action:
-                - dynamodb:GetItem
-                - dynamodb:PutItem
-                - dynamodb:UpdateItem
-                - dynamodb:DeleteItem
-                - dynamodb:Scan
-              Resource:
-                - !GetAtt AmiRecipesTable.Arn
-                - !GetAtt AmiBuildsTable.Arn
-            - Effect: Allow
-              Action:
                 - states:StartExecution
               Resource: !GetAtt AmiBuildStateMachine.Arn
             - Effect: Allow
@@ -130,37 +120,13 @@ Resources:
       Environment:
         Variables:
           DESK_DATA_BUCKET: !Ref DataBucket
-          DESK_AMI_RECIPES_TABLE: !Ref AmiRecipesTable
-          DESK_AMI_BUILDS_TABLE: !Ref AmiBuildsTable
+          DESK_AMI_RECIPES_PREFIX: ami-recipes
+          DESK_AMI_BUILDS_PREFIX: ami-builds
           DESK_AMI_BUILD_STATE_MACHINE_ARN: !GetAtt AmiBuildStateMachine.Arn
     Metadata:
       BuildMethod: makefile
 
-  # ---- AMI build: DynamoDB + Step Functions + task Lambda ----
-  AmiRecipesTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "${AWS::StackName}-ami-recipes"
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: recipe_id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: recipe_id
-          KeyType: HASH
-
-  AmiBuildsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "${AWS::StackName}-ami-builds"
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: build_id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: build_id
-          KeyType: HASH
-
+  # ---- AMI build: S3 metadata + Step Functions + task Lambda ----
   AmiBuildTasksFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -171,10 +137,6 @@ Resources:
       Timeout: 900
       MemorySize: 1024
       Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AmiRecipesTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AmiBuildsTable
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
         - Statement:
@@ -208,9 +170,9 @@ Resources:
                   iam:PassedToService: ec2.amazonaws.com
       Environment:
         Variables:
-          DESK_AMI_RECIPES_TABLE: !Ref AmiRecipesTable
-          DESK_AMI_BUILDS_TABLE: !Ref AmiBuildsTable
           DESK_DATA_BUCKET: !Ref DataBucket
+          DESK_AMI_RECIPES_PREFIX: ami-recipes
+          DESK_AMI_BUILDS_PREFIX: ami-builds
     Metadata:
       BuildMethod: makefile
 
@@ -434,7 +396,6 @@ Outputs:
   AmiBuildStateMachineArn:
     Description: Step Functions state machine for cloud AMI builds
     Value: !GetAtt AmiBuildStateMachine.Arn
-  AmiRecipesTableName:
-    Value: !Ref AmiRecipesTable
-  AmiBuildsTableName:
-    Value: !Ref AmiBuildsTable
+  AmiMetadataS3Prefixes:
+    Description: Recipe and build records are JSON objects under the data bucket
+    Value: "ami-recipes/*.json, ami-builds/*.json"
