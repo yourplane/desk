@@ -658,6 +658,38 @@
   margin-bottom: 1.25rem;
 }
 
+.command-subnav {
+  display: inline-flex;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  padding: 0.2rem;
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.command-subnav-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.command-subnav-tab--active {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.manage-hint {
+  margin: 0.5rem 0 0.9rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
 .command-section {
   border: 1px solid var(--border);
   border-radius: 10px;

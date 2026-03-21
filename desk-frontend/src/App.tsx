@@ -7,6 +7,7 @@ import { CommandPage } from './pages/CommandPage'
 import './App.css'
 
 type Page = 'workstations' | 'costs' | 'reaper' | 'command'
+type CommandSection = 'manage' | 'run'
 
 function buildInfo(): string | null {
   const deployedAt = (import.meta.env.VITE_BUILD_AT as string | undefined)?.trim()
@@ -21,6 +22,9 @@ function App() {
   const [isCallback, setIsCallback] = useState(false)
   const [callbackFailed, setCallbackFailed] = useState(false)
   const [page, setPage] = useState<Page>('workstations')
+  const [commandSection, setCommandSection] = useState<CommandSection>('manage')
+  const [commandWorkstation, setCommandWorkstation] = useState('')
+  const [commandContextVersion, setCommandContextVersion] = useState(0)
   const info = buildInfo()
 
   useEffect(() => {
@@ -111,15 +115,33 @@ function App() {
         <button
           type="button"
           className={`app-nav-tab${page === 'command' ? ' app-nav-tab--active' : ''}`}
-          onClick={() => setPage('command')}
+          onClick={() => {
+            setPage('command')
+            setCommandSection('manage')
+          }}
         >
           Command
         </button>
       </nav>
-      {page === 'workstations' && <InstanceList />}
+      {page === 'workstations' && (
+        <InstanceList
+          onOpenCommand={(workstation) => {
+            setCommandWorkstation(workstation)
+            setCommandSection('run')
+            setCommandContextVersion((prev) => prev + 1)
+            setPage('command')
+          }}
+        />
+      )}
       {page === 'costs' && <CostTracker />}
       {page === 'reaper' && <ReaperPage />}
-      {page === 'command' && <CommandPage />}
+      {page === 'command' && (
+        <CommandPage
+          initialSection={commandSection}
+          contextVersion={commandContextVersion}
+          preselectedWorkstation={commandWorkstation}
+        />
+      )}
       {info && <p className="build-info">{info}</p>}
     </div>
   )
