@@ -15,6 +15,7 @@ from desk_cli.commands import (
     kill,
     list_,
     reap,
+    route,
     run,
     scp,
     start,
@@ -41,6 +42,7 @@ cli.add_command(auto_stop.auto_stop, "auto-stop")
 cli.add_command(kill.kill, "kill")
 cli.add_command(list_.list_cmd, "list")
 cli.add_command(reap.reap, "reap")
+cli.add_command(route.route_group, "route")
 cli.add_command(run.run, "run")
 cli.add_command(scp.scp, "scp")
 cli.add_command(copy.copy_cmd, "copy")
