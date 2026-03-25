@@ -65,6 +65,8 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert "auto_https off" in text
     assert "admin 127.0.0.1:29789" in text
     assert "handle_path /dev/5001" in text
+    assert "handle_path /dev/5001/*" not in text
+    assert "/@vite/*" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
     pid_file = tmp_path / "web-router" / "caddy.pid"
     assert pid_file.read_text().strip() == "4242"

@@ -110,6 +110,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         "    }",
         "",
     ]
+    proxied_upstream: list[tuple[str, int]] = []
     for route in routes:
         ws = route.get("workstation", "")
         remote = int(route.get("remote_port", 0) or 0)
@@ -121,11 +122,44 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
             prefix = _path_prefix(ws, remote)
         except click.ClickException:
             continue
+        proxied_upstream.append((bind, local))
         lines.append(f"    handle {prefix} {{")
         lines.append(f"        redir {prefix}/ 308")
         lines.append("    }")
-        lines.append(f"    handle_path {prefix}/* {{")
-        lines.append(f"        reverse_proxy {bind}:{local}")
+        # Prefix match (not /prefix/*) so /prefix/ is included; strip prefix for upstream.
+        lines.append(f"    handle_path {prefix} {{")
+        lines.append(f"        reverse_proxy {bind}:{local} {{")
+        lines.append("            flush_interval -1")
+        lines.append(f"            header_up Host {bind}:{local}")
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("")
+
+    # Vite (and similar dev servers) emit root-absolute URLs (/src/..., /@vite/...). With a single
+    # active route, forward those to the same upstream so the page is not blank.
+    if len(proxied_upstream) == 1:
+        b, loc = proxied_upstream[0]
+        up = f"{b}:{loc}"
+        lines.append("    # Single active route: root-absolute dev asset paths (e.g. Vite).")
+        for pattern in (
+            "/@vite/*",
+            "/@id/*",
+            "/@fs/*",
+            "/src/*",
+            "/node_modules/*",
+        ):
+            lines.append(f"    handle {pattern} {{")
+            lines.append(f"        reverse_proxy {up} {{")
+            lines.append("            flush_interval -1")
+            lines.append(f"            header_up Host {up}")
+            lines.append("        }")
+            lines.append("    }")
+        lines.append("    @desk_web_router_react_refresh path_regexp ^/@react-refresh($|\\?)")
+        lines.append("    handle @desk_web_router_react_refresh {")
+        lines.append(f"        reverse_proxy {up} {{")
+        lines.append("            flush_interval -1")
+        lines.append(f"            header_up Host {up}")
+        lines.append("        }")
         lines.append("    }")
         lines.append("")
 
