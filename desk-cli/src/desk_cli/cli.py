@@ -22,6 +22,7 @@ from desk_cli.commands import (
     stop,
     tab,
     up,
+    web_router,
 )
 
 
@@ -43,6 +44,7 @@ cli.add_command(kill.kill, "kill")
 cli.add_command(list_.list_cmd, "list")
 cli.add_command(reap.reap, "reap")
 cli.add_command(route.route_group, "route")
+cli.add_command(web_router.web_router_group, "web-router")
 cli.add_command(run.run, "run")
 cli.add_command(scp.scp, "scp")
 cli.add_command(copy.copy_cmd, "copy")
