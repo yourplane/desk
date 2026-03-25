@@ -14,22 +14,14 @@ from typing import Any
 import click
 
 from desk.aws import is_ssm_ready, resolve_workstation, wait_for_ssm_ready
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_default_profile, get_default_region, get_state_home
 
 DEFAULT_LOCAL_PORT_START = 45000
 DEFAULT_LOCAL_PORT_END = 45100
 
 
-def _state_home() -> str:
-    if value := os.environ.get("DESK_STATE_HOME"):
-        return value
-    if value := os.environ.get("XDG_STATE_HOME"):
-        return os.path.join(value, "desk")
-    return os.path.expanduser("~/.local/state/desk")
-
-
 def _route_dir() -> str:
-    return os.path.join(_state_home(), "routes")
+    return os.path.join(get_state_home(), "routes")
 
 
 def _state_file() -> str:
