@@ -27,6 +27,7 @@ def test_desk_route_help() -> None:
     assert "list" in result.output
 
 
+@patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
 @patch("desk_cli.commands.route._start_forward_process", return_value=(12345, "/tmp/route.log"))
 @patch("desk_cli.commands.route._pick_local_port", return_value=45001)
 @patch("desk_cli.commands.route.is_ssm_ready", return_value=True)
@@ -36,6 +37,7 @@ def test_desk_route_add_saves_route(
     _mock_ssm_ready: object,
     _mock_pick_port: object,
     _mock_start_forward: object,
+    _mock_refresh: object,
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -54,6 +56,7 @@ def test_desk_route_add_saves_route(
     assert route["local_port"] == 45001
     assert route["pid"] == 12345
     assert route["bind_host"] == "127.0.0.1"
+    _mock_refresh.assert_called_once()
 
 
 def test_desk_route_add_rejects_duplicate(tmp_path, monkeypatch) -> None:
@@ -80,11 +83,13 @@ def test_desk_route_add_rejects_duplicate(tmp_path, monkeypatch) -> None:
     assert "Route already exists" in result.output
 
 
+@patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
 @patch("desk_cli.commands.route._terminate_route_pid", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
 def test_desk_route_remove_removes_entry(
     _mock_pid_alive: object,
     _mock_terminate: object,
+    _mock_refresh: object,
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -110,6 +115,7 @@ def test_desk_route_remove_removes_entry(
     assert result.exit_code == 0
     assert "Removed route main:8080" in result.output
     assert _read_routes(tmp_path) == []
+    _mock_refresh.assert_called_once()
 
 
 @patch("desk_cli.commands.route._pid_alive", return_value=False)

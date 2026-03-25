@@ -321,6 +321,48 @@ def _start_caddy_background(caddyfile: str, log_path: str) -> int:
     return proc.pid
 
 
+def _is_web_router_running() -> bool:
+    pid = _read_router_pid()
+    if pid and _pid_alive(pid):
+        return True
+    return _systemd_active()
+
+
+def _refresh_web_router_after_route_change_impl() -> None:
+    """Rewrite Caddyfile; restart Caddy if the web router is already running."""
+    listen = _listen_address()
+    routes = _active_routes()
+    caddyfile_content = _build_caddyfile(listen=listen, routes=routes)
+    caddyfile = _write_caddyfile(caddyfile_content)
+
+    if not _which_caddy():
+        return
+    if not _is_web_router_running():
+        return
+
+    if _systemd_active():
+        rr = _systemctl_user(["restart", UNIT_NAME])
+        if rr.returncode != 0:
+            msg = rr.stderr.strip() or rr.stdout.strip() or f"exit {rr.returncode}"
+            raise RuntimeError(f"systemctl --user restart failed: {msg}")
+        return
+
+    pid = _read_router_pid()
+    if pid and _pid_alive(pid):
+        _terminate_caddy_pid(pid)
+        _clear_router_pid()
+        new_pid = _start_caddy_background(caddyfile, _process_log_path())
+        _write_router_pid(new_pid)
+
+
+def refresh_web_router_after_route_change() -> None:
+    """Called after desk route state changes; keeps Caddy in sync when it is running."""
+    try:
+        _refresh_web_router_after_route_change_impl()
+    except Exception as exc:
+        click.echo(f"Warning: could not update desk web-router: {exc}", err=True)
+
+
 @click.group("web-router")
 def web_router_group() -> None:
     """Run a local Caddy reverse proxy for desk route forwards."""
