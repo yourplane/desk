@@ -21,6 +21,63 @@ def test_desk_web_router_help() -> None:
     assert "start" in result.output
     assert "stop" in result.output
     assert "status" in result.output
+    assert "probe" in result.output
+
+
+def test_desk_web_router_probe_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["web-router", "probe", "--help"])
+    assert result.exit_code == 0
+    assert "health" in result.output.lower()
+
+
+@patch("desk_cli.commands.web_router._http_probe_get")
+@patch("desk_cli.commands.route._pid_alive", return_value=True)
+def test_desk_web_router_probe_checks_active_route(
+    _mock_pid: object,
+    mock_get: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mock_get.side_effect = [
+        (200, 2, "ok", None),
+        (200, 12, "<!doctype ", None),
+    ]
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "routes.json").write_text(
+        json.dumps(
+            [{"workstation": "dev", "remote_port": 80, "local_port": 45001, "pid": 1}],
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["web-router", "probe"])
+    assert result.exit_code == 0
+    assert "GET /health" in result.output
+    assert "/dev/80/" in result.output
+    assert mock_get.call_count == 2
+
+
+@patch("desk_cli.commands.web_router._http_probe_get", return_value=(200, 2, "ok", None))
+@patch("desk_cli.commands.route._pid_alive", return_value=False)
+def test_desk_web_router_probe_warns_when_only_stale_routes(
+    _mock_pid: object,
+    _mock_get: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "routes.json").write_text(
+        json.dumps(
+            [{"workstation": "dev", "remote_port": 80, "local_port": 45001, "pid": 99999}],
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["web-router", "probe"])
+    assert result.exit_code == 0
+    assert "stale" in result.output.lower()
+    assert "No active" in result.output
 
 
 @patch("desk_cli.commands.web_router._start_caddy_background", return_value=4242)

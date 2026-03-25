@@ -10,6 +10,8 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 import click
 
@@ -80,6 +82,37 @@ def _sanitize_listen_for_display(addr: str) -> str:
     if addr.startswith(":"):
         return f"localhost{addr}"
     return addr.replace("127.0.0.1", "localhost", 1)
+
+
+def _probe_base_url() -> str:
+    """HTTP URL for the web-router listen address (for probes and curl-style checks)."""
+    addr = _listen_address()
+    if addr.startswith(":"):
+        return f"http://127.0.0.1{addr}"
+    return f"http://{addr}"
+
+
+def _http_probe_get(url: str, *, timeout: float) -> tuple[int | None, int, str, str | None]:
+    """GET url; return (status_or_none, body_len, body_preview, error_message)."""
+    try:
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={"User-Agent": "desk-web-router-probe/1"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+            preview = body[:200].decode("utf-8", errors="replace")
+            return resp.status, len(body), preview, None
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read()
+        except Exception:
+            body = b""
+        preview = body[:200].decode("utf-8", errors="replace")
+        return e.code, len(body), preview, None
+    except Exception as exc:
+        return None, 0, "", str(exc)
 
 
 def _http_site_address(listen: str) -> str:
@@ -577,3 +610,72 @@ def web_router_status() -> None:
     click.echo(f"Caddy process log (stdout/stderr): {_process_log_path()}")
     click.echo(f"Caddy admin (reload API): {_admin_address()} (override with {_ENV_ADMIN})")
     click.echo(f"Desk route forward logs (SSM): {_logs_dir()}/")
+
+
+@web_router_group.command("probe")
+@click.option(
+    "--timeout",
+    default=5.0,
+    show_default=True,
+    type=float,
+    help="Per-request timeout in seconds.",
+)
+def web_router_probe(timeout: float) -> None:
+    """GET /health and each active route path (like curl) to debug blank pages."""
+    base = _probe_base_url()
+    listen = _listen_address()
+    display = _sanitize_listen_for_display(listen)
+
+    click.echo(f"Probe base URL: {base} (listen {listen}, browser URL http://{display})")
+    click.echo("")
+
+    health_url = f"{base.rstrip('/')}/health"
+    status, blen, prev, err = _http_probe_get(health_url, timeout=timeout)
+    if err:
+        click.echo(click.style(f"GET /health — error: {err}", fg="red"))
+    else:
+        ok = status == 200 and blen > 0
+        fg = "green" if ok else "yellow"
+        click.echo(click.style(f"GET /health — HTTP {status}, {blen} bytes", fg=fg))
+        if prev:
+            click.echo(f"  body preview: {prev!r}")
+
+    all_routes = _load_routes()
+    active = _active_routes()
+    stale = [r for r in all_routes if _route_status(r) != "active"]
+
+    click.echo("")
+    if stale:
+        click.echo(
+            click.style(
+                f"Note: {len(stale)} stale route(s) (SSM forward not running). "
+                "Caddy only proxies active routes; remove stale entries or re-add the route.",
+                fg="yellow",
+            )
+        )
+        click.echo("")
+
+    if not active:
+        click.echo(click.style("No active desk routes — Caddy only serves /health and the default 404.", fg="yellow"))
+        click.echo("Fix: `desk route add <workstation> <remote_port>` while SSM can reach the instance.")
+        return
+
+    for r in active:
+        ws = str(r.get("workstation", ""))
+        rp = int(r.get("remote_port", 0) or 0)
+        try:
+            pfx = _path_prefix(ws, rp)
+        except click.ClickException:
+            continue
+        path = f"{pfx}/"
+        url = f"{base.rstrip('/')}{path}"
+        status, blen, prev, err = _http_probe_get(url, timeout=timeout)
+        if err:
+            click.echo(click.style(f"GET {path} — error: {err}", fg="red"))
+        else:
+            warn = status is None or status >= 400 or blen == 0
+            fg = "yellow" if warn else "green"
+            code = status if status is not None else "?"
+            click.echo(click.style(f"GET {path} — HTTP {code}, {blen} bytes", fg=fg))
+            if prev:
+                click.echo(f"  body preview: {prev!r}")
