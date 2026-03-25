@@ -82,6 +82,13 @@ def _sanitize_listen_for_display(addr: str) -> str:
     return addr.replace("127.0.0.1", "localhost", 1)
 
 
+def _http_site_address(listen: str) -> str:
+    """Caddy site block address: force plain HTTP (no auto-HTTPS / :80 redirect)."""
+    if listen.startswith("http://") or listen.startswith("https://"):
+        return listen
+    return f"http://{listen}"
+
+
 def _active_routes() -> list[dict]:
     routes = _load_routes()
     return [r for r in routes if _route_status(r) == "active"]
@@ -89,12 +96,14 @@ def _active_routes() -> list[dict]:
 
 def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     admin = _admin_address()
+    site = _http_site_address(listen)
     lines: list[str] = [
         "{",
         f"    admin {admin}",
+        "    auto_https off",
         "}",
         "",
-        f"{listen} {{",
+        f"{site} {{",
         "    log {",
         f"        output file {_access_log_path()!s}",
         "        format console",

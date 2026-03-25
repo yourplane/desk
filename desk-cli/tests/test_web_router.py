@@ -61,6 +61,8 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert caddyfile.is_file()
     text = caddyfile.read_text()
     assert "8780" in text
+    assert "http://127.0.0.1:8780" in text
+    assert "auto_https off" in text
     assert "admin 127.0.0.1:29789" in text
     assert "handle_path /dev/5001" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
