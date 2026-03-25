@@ -68,6 +68,8 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert "handle_path /dev/5001/*" not in text
     assert "/@vite/*" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
+    assert "header_up Host {http.request.host}" in text
+    assert "versions 1.1" in text
     pid_file = tmp_path / "web-router" / "caddy.pid"
     assert pid_file.read_text().strip() == "4242"
 

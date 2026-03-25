@@ -89,6 +89,23 @@ def _http_site_address(listen: str) -> str:
     return f"http://{listen}"
 
 
+def _reverse_proxy_block_lines(upstream: str) -> list[str]:
+    """Shared reverse_proxy options for dev servers (Vite) and SSM port-forwarding.
+
+    Caddy's default is to set Host to the upstream address; that breaks Vite host checks
+    and URL generation when clients connect via desk route (e.g. Host: localhost:45001).
+    """
+    return [
+        f"        reverse_proxy {upstream} {{",
+        "            flush_interval -1",
+        "            header_up Host {http.request.host}",
+        "            transport http {",
+        "                versions 1.1",
+        "            }",
+        "        }",
+    ]
+
+
 def _active_routes() -> list[dict]:
     routes = _load_routes()
     return [r for r in routes if _route_status(r) == "active"]
@@ -128,10 +145,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         lines.append("    }")
         # Prefix match (not /prefix/*) so /prefix/ is included; strip prefix for upstream.
         lines.append(f"    handle_path {prefix} {{")
-        lines.append(f"        reverse_proxy {bind}:{local} {{")
-        lines.append("            flush_interval -1")
-        lines.append(f"            header_up Host {bind}:{local}")
-        lines.append("        }")
+        lines.extend(_reverse_proxy_block_lines(f"{bind}:{local}"))
         lines.append("    }")
         lines.append("")
 
@@ -149,17 +163,11 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
             "/node_modules/*",
         ):
             lines.append(f"    handle {pattern} {{")
-            lines.append(f"        reverse_proxy {up} {{")
-            lines.append("            flush_interval -1")
-            lines.append(f"            header_up Host {up}")
-            lines.append("        }")
+            lines.extend(_reverse_proxy_block_lines(up))
             lines.append("    }")
         lines.append("    @desk_web_router_react_refresh path_regexp ^/@react-refresh($|\\?)")
         lines.append("    handle @desk_web_router_react_refresh {")
-        lines.append(f"        reverse_proxy {up} {{")
-        lines.append("            flush_interval -1")
-        lines.append(f"            header_up Host {up}")
-        lines.append("        }")
+        lines.extend(_reverse_proxy_block_lines(up))
         lines.append("    }")
         lines.append("")
 
