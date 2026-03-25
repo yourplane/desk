@@ -14,6 +14,21 @@ def _get_config_path() -> str:
     return os.path.join(config_home, "desk", "config.ini")
 
 
+def get_state_home() -> str:
+    """Base directory for desk-managed state (e.g. routes, logs).
+
+    Resolution order:
+    - ``DESK_STATE_HOME`` if set
+    - ``XDG_STATE_HOME/desk`` if ``XDG_STATE_HOME`` is set
+    - ``~/.local/state/desk`` otherwise
+    """
+    if value := os.environ.get("DESK_STATE_HOME"):
+        return value
+    if value := os.environ.get("XDG_STATE_HOME"):
+        return os.path.join(value, "desk")
+    return os.path.expanduser("~/.local/state/desk")
+
+
 def _load_config() -> ConfigParser:
     """Load config from file. Returns empty parser if file missing or invalid."""
     parser = ConfigParser()

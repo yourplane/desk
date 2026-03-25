@@ -11,6 +11,7 @@ from desk.config import (
     get_default_ami_prefix,
     get_default_profile,
     get_default_region,
+    get_state_home,
     _get_config_path,
 )
 
@@ -107,6 +108,28 @@ def test_config_path_default_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DESK_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg/config")
     assert _get_config_path() == "/xdg/config/desk/config.ini"
+
+
+def test_get_state_home_desk_state_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DESK_STATE_HOME overrides XDG and default."""
+    monkeypatch.setenv("DESK_STATE_HOME", "/custom/desk/state")
+    monkeypatch.setenv("XDG_STATE_HOME", "/xdg/state")
+    assert get_state_home() == "/custom/desk/state"
+
+
+def test_get_state_home_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """XDG_STATE_HOME/desk when DESK_STATE_HOME unset."""
+    monkeypatch.delenv("DESK_STATE_HOME", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", "/xdg/state")
+    assert get_state_home() == "/xdg/state/desk"
+
+
+def test_get_state_home_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default is ~/.local/state/desk."""
+    monkeypatch.delenv("DESK_STATE_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setenv("HOME", "/home/testuser")
+    assert get_state_home() == "/home/testuser/.local/state/desk"
 
 
 def test_get_default_ami_prefix_env_takes_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
