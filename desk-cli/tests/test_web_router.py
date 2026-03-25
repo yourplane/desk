@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from subprocess import CompletedProcess
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
@@ -62,6 +61,7 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert caddyfile.is_file()
     text = caddyfile.read_text()
     assert "8780" in text
+    assert "admin 127.0.0.1:29789" in text
     assert "handle_path /dev/5001" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
     pid_file = tmp_path / "web-router" / "caddy.pid"
@@ -177,15 +177,15 @@ def test_desk_web_router_stop_on_boot_disables_unit(
     _mock_disable.assert_called_once_with(remove_unit_file=True)
 
 
-@patch("desk_cli.commands.web_router._systemctl_user")
+@patch("desk_cli.commands.web_router._run_caddy_reload")
 @patch("desk_cli.commands.web_router._systemd_active", return_value=True)
 @patch("desk_cli.commands.web_router._pid_alive", return_value=True)
 @patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
-def test_refresh_restarts_systemd_when_active(
+def test_refresh_runs_caddy_reload_when_systemd_active(
     _mock_which: object,
     _mock_alive: object,
     _mock_sysd: object,
-    _mock_systemctl: MagicMock,
+    _mock_reload: MagicMock,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -194,20 +194,19 @@ def test_refresh_restarts_systemd_when_active(
     (tmp_path / "routes" / "routes.json").write_text(
         json.dumps([{"workstation": "dev", "remote_port": 80, "local_port": 45001, "pid": 1}])
     )
-    _mock_systemctl.return_value = CompletedProcess([], 0, "", "")
     refresh_web_router_after_route_change()
-    _mock_systemctl.assert_any_call(["restart", "desk-web-router.service"])
+    _mock_reload.assert_called_once()
+    cfg = _mock_reload.call_args[0][0]
+    assert str(cfg).endswith("Caddyfile")
 
 
-@patch("desk_cli.commands.web_router._start_caddy_background", return_value=8888)
-@patch("desk_cli.commands.web_router._terminate_caddy_pid")
+@patch("desk_cli.commands.web_router._run_caddy_reload")
 @patch("desk_cli.commands.web_router._systemd_active", return_value=False)
 @patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
-def test_refresh_restarts_manual_caddy_when_pid_running(
+def test_refresh_runs_caddy_reload_when_manual_pid_running(
     _mock_which: object,
     _mock_sysd: object,
-    _mock_term: MagicMock,
-    _mock_start: MagicMock,
+    _mock_reload: MagicMock,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -220,20 +219,16 @@ def test_refresh_restarts_manual_caddy_when_pid_running(
     (tmp_path / "web-router" / "caddy.pid").write_text("42\n")
     with patch("desk_cli.commands.web_router._pid_alive", return_value=True):
         refresh_web_router_after_route_change()
-    _mock_term.assert_called_once_with(42)
-    _mock_start.assert_called_once()
-    assert (tmp_path / "web-router" / "caddy.pid").read_text().strip() == "8888"
+    _mock_reload.assert_called_once()
 
 
-@patch("desk_cli.commands.web_router._start_caddy_background")
-@patch("desk_cli.commands.web_router._terminate_caddy_pid")
+@patch("desk_cli.commands.web_router._run_caddy_reload")
 @patch("desk_cli.commands.web_router._systemd_active", return_value=False)
 @patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
-def test_refresh_writes_caddyfile_without_restart_when_router_stopped(
+def test_refresh_writes_caddyfile_without_reload_when_router_stopped(
     _mock_which: object,
     _mock_sysd: object,
-    _mock_term: MagicMock,
-    _mock_start: MagicMock,
+    _mock_reload: MagicMock,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -247,5 +242,4 @@ def test_refresh_writes_caddyfile_without_restart_when_router_stopped(
     caddyfile = tmp_path / "web-router" / "Caddyfile"
     assert caddyfile.is_file()
     assert "handle_path /dev/80" in caddyfile.read_text()
-    _mock_term.assert_not_called()
-    _mock_start.assert_not_called()
+    _mock_reload.assert_not_called()

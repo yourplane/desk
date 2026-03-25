@@ -20,6 +20,9 @@ from desk_cli.commands.route import _load_routes, _logs_dir, _pid_alive, _route_
 UNIT_NAME = "desk-web-router.service"
 DEFAULT_LISTEN = "127.0.0.1:8780"
 _ENV_LISTEN = "DESK_WEB_ROUTER_LISTEN"
+# Local-only admin API for `caddy reload` (route updates); avoid default :2019 conflicts.
+DEFAULT_ADMIN_ADDR = "127.0.0.1:29789"
+_ENV_ADMIN = "DESK_WEB_ROUTER_ADMIN"
 _WS_SAFE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
@@ -56,6 +59,10 @@ def _listen_address() -> str:
     return raw
 
 
+def _admin_address() -> str:
+    return (os.environ.get(_ENV_ADMIN) or DEFAULT_ADMIN_ADDR).strip() or DEFAULT_ADMIN_ADDR
+
+
 def _path_prefix(workstation: str, remote_port: int) -> str:
     ws = str(workstation).strip()
     if not _WS_SAFE.fullmatch(ws):
@@ -81,9 +88,10 @@ def _active_routes() -> list[dict]:
 
 
 def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
+    admin = _admin_address()
     lines: list[str] = [
         "{",
-        "    admin off",
+        f"    admin {admin}",
         "}",
         "",
         f"{listen} {{",
@@ -207,6 +215,8 @@ def _systemd_env_lines() -> str:
         lines.append(f"Environment=DESK_STATE_HOME={desk_state.replace('%', '%%')}")
     if listen := os.environ.get(_ENV_LISTEN):
         lines.append(f"Environment={_ENV_LISTEN}={listen.replace('%', '%%')}")
+    if admin := os.environ.get(_ENV_ADMIN):
+        lines.append(f"Environment={_ENV_ADMIN}={admin.replace('%', '%%')}")
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -321,6 +331,28 @@ def _start_caddy_background(caddyfile: str, log_path: str) -> int:
     return proc.pid
 
 
+def _run_caddy_reload(caddyfile: str) -> None:
+    admin = _admin_address()
+    r = subprocess.run(
+        [
+            "caddy",
+            "reload",
+            "--address",
+            admin,
+            "--config",
+            caddyfile,
+            "--adapter",
+            "caddyfile",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        msg = r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}"
+        raise RuntimeError(f"caddy reload failed: {msg}")
+
+
 def _is_web_router_running() -> bool:
     pid = _read_router_pid()
     if pid and _pid_alive(pid):
@@ -329,7 +361,7 @@ def _is_web_router_running() -> bool:
 
 
 def _refresh_web_router_after_route_change_impl() -> None:
-    """Rewrite Caddyfile; restart Caddy if the web router is already running."""
+    """Rewrite Caddyfile; reload Caddy in place if the web router is already running."""
     listen = _listen_address()
     routes = _active_routes()
     caddyfile_content = _build_caddyfile(listen=listen, routes=routes)
@@ -340,19 +372,7 @@ def _refresh_web_router_after_route_change_impl() -> None:
     if not _is_web_router_running():
         return
 
-    if _systemd_active():
-        rr = _systemctl_user(["restart", UNIT_NAME])
-        if rr.returncode != 0:
-            msg = rr.stderr.strip() or rr.stdout.strip() or f"exit {rr.returncode}"
-            raise RuntimeError(f"systemctl --user restart failed: {msg}")
-        return
-
-    pid = _read_router_pid()
-    if pid and _pid_alive(pid):
-        _terminate_caddy_pid(pid)
-        _clear_router_pid()
-        new_pid = _start_caddy_background(caddyfile, _process_log_path())
-        _write_router_pid(new_pid)
+    _run_caddy_reload(caddyfile)
 
 
 def refresh_web_router_after_route_change() -> None:
@@ -504,4 +524,5 @@ def web_router_status() -> None:
     click.echo(f"Caddyfile: {_caddyfile_path()}")
     click.echo(f"Caddy access log: {_access_log_path()}")
     click.echo(f"Caddy process log (stdout/stderr): {_process_log_path()}")
+    click.echo(f"Caddy admin (reload API): {_admin_address()} (override with {_ENV_ADMIN})")
     click.echo(f"Desk route forward logs (SSM): {_logs_dir()}/")
