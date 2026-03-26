@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import click
 
-from desk.aws import Workstation, list_workstations
+from desk.aws import Workstation, list_infra_instances, list_workstations
 from desk.config import get_default_profile, get_default_region
 
 
@@ -73,6 +73,12 @@ def _format_shutdown(shutdown_at: str | None, state: str = "running") -> tuple[s
 
 @click.command("list")
 @click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Include desk infrastructure instances (for example NAT).",
+)
+@click.option(
     "--region",
     "-r",
     default=None,
@@ -97,6 +103,7 @@ def _format_shutdown(shutdown_at: str | None, state: str = "running") -> tuple[s
 def list_cmd(
     region: str | None,
     profile: str | None,
+    show_all: bool,
     output: str,
 ) -> None:
     """List workstation instances.
@@ -108,13 +115,24 @@ def list_cmd(
     profile = profile or get_default_profile()
 
     workstations = list_workstations(region=region, profile=profile)
+    infra_instances = list_infra_instances(region=region, profile=profile) if show_all else []
+    infra_wrapped = [
+        Workstation(
+            instance_id=i.instance_id,
+            name=i.name or (f"infra:{i.role}" if i.role else "infra"),
+            state=i.state,
+            shutdown_at=None,
+        )
+        for i in infra_instances
+    ]
+    all_instances = workstations + infra_wrapped
 
-    if not workstations:
+    if not all_instances:
         click.echo("No workstations found.")
         return
 
     if output == "plain":
-        for w in workstations:
+        for w in all_instances:
             shutdown_label, _ = _format_shutdown(w.shutdown_at, w.state)
             click.echo(
                 f"{w.instance_id}\t{w.name}\t{_color_state(w.state)}\t{shutdown_label}"
@@ -123,14 +141,14 @@ def list_cmd(
 
     # Pre-compute shutdown labels so we can measure column width
     shutdown_labels: list[tuple[str, int]] = []
-    for w in workstations:
+    for w in all_instances:
         label, raw_len = _format_shutdown(w.shutdown_at, w.state)
         shutdown_labels.append((label, raw_len))
 
     # Table format
-    max_id = max(len(w.instance_id) for w in workstations)
-    max_name = max(len(w.name or "-") for w in workstations)
-    max_state = max(len(w.state) for w in workstations)
+    max_id = max(len(w.instance_id) for w in all_instances)
+    max_name = max(len(w.name or "-") for w in all_instances)
+    max_state = max(len(w.state) for w in all_instances)
     max_shutdown = max(raw for _, raw in shutdown_labels)
     max_id = max(max_id, 12)
     max_name = max(max_name, 4)
@@ -144,7 +162,7 @@ def list_cmd(
     click.echo(header)
     click.echo("-" * len(header))
 
-    for w, (shutdown_label, shutdown_raw_len) in zip(workstations, shutdown_labels):
+    for w, (shutdown_label, shutdown_raw_len) in zip(all_instances, shutdown_labels):
         name = w.name or "-"
         state = _color_state(w.state)
         # Pad state by raw length (no ANSI) so columns align

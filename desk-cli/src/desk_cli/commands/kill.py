@@ -6,12 +6,17 @@ import os
 
 import click
 
-from desk.aws import resolve_workstation, terminate_instance
+from desk.aws import resolve_infra_instance, resolve_workstation, terminate_instance
 from desk.config import get_default_profile, get_default_region
 
 
 @click.command("kill")
 @click.argument("workstation", required=True)
+@click.option(
+    "--infra",
+    is_flag=True,
+    help="Allow targeting desk infrastructure instances (for example NAT).",
+)
 @click.option(
     "--yes",
     "-y",
@@ -37,6 +42,7 @@ def kill(
     yes: bool,
     region: str | None,
     profile: str | None,
+    infra: bool,
 ) -> None:
     """Terminate a workstation instance.
 
@@ -48,12 +54,20 @@ def kill(
     profile = profile or get_default_profile()
 
     try:
-        instance_id = resolve_workstation(
-            workstation,
-            region=region,
-            profile=profile,
-            states=["pending", "running", "stopping", "stopped"],
-        )
+        if infra:
+            instance_id = resolve_infra_instance(
+                workstation,
+                region=region,
+                profile=profile,
+                states=["pending", "running", "stopping", "stopped"],
+            )
+        else:
+            instance_id = resolve_workstation(
+                workstation,
+                region=region,
+                profile=profile,
+                states=["pending", "running", "stopping", "stopped"],
+            )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 

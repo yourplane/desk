@@ -6,12 +6,17 @@ import os
 
 import click
 
-from desk.aws import resolve_workstation, start_workstation
+from desk.aws import resolve_infra_instance, resolve_workstation, start_workstation
 from desk.config import get_default_profile, get_default_region
 
 
 @click.command("start")
 @click.argument("workstation", required=True)
+@click.option(
+    "--infra",
+    is_flag=True,
+    help="Allow targeting desk infrastructure instances (for example NAT).",
+)
 @click.option(
     "--region",
     "-r",
@@ -38,6 +43,7 @@ def start(
     workstation: str,
     region: str | None,
     profile: str | None,
+    infra: bool,
     shutdown_after: str,
 ) -> None:
     """Start a stopped workstation instance.
@@ -48,12 +54,20 @@ def start(
     profile = profile or get_default_profile()
 
     try:
-        instance_id = resolve_workstation(
-            workstation,
-            region=region,
-            profile=profile,
-            states=["stopped"],
-        )
+        if infra:
+            instance_id = resolve_infra_instance(
+                workstation,
+                region=region,
+                profile=profile,
+                states=["stopped"],
+            )
+        else:
+            instance_id = resolve_workstation(
+                workstation,
+                region=region,
+                profile=profile,
+                states=["stopped"],
+            )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 

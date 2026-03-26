@@ -68,6 +68,53 @@ Resources:
         - Key: desk:managed
           Value: "true"
 
+  NatSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: desk-nat-sg
+      GroupDescription: Security group for desk NAT instance
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          CidrIp: 10.0.1.0/24
+          Description: Allow forwarding traffic from private subnet 1
+        - IpProtocol: -1
+          CidrIp: 10.0.2.0/24
+          Description: Allow forwarding traffic from private subnet 2
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound internet traffic
+      Tags:
+        - Key: Name
+          Value: desk-nat-sg
+        - Key: desk:managed
+          Value: "true"
+
+  NatRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: desk-nat-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: desk:managed
+          Value: "true"
+
+  NatInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: desk-nat-profile
+      Roles:
+        - !Ref NatRole
+
   NatEip:
     Type: AWS::EC2::EIP
     Properties:
@@ -75,16 +122,56 @@ Resources:
       Tags:
         - Key: Name
           Value: desk-nat-eip
+        - Key: desk:managed
+          Value: "true"
 
-  NatGateway:
-    Type: AWS::EC2::NatGateway
+  NatInstance:
+    Type: AWS::EC2::Instance
     DependsOn: InternetGatewayAttachment
     Properties:
-      AllocationId: !GetAtt NatEip.AllocationId
+      ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id}}"
+      InstanceType: t4g.nano
       SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref NatSecurityGroup
+      IamInstanceProfile: !Ref NatInstanceProfile
+      SourceDestCheck: false
+      MetadataOptions:
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y iptables-persistent
+          sysctl -w net.ipv4.ip_forward=1
+          cat >/etc/sysctl.d/99-desk-nat.conf <<'EOF'
+          net.ipv4.ip_forward=1
+          EOF
+          iptables -t nat -A POSTROUTING -o $(ip route show default | awk '/default/ {print $5; exit}') -j MASQUERADE
+          iptables-save >/etc/iptables/rules.v4
       Tags:
         - Key: Name
-          Value: desk-nat
+          Value: desk-nat-instance
+        - Key: Type
+          Value: infra
+        - Key: desk:role
+          Value: nat
+        - Key: desk:managed
+          Value: "true"
+
+  NatEipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      InstanceId: !Ref NatInstance
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -121,7 +208,7 @@ Resources:
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
+      InstanceId: !Ref NatInstance
 
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -175,6 +262,59 @@ Resources:
       InstanceProfileName: desk-workstation-profile
       Roles:
         - !Ref WorkstationRole
+
+  NatLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: desk-nat-launch-template
+      LaunchTemplateData:
+        ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id}}"
+        InstanceType: t4g.nano
+        IamInstanceProfile:
+          Name: !Ref NatInstanceProfile
+        SecurityGroupIds:
+          - !Ref NatSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            set -euxo pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y iptables-persistent
+            sysctl -w net.ipv4.ip_forward=1
+            cat >/etc/sysctl.d/99-desk-nat.conf <<'EOF'
+            net.ipv4.ip_forward=1
+            EOF
+            iptables -t nat -A POSTROUTING -o $(ip route show default | awk '/default/ {print $5; exit}') -j MASQUERADE
+            iptables-save >/etc/iptables/rules.v4
+
+  NatAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: desk-nat-asg
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet
+      MinSize: "0"
+      MaxSize: "1"
+      DesiredCapacity: "0"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NatLaunchTemplate
+        Version: !GetAtt NatLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: desk-nat-asg-spare
+          PropagateAtLaunch: true
+        - Key: Type
+          Value: infra
+          PropagateAtLaunch: true
+        - Key: desk:role
+          Value: nat
+          PropagateAtLaunch: true
+        - Key: desk:managed
+          Value: "true"
+          PropagateAtLaunch: true
 
   DeskCopyBucket:
     Type: AWS::S3::Bucket
@@ -253,3 +393,7 @@ Outputs:
     Value: !Ref DeskCopyBucket
     Export:
       Name: desk-DeskCopyBucketName
+
+  NatInstanceId:
+    Description: NAT instance ID for private subnet default route
+    Value: !Ref NatInstance

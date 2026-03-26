@@ -24,7 +24,7 @@ aws cloudformation deploy \
 The template provides:
 
 - **VPC** with private subnets (2 AZs)
-- **NAT Gateway** for outbound internet (SSM and S3 traffic use the NAT)
+- **NAT instance** for outbound internet (SSM and S3 traffic use the NAT path)
 - **Security group** for workstations (no inbound rules)
 - **IAM instance profile** (`AmazonSSMManagedInstanceCore`)
 

@@ -323,6 +323,16 @@ class Workstation:
     shutdown_at: str | None = None
 
 
+@dataclass
+class InfraInstance:
+    """EC2 instance identified as desk infrastructure (for example NAT)."""
+
+    instance_id: str
+    name: str
+    state: str
+    role: str | None = None
+
+
 def list_workstations(
     region: str | None = None,
     profile: str | None = None,
@@ -353,6 +363,41 @@ def list_workstations(
                 )
 
     return workstations
+
+
+def list_infra_instances(
+    region: str | None = None,
+    profile: str | None = None,
+    *,
+    states: list[str] | None = None,
+) -> list[InfraInstance]:
+    """List desk-managed infra EC2 instances (tag Type=infra)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+
+    infra: list[InfraInstance] = []
+    filters = [
+        {"Name": "tag:Type", "Values": ["infra"]},
+        {"Name": "tag:desk:managed", "Values": ["true"]},
+    ]
+    if states:
+        filters.append({"Name": "instance-state-name", "Values": states})
+
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
+        for reservation in page.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+                infra.append(
+                    InfraInstance(
+                        instance_id=instance["InstanceId"],
+                        name=tags.get("Name", ""),
+                        state=instance["State"]["Name"],
+                        role=tags.get("desk:role"),
+                    )
+                )
+
+    return infra
 
 
 def resolve_workstation(
@@ -392,6 +437,44 @@ def resolve_workstation(
         return matches[0].instance_id
 
     raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
+
+
+def resolve_infra_instance(
+    name_or_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+    *,
+    states: list[str] | None = None,
+) -> str:
+    """Resolve infra instance name or ID to instance ID. Raises ValueError if not found."""
+    if states is None:
+        states = ["running", "pending", "stopping", "stopped"]
+
+    if name_or_id.startswith("i-"):
+        infra = list_infra_instances(region=region, profile=profile)
+        for inst in infra:
+            if inst.instance_id == name_or_id:
+                return inst.instance_id
+        raise ValueError(
+            f"Infrastructure instance '{name_or_id}' not found. "
+            "Run 'desk list --all' to see infrastructure instances."
+        )
+
+    matching_state = list_infra_instances(region=region, profile=profile, states=states)
+    matches = [i for i in matching_state if i.name == name_or_id]
+    if len(matches) > 1:
+        ids = ", ".join(m.instance_id for m in matches)
+        raise ValueError(
+            f"Multiple infrastructure instances named '{name_or_id}': {ids}. "
+            "Use the instance ID to target a specific one."
+        )
+    if len(matches) == 1:
+        return matches[0].instance_id
+
+    raise ValueError(
+        f"Infrastructure instance '{name_or_id}' not found. "
+        "Run 'desk list --all' to see infrastructure instances."
+    )
 
 
 def is_ssm_ready(

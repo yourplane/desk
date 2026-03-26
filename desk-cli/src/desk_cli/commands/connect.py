@@ -9,7 +9,12 @@ from typing import Callable
 
 import click
 
-from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
+from desk.aws import (
+    add_temporary_ssh_key,
+    is_ssm_ready,
+    resolve_infra_instance,
+    resolve_workstation,
+)
 from desk.config import get_default_profile, get_default_region
 from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
@@ -61,8 +66,13 @@ def get_connection_argv(
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
         log.info("resolved %s -> %s", workstation, instance_id)
     except ValueError as e:
-        log.debug("resolve failed workstation=%s error=%s", workstation, e)
-        raise click.UsageError(str(e)) from e
+        # Allow connecting to special infra instances (for example NAT)
+        try:
+            instance_id = resolve_infra_instance(workstation, region=region, profile=profile)
+            log.info("resolved infra %s -> %s", workstation, instance_id)
+        except ValueError:
+            log.debug("resolve failed workstation=%s error=%s", workstation, e)
+            raise click.UsageError(str(e)) from e
     vb("get_connection_argv: resolved", time.perf_counter() - t0)
 
     vb("get_connection_argv: is_ssm_ready")

@@ -800,9 +800,13 @@ def test_desk_connect_waits_for_ssm_then_connects(
 
 
 @patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_infra_instance")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_not_found(
-    mock_get_default_key: object, mock_resolve: object, tmp_path
+    mock_get_default_key: object,
+    mock_resolve_infra: object,
+    mock_resolve: object,
+    tmp_path,
 ) -> None:
     """desk connect with unknown workstation shows error."""
     key_file = tmp_path / "main-key.pem"
@@ -810,6 +814,7 @@ def test_desk_connect_not_found(
     mock_get_default_key.return_value = str(key_file)
 
     mock_resolve.side_effect = ValueError("Workstation 'x' not found")
+    mock_resolve_infra.side_effect = ValueError("Infrastructure instance 'x' not found")
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "x"])
     assert result.exit_code != 0

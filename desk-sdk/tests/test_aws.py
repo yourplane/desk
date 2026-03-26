@@ -22,9 +22,11 @@ from desk.aws import (
     get_running_workstations_using_key,
     is_ssm_ready,
     list_amis,
+    list_infra_instances,
     list_ec2_key_pairs,
     list_workstations,
     resolve_workstation,
+    resolve_infra_instance,
     run_workstation,
     start_workstation,
     stop_instance,
@@ -485,6 +487,42 @@ def test_list_workstations_success(mock_session: MagicMock) -> None:
 
 
 @patch("desk.aws.boto3.Session")
+def test_list_infra_instances_success(mock_session: MagicMock) -> None:
+    """list_infra_instances returns desk infra instances from describe_instances."""
+    mock_ec2 = MagicMock()
+    mock_paginator = MagicMock()
+    mock_paginator.paginate.return_value = [
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-nat123",
+                            "State": {"Name": "running"},
+                            "Tags": [
+                                {"Key": "Name", "Value": "desk-nat-instance"},
+                                {"Key": "Type", "Value": "infra"},
+                                {"Key": "desk:role", "Value": "nat"},
+                                {"Key": "desk:managed", "Value": "true"},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+    mock_ec2.get_paginator.return_value = mock_paginator
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_infra_instances()
+
+    assert len(result) == 1
+    assert result[0].instance_id == "i-nat123"
+    assert result[0].name == "desk-nat-instance"
+    assert result[0].role == "nat"
+
+
+@patch("desk.aws.boto3.Session")
 def test_list_workstations_missing_name_tag(mock_session: MagicMock) -> None:
     """list_workstations handles instances without Name tag."""
     mock_ec2 = MagicMock()
@@ -637,6 +675,17 @@ def test_resolve_workstation_by_name_with_stopped_states() -> None:
         ]
         result = resolve_workstation("main", states=["stopped"])
         assert result == "i-abc123"
+
+
+def test_resolve_infra_instance_by_name() -> None:
+    """resolve_infra_instance resolves by infra instance name."""
+    from desk.aws import InfraInstance
+
+    with patch("desk.aws.list_infra_instances") as mock_list:
+        mock_list.return_value = [
+            InfraInstance(instance_id="i-nat123", name="desk-nat-instance", state="running", role="nat"),
+        ]
+        assert resolve_infra_instance("desk-nat-instance") == "i-nat123"
 
 
 @patch("desk.aws.boto3.Session")
