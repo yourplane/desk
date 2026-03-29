@@ -28,7 +28,7 @@ from desk.aws import (
     wait_for_instance_state,
     wait_for_ssm_ready,
 )
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 @click.group("ami")
@@ -173,8 +173,9 @@ def ami_list(
     By default shows only AMIs created with 'desk ami create'. Use --all to show
     all AMIs you own in this region.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     amis = list_amis(region=region, profile=profile, managed_only=not show_all)
 
@@ -247,8 +248,9 @@ def ami_build(
     you can rerun the same recipe without duplicate-name errors. On success the builder is
     terminated; on failure it is left running for debugging.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     config = _load_build_config(config_file)
     if "base_ami" in config:
@@ -423,8 +425,9 @@ def ami_create(
         desk ami create main --name my-custom-ami
         desk ami create i-abc123 --no-reboot --no-wait
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     # Resolve workstation - allow any state except terminated
     try:

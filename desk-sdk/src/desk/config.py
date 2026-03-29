@@ -5,11 +5,29 @@ from __future__ import annotations
 import os
 import re
 from configparser import ConfigParser
+from dataclasses import dataclass
 
 _DESK_PROFILE_OVERRIDE_EXPLICIT = False
 _DESK_PROFILE_OVERRIDE_VALUE: str | None = None
 
 _PROFILE_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+
+
+@dataclass(frozen=True)
+class AwsSettings:
+    """Resolved AWS API defaults (region and credential profile name for boto3)."""
+
+    region: str | None
+    profile: str | None
+
+
+@dataclass(frozen=True)
+class DeskSettings:
+    """Resolved desk configuration: active desk profile name, AWS defaults, AMI prefix."""
+
+    active_desk_profile_name: str | None
+    aws_settings: AwsSettings
+    ami_prefix: str | None
 
 
 def set_desk_profile_override(value: str | None) -> None:
@@ -62,8 +80,8 @@ def _desk_profile_from_config_file(config: ConfigParser) -> str | None:
     return None
 
 
-def get_active_desk_profile_name() -> str | None:
-    """Active desk profile: explicit override, then ``DESK_PROFILE``, then config ``desk_profile``."""
+def _resolve_active_desk_profile_name(config: ConfigParser) -> str | None:
+    """Active desk profile: explicit override, then ``DESK_PROFILE``, then ``[default] desk_profile``."""
     global _DESK_PROFILE_OVERRIDE_EXPLICIT, _DESK_PROFILE_OVERRIDE_VALUE
     if _DESK_PROFILE_OVERRIDE_EXPLICIT:
         if _DESK_PROFILE_OVERRIDE_VALUE is None:
@@ -75,8 +93,59 @@ def get_active_desk_profile_name() -> str | None:
         s = value.strip()
         if s:
             return s
-    config = _load_config()
     return _desk_profile_from_config_file(config)
+
+
+def _defaults_ini_section(config: ConfigParser, active_desk_profile: str | None) -> str | None:
+    """INI section for ``region`` / ``aws_profile`` / ``ami_prefix``: named profile or ``[default]``."""
+    if active_desk_profile:
+        sec = desk_profile_section(active_desk_profile)
+        if config.has_section(sec):
+            return sec
+    if config.has_section("default"):
+        return "default"
+    return None
+
+
+def get_desk_settings() -> DeskSettings:
+    """Load config once and return resolved desk and AWS defaults."""
+    config = _load_config()
+    active = _resolve_active_desk_profile_name(config)
+    sec = _defaults_ini_section(config, active)
+
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if not region and sec and config.has_option(sec, "region"):
+        region = config.get(sec, "region").strip() or None
+
+    profile = os.environ.get("AWS_PROFILE")
+    if not profile and sec:
+        profile = _aws_profile_from_section(config, sec)
+
+    ami_env = os.environ.get("DESK_AMI_PREFIX")
+    if ami_env:
+        ami_prefix = ami_env.strip() or None
+    else:
+        ami_prefix = None
+        if sec and config.has_option(sec, "ami_prefix"):
+            ami_prefix = config.get(sec, "ami_prefix").strip() or None
+
+    return DeskSettings(
+        active_desk_profile_name=active,
+        aws_settings=AwsSettings(region=region, profile=profile),
+        ami_prefix=ami_prefix,
+    )
+
+
+def _aws_profile_from_section(config: ConfigParser, sec: str) -> str | None:
+    """AWS credential profile from ``aws_profile``."""
+    if config.has_option(sec, "aws_profile"):
+        return config.get(sec, "aws_profile").strip() or None
+    return None
+
+
+def get_active_desk_profile_name() -> str | None:
+    """Active desk profile: explicit override, then ``DESK_PROFILE``, then config ``desk_profile``."""
+    return get_desk_settings().active_desk_profile_name
 
 
 def _sanitize_profile_segment(name: str) -> str:
@@ -90,30 +159,6 @@ def _sanitize_profile_segment(name: str) -> str:
             "and do not start with punctuation other than a letter or digit."
         )
     return s
-
-
-def _fallback_base_section(parser: ConfigParser) -> str | None:
-    """Base section for file defaults: ``[default]``."""
-    if parser.has_section("default"):
-        return "default"
-    return None
-
-
-def _file_defaults_section(parser: ConfigParser) -> str | None:
-    """Section to read region / aws profile / ami_prefix from (named profile or base section)."""
-    active = get_active_desk_profile_name()
-    if active:
-        sec = desk_profile_section(active)
-        if parser.has_section(sec):
-            return sec
-    return _fallback_base_section(parser)
-
-
-def _aws_profile_from_section(config: ConfigParser, sec: str) -> str | None:
-    """AWS credential profile from ``aws_profile``."""
-    if config.has_option(sec, "aws_profile"):
-        return config.get(sec, "aws_profile").strip() or None
-    return None
 
 
 def get_state_home() -> str:
@@ -142,35 +187,14 @@ def get_state_home() -> str:
 
 def get_default_region() -> str | None:
     """Default AWS region: env (AWS_REGION, AWS_DEFAULT_REGION) then config file."""
-    value = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-    if value:
-        return value
-    config = _load_config()
-    sec = _file_defaults_section(config)
-    if sec and config.has_option(sec, "region"):
-        return config.get(sec, "region").strip() or None
-    return None
+    return get_desk_settings().aws_settings.region
 
 
 def get_default_profile() -> str | None:
     """Default AWS profile: env (AWS_PROFILE) then config file ``aws_profile``."""
-    value = os.environ.get("AWS_PROFILE")
-    if value:
-        return value
-    config = _load_config()
-    sec = _file_defaults_section(config)
-    if sec:
-        return _aws_profile_from_section(config, sec)
-    return None
+    return get_desk_settings().aws_settings.profile
 
 
 def get_default_ami_prefix() -> str | None:
     """Default AMI name prefix: env (DESK_AMI_PREFIX) then config file. Used when creating a workstation without --ami."""
-    value = os.environ.get("DESK_AMI_PREFIX")
-    if value:
-        return value.strip() or None
-    config = _load_config()
-    sec = _file_defaults_section(config)
-    if sec and config.has_option(sec, "ami_prefix"):
-        return config.get(sec, "ami_prefix").strip() or None
-    return None
+    return get_desk_settings().ami_prefix

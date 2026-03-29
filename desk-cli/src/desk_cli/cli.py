@@ -31,19 +31,18 @@ from desk_cli.commands import (
 @click.group()
 @click.option(
     "--profile",
-    "root_desk_profile",
+    "desk_profile",
     default=None,
     show_default=False,
     metavar="NAME",
-    help="Desk profile (config section [profile NAME]). Place before the subcommand; overrides DESK_PROFILE. "
-    "Subcommands use --profile for the AWS credential profile.",
+    help="Desk profile (config section [profile NAME]). Place before the subcommand; overrides DESK_PROFILE.",
 )
 @click.version_option(version=__version__, prog_name="desk")
 @click.pass_context
-def cli(ctx: click.Context, root_desk_profile: str | None) -> None:
+def cli(ctx: click.Context, desk_profile: str | None) -> None:
     """Manage EC2 instances as remote workstations."""
-    if ctx.get_parameter_source("root_desk_profile") == ParameterSource.COMMANDLINE:
-        desk_config.set_desk_profile_override(root_desk_profile)
+    if ctx.get_parameter_source("desk_profile") == ParameterSource.COMMANDLINE:
+        desk_config.set_desk_profile_override(desk_profile)
 
 
 cli.add_command(ami.ami_group, "ami")

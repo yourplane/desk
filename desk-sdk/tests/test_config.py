@@ -13,6 +13,7 @@ from desk.config import (
     get_default_ami_prefix,
     get_default_profile,
     get_default_region,
+    get_desk_settings,
     get_state_home,
     reset_desk_profile_override,
     set_desk_profile_override,
@@ -171,6 +172,27 @@ def test_get_default_ami_prefix_none_when_unset(monkeypatch: pytest.MonkeyPatch)
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
         assert get_default_ami_prefix() is None
+    finally:
+        os.unlink(path)
+
+
+def test_get_desk_settings_matches_getters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_desk_settings() agrees with individual accessors."""
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("DESK_AMI_PREFIX", raising=False)
+    reset_desk_profile_override()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[default]\nregion = ap-south-1\naws_profile = cfg-prof\nami_prefix = pfx\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        s = get_desk_settings()
+        assert s.aws_settings.region == get_default_region() == "ap-south-1"
+        assert s.aws_settings.profile == get_default_profile() == "cfg-prof"
+        assert s.ami_prefix == get_default_ami_prefix() == "pfx"
+        assert s.active_desk_profile_name == get_active_desk_profile_name() is None
     finally:
         os.unlink(path)
 
