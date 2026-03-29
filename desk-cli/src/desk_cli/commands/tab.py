@@ -17,7 +17,7 @@ from desk.aws import (
     wait_for_ssm_ready,
 )
 from desk_cli.commands.connect import get_connection_argv
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.log import get_logger
 from desk.tab_impl import (
     LIST_SEP,
@@ -172,8 +172,9 @@ def tab_connect(
     t0 = time.perf_counter()
     _verbose_echo(verbose, "start tab connect")
 
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     # Full session id is pid.name (e.g. 23434.foo-tab)
     full_session_id = (
         session
@@ -301,8 +302,9 @@ def tab_list(
     Each line shows a session id; use that exact value with 'desk tab connect'
     and 'desk tab close'.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
@@ -462,8 +464,9 @@ def tab_create(
     WORKSTATION is the name or instance ID (e.g. main). NAME is an optional tab
     name; if omitted, a short unique name is generated.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
@@ -591,8 +594,9 @@ def tab_up(
     t0 = time.perf_counter()
     _verbose_echo(verbose, "start tab up")
 
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     t1 = time.perf_counter()
     _verbose_echo(verbose, "resolving workstation", t1 - t0)
@@ -722,8 +726,9 @@ def tab_close(
     WORKSTATION is the name or instance ID (e.g. main). SESSION is the session
     id or name from 'desk tab list WORKSTATION' (e.g. 1084.foo-tab or foo-tab).
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
     except ValueError as e:

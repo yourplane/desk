@@ -10,9 +10,6 @@ import pytest
 from desk.config import (
     desk_profile_section,
     get_active_desk_profile_name,
-    get_default_ami_prefix,
-    get_default_profile,
-    get_default_region,
     get_desk_settings,
     get_state_home,
     reset_desk_profile_override,
@@ -30,7 +27,7 @@ def test_get_default_region_env_takes_precedence(monkeypatch: pytest.MonkeyPatch
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_region() == "us-west-2"
+        assert get_desk_settings().aws_settings.region == "us-west-2"
     finally:
         os.unlink(path)
 
@@ -44,7 +41,7 @@ def test_get_default_region_from_config(monkeypatch: pytest.MonkeyPatch) -> None
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_region() == "eu-west-1"
+        assert get_desk_settings().aws_settings.region == "eu-west-1"
     finally:
         os.unlink(path)
 
@@ -58,7 +55,7 @@ def test_get_default_region_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> 
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_region() is None
+        assert get_desk_settings().aws_settings.region is None
     finally:
         os.unlink(path)
 
@@ -71,7 +68,7 @@ def test_get_default_profile_env_takes_precedence(monkeypatch: pytest.MonkeyPatc
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_profile() == "env-profile"
+        assert get_desk_settings().aws_settings.profile == "env-profile"
     finally:
         os.unlink(path)
 
@@ -84,7 +81,7 @@ def test_get_default_profile_from_config(monkeypatch: pytest.MonkeyPatch) -> Non
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_profile() == "my-aws-profile"
+        assert get_desk_settings().aws_settings.profile == "my-aws-profile"
     finally:
         os.unlink(path)
 
@@ -97,7 +94,7 @@ def test_get_default_profile_none_when_unset(monkeypatch: pytest.MonkeyPatch) ->
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_profile() is None
+        assert get_desk_settings().aws_settings.profile is None
     finally:
         os.unlink(path)
 
@@ -145,7 +142,7 @@ def test_get_default_ami_prefix_env_takes_precedence(monkeypatch: pytest.MonkeyP
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_ami_prefix() == "my-desk-ami"
+        assert get_desk_settings().ami_prefix == "my-desk-ami"
     finally:
         os.unlink(path)
 
@@ -158,7 +155,7 @@ def test_get_default_ami_prefix_from_config(monkeypatch: pytest.MonkeyPatch) -> 
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_ami_prefix() == "default-desk-ami"
+        assert get_desk_settings().ami_prefix == "default-desk-ami"
     finally:
         os.unlink(path)
 
@@ -171,13 +168,13 @@ def test_get_default_ami_prefix_none_when_unset(monkeypatch: pytest.MonkeyPatch)
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_ami_prefix() is None
+        assert get_desk_settings().ami_prefix is None
     finally:
         os.unlink(path)
 
 
-def test_get_desk_settings_matches_getters(monkeypatch: pytest.MonkeyPatch) -> None:
-    """get_desk_settings() agrees with individual accessors."""
+def test_get_desk_settings_resolves_default_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_desk_settings() reads region, aws profile, and ami_prefix from [default]."""
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
@@ -189,10 +186,11 @@ def test_get_desk_settings_matches_getters(monkeypatch: pytest.MonkeyPatch) -> N
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
         s = get_desk_settings()
-        assert s.aws_settings.region == get_default_region() == "ap-south-1"
-        assert s.aws_settings.profile == get_default_profile() == "cfg-prof"
-        assert s.ami_prefix == get_default_ami_prefix() == "pfx"
-        assert s.active_desk_profile_name == get_active_desk_profile_name() is None
+        assert s.aws_settings.region == "ap-south-1"
+        assert s.aws_settings.profile == "cfg-prof"
+        assert s.ami_prefix == "pfx"
+        assert s.active_desk_profile_name is None
+        assert get_active_desk_profile_name() is None
     finally:
         os.unlink(path)
 
@@ -255,7 +253,7 @@ def test_get_default_region_from_named_profile_section(monkeypatch: pytest.Monke
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_region() == "eu-west-1"
+        assert get_desk_settings().aws_settings.region == "eu-west-1"
     finally:
         os.unlink(path)
 
@@ -274,7 +272,7 @@ def test_get_default_profile_from_named_profile_section(monkeypatch: pytest.Monk
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_profile() == "work-aws"
+        assert get_desk_settings().aws_settings.profile == "work-aws"
     finally:
         os.unlink(path)
 
@@ -290,7 +288,7 @@ def test_named_profile_missing_section_falls_back_to_default(monkeypatch: pytest
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_region() == "us-west-2"
+        assert get_desk_settings().aws_settings.region == "us-west-2"
     finally:
         os.unlink(path)
 

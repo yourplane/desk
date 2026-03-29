@@ -277,7 +277,7 @@ def create_workstation(
     Raises ValueError if a non-terminated workstation with the same name exists.
     Returns (instance_id, shutdown_at or None).
     """
-    from desk.config import get_default_ami_prefix
+    from desk.config import get_desk_settings
 
     existing = list_workstations(region=region, profile=profile)
     duplicates = [w for w in existing if w.name == name and w.state != "terminated"]
@@ -291,7 +291,7 @@ def create_workstation(
     vpc_outputs = get_desk_vpc_outputs(region=region, profile=profile)
 
     if ami_id is None:
-        ami_prefix = get_default_ami_prefix()
+        ami_prefix = get_desk_settings().ami_prefix
         if ami_prefix:
             ami_id = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
         if ami_id is None:

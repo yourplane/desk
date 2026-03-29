@@ -185,16 +185,3 @@ def get_state_home() -> str:
     return os.path.join(base, _sanitize_profile_segment(name))
 
 
-def get_default_region() -> str | None:
-    """Default AWS region: env (AWS_REGION, AWS_DEFAULT_REGION) then config file."""
-    return get_desk_settings().aws_settings.region
-
-
-def get_default_profile() -> str | None:
-    """Default AWS profile: env (AWS_PROFILE) then config file ``aws_profile``."""
-    return get_desk_settings().aws_settings.profile
-
-
-def get_default_ami_prefix() -> str | None:
-    """Default AMI name prefix: env (DESK_AMI_PREFIX) then config file. Used when creating a workstation without --ami."""
-    return get_desk_settings().ami_prefix

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import click
 
 from desk.aws import Workstation, list_workstations
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 def _color_state(state: str) -> str:
@@ -89,8 +89,9 @@ def list_cmd(output: str) -> None:
     AWS region and credential profile come from the environment
     (``AWS_REGION``, ``AWS_PROFILE``) or the desk config file.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     workstations = list_workstations(region=region, profile=profile)
 

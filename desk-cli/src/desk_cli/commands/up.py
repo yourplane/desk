@@ -14,7 +14,7 @@ from desk.aws import (
     start_workstation,
 )
 from desk_cli.commands import create, tab
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.keys import get_default_private_key_path
 
 
@@ -88,8 +88,9 @@ def up(
 
     AWS region and credential profile come from the environment or desk config.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     ctx = click.get_current_context()
     try:
         resolve_workstation(workstation, region=region, profile=profile)

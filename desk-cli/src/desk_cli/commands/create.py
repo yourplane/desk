@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from desk.aws import create_workstation
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 @click.command("create")
@@ -47,8 +47,9 @@ def create(
 
     AWS region and credential profile come from the environment or desk config.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     click.echo(f"Launching instance '{workstation}' ({instance_type})...")
     try:

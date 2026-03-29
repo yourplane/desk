@@ -18,7 +18,7 @@ from desk.aws import (
     send_ssm_command,
     wait_for_ssm_ready,
 )
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.log import get_logger
 
 log = get_logger("copy")
@@ -356,8 +356,9 @@ def copy_cmd(
       desk copy main:/var/log/app s3:/logs/app -r
       desk copy s3:/logs/app main:/tmp/restored -r
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     try:
         src_loc = parse_location(source)

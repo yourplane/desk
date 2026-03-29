@@ -14,7 +14,7 @@ from typing import Any
 import click
 
 from desk.aws import is_ssm_ready, resolve_workstation, wait_for_ssm_ready
-from desk.config import get_default_profile, get_default_region, get_state_home
+from desk.config import get_desk_settings, get_state_home
 
 DEFAULT_LOCAL_PORT_START = 45000
 DEFAULT_LOCAL_PORT_END = 45100
@@ -225,8 +225,9 @@ def route_add(
     local_port_end: int | None,
 ) -> None:
     """Add a route to forward WORKSTATION PORT to a local port."""
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     start, end = _parse_port_range(local_port_start, local_port_end)
     routes = _load_routes()
     duplicate = next((r for r in routes if r.get("workstation") == workstation and r.get("remote_port") == port), None)

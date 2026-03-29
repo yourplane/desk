@@ -4,14 +4,13 @@
 ; in [default] or in [profile NAME] when that profile is active.
 ;
 ; [default] is your default desk profile. Optional [profile NAME] blocks are alternates.
-; To switch: set DESK_PROFILE, optional desk_profile= in [default], or:
+; To switch which profile is active: set DESK_PROFILE, or run e.g.:
 ;   desk --profile work list
 ; State (routes, logs) is under ~/.local/state/desk/<NAME>/ when a named profile is active.
 
 [default]
 region = us-east-1
 aws_profile = fallback-aws-profile
-; desk_profile = personal   ; optional: use [profile personal] for AWS defaults
 ; ami_prefix = my-desk-ami
 
 [profile personal]

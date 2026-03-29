@@ -10,7 +10,7 @@ from typing import Callable
 import click
 
 from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
 
@@ -42,8 +42,9 @@ def get_connection_argv(
         if verbose_callback:
             verbose_callback(msg, elapsed)
 
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = region or aws.region
+    profile = profile or aws.profile
 
     log.debug("get_connection_argv workstation=%s region=%s profile=%s", workstation, region, profile)
 
@@ -214,8 +215,9 @@ def connect(
 
     AWS region and credential profile come from the environment or desk config.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     ssh_args = get_connection_argv(
         workstation=workstation,
         user=user,

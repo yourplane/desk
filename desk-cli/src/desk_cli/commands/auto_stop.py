@@ -13,7 +13,7 @@ from desk.aws import (
     resolve_workstation,
     set_shutdown_tag,
 )
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 @click.command("auto-stop")
@@ -44,8 +44,9 @@ def auto_stop(
       desk auto-stop dev 2h30m      # set 'dev' to 2h30m from now
       desk auto-stop main --clear   # remove auto-stop timer
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)

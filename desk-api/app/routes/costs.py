@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.costs import get_cost_summary
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,8 @@ router = APIRouter(tags=["costs"])
 
 
 def _region_profile():
-    return get_default_region(), get_default_profile()
+    aws = get_desk_settings().aws_settings
+    return aws.region, aws.profile
 
 
 @router.get("/costs")

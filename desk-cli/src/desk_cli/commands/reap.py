@@ -7,7 +7,7 @@ import os
 import click
 
 from desk.aws import reap_overdue
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 @click.command("reap")
@@ -25,8 +25,9 @@ def reap(dry_run: bool) -> None:
 
     AWS region and credential profile come from the environment or desk config.
     """
-    region = get_default_region()
-    profile = get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     overdue = reap_overdue(region=region, profile=profile, dry_run=dry_run)
 
