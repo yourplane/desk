@@ -8,10 +8,14 @@ import tempfile
 import pytest
 
 from desk.config import (
+    desk_profile_section,
+    get_active_desk_profile_name,
     get_default_ami_prefix,
     get_default_profile,
     get_default_region,
     get_state_home,
+    reset_cli_desk_profile_override,
+    set_cli_desk_profile_override,
     _get_config_path,
 )
 
@@ -167,5 +171,130 @@ def test_get_default_ami_prefix_none_when_unset(monkeypatch: pytest.MonkeyPatch)
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
         assert get_default_ami_prefix() is None
+    finally:
+        os.unlink(path)
+
+
+def test_desk_profile_section() -> None:
+    """Section label matches INI ``[profile NAME]``."""
+    assert desk_profile_section("work") == "profile work"
+
+
+def test_get_active_desk_profile_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DESK_PROFILE selects active desk profile."""
+    reset_cli_desk_profile_override()
+    monkeypatch.setenv("DESK_PROFILE", "work")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[defaults]\ndesk_profile = personal\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_active_desk_profile_name() == "work"
+    finally:
+        os.unlink(path)
+
+
+def test_get_active_desk_profile_from_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """[defaults] desk_profile used when env unset."""
+    reset_cli_desk_profile_override()
+    monkeypatch.delenv("DESK_PROFILE", raising=False)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[defaults]\ndesk_profile = staging\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_active_desk_profile_name() == "staging"
+    finally:
+        os.unlink(path)
+
+
+def test_get_active_desk_profile_cli_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit CLI override beats DESK_PROFILE."""
+    monkeypatch.setenv("DESK_PROFILE", "env-profile")
+    set_cli_desk_profile_override("cli-profile")
+    try:
+        assert get_active_desk_profile_name() == "cli-profile"
+    finally:
+        reset_cli_desk_profile_override()
+
+
+def test_get_default_region_from_named_profile_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Named [profile NAME] supplies region when desk profile is active."""
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    reset_cli_desk_profile_override()
+    monkeypatch.setenv("DESK_PROFILE", "work")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write(
+            "[defaults]\nregion = us-east-1\n"
+            "[profile work]\n"
+            "region = eu-west-1\n"
+        )
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_default_region() == "eu-west-1"
+    finally:
+        os.unlink(path)
+
+
+def test_get_default_profile_from_named_profile_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Named [profile NAME] supplies AWS profile when desk profile is active."""
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    reset_cli_desk_profile_override()
+    monkeypatch.setenv("DESK_PROFILE", "work")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write(
+            "[defaults]\nprofile = default-aws\n"
+            "[profile work]\n"
+            "profile = work-aws\n"
+        )
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_default_profile() == "work-aws"
+    finally:
+        os.unlink(path)
+
+
+def test_named_profile_missing_section_falls_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If [profile NAME] is missing, use [defaults] for file values."""
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    reset_cli_desk_profile_override()
+    monkeypatch.setenv("DESK_PROFILE", "missing")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[defaults]\nregion = us-west-2\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_default_region() == "us-west-2"
+    finally:
+        os.unlink(path)
+
+
+def test_get_state_home_namespaced_when_desk_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Active desk profile adds a subdirectory under state home."""
+    monkeypatch.delenv("DESK_STATE_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setenv("HOME", "/home/testuser")
+    reset_cli_desk_profile_override()
+    monkeypatch.setenv("DESK_PROFILE", "work")
+    assert get_state_home() == "/home/testuser/.local/state/desk/work"
+
+
+def test_get_state_home_not_namespaced_without_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No desk profile keeps flat state directory (backward compatible)."""
+    monkeypatch.delenv("DESK_STATE_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.delenv("DESK_PROFILE", raising=False)
+    monkeypatch.setenv("HOME", "/home/testuser")
+    reset_cli_desk_profile_override()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
+        f.write("[defaults]\nregion = us-east-1\n")
+        path = f.name
+    try:
+        monkeypatch.setenv("DESK_CONFIG", path)
+        assert get_state_home() == "/home/testuser/.local/state/desk"
     finally:
         os.unlink(path)

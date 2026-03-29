@@ -1,7 +1,24 @@
 ; desk config
 ; Copy to ~/.config/desk/config.ini (or set DESK_CONFIG to your path).
 ; Options can still be overridden by --region/--profile or AWS_REGION/AWS_PROFILE.
+;
+; Desk profile: set DESK_PROFILE or pass --desk-profile on the CLI, or set
+; desk_profile below. Named sections [profile NAME] hold defaults for that
+; profile (AWS profile name, region, ami_prefix). State (routes, logs) is
+; stored under ~/.local/state/desk/<NAME>/ when a desk profile is active.
 
 [defaults]
+desk_profile = personal
 region = us-east-1
-profile = my-aws-profile
+profile = fallback-aws-profile
+; ami_prefix = my-desk-ami
+
+[profile personal]
+region = us-east-1
+profile = my-personal-aws
+ami_prefix = desk-ami-personal
+
+[profile work]
+region = eu-west-1
+profile = work-aws
+ami_prefix = desk-ami-work
