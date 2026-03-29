@@ -168,20 +168,22 @@ See [AWS docs](https://docs.aws.amazon.com/systems-manager/latest/userguide/sess
 
 ## Configuration
 
-Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `desk-cli/config.example`. Overrides: `--region` / `--profile` or `AWS_REGION` / `AWS_PROFILE`.
+Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `desk-cli/config.example`. On subcommands, `--region` / `--profile` still set AWS region and **AWS** credential profile (`AWS_REGION` / `AWS_PROFILE` likewise).
 
-**Desk profiles:** add sections `[profile NAME]` with per-account `region`, `profile` (AWS), and `ami_prefix`. Set the active profile with `DESK_PROFILE`, `desk_profile` in `[defaults]`, or `desk --desk-profile NAME`. Local state (routes, logs) is stored under `~/.local/state/desk/<NAME>/` when a desk profile is active.
+**Desk profiles:** use a `[default]` section (like AWS `~/.aws/config`); legacy `[defaults]` is still read. Add `[profile NAME]` sections with per-account `region`, `aws_profile` (AWS credentials profile), and `ami_prefix`. Set the active desk profile with `DESK_PROFILE`, `desk_profile` in `[default]`, or `desk --profile NAME` **before** the subcommand (that global `--profile` is the desk profile; subcommand `--profile` is the AWS profile). Local state (routes, logs) is under `~/.local/state/desk/<NAME>/` when a desk profile is active.
+
+**Region:** optional in each section; set it when the AWS profile does not define a region in `~/.aws/config`, or to override the profile’s default region for desk.
 
 ```ini
-[defaults]
+[default]
 desk_profile = work
 region = us-east-1
-profile = my-aws-profile
+aws_profile = my-aws-profile
 ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations without --ami
 
 [profile work]
 region = eu-west-1
-profile = work-aws
+aws_profile = work-aws
 ami_prefix = desk-ami-work
 ```
 

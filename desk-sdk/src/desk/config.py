@@ -6,24 +6,27 @@ import os
 import re
 from configparser import ConfigParser
 
-_CLI_DESK_PROFILE_EXPLICIT = False
-_CLI_DESK_PROFILE_VALUE: str | None = None
+_DESK_PROFILE_OVERRIDE_EXPLICIT = False
+_DESK_PROFILE_OVERRIDE_VALUE: str | None = None
 
 _PROFILE_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
-def set_cli_desk_profile_override(value: str | None) -> None:
-    """Set desk profile from CLI ``--desk-profile`` (takes precedence over env and config)."""
-    global _CLI_DESK_PROFILE_EXPLICIT, _CLI_DESK_PROFILE_VALUE
-    _CLI_DESK_PROFILE_EXPLICIT = True
-    _CLI_DESK_PROFILE_VALUE = value
+def set_desk_profile_override(value: str | None) -> None:
+    """Set an explicit desk profile name (overrides ``DESK_PROFILE`` and config).
+
+    Used by the CLI when the user passes the global ``--profile`` before the subcommand.
+    """
+    global _DESK_PROFILE_OVERRIDE_EXPLICIT, _DESK_PROFILE_OVERRIDE_VALUE
+    _DESK_PROFILE_OVERRIDE_EXPLICIT = True
+    _DESK_PROFILE_OVERRIDE_VALUE = value
 
 
-def reset_cli_desk_profile_override() -> None:
-    """Clear CLI desk profile override (for tests)."""
-    global _CLI_DESK_PROFILE_EXPLICIT, _CLI_DESK_PROFILE_VALUE
-    _CLI_DESK_PROFILE_EXPLICIT = False
-    _CLI_DESK_PROFILE_VALUE = None
+def reset_desk_profile_override() -> None:
+    """Clear explicit desk profile override (for tests)."""
+    global _DESK_PROFILE_OVERRIDE_EXPLICIT, _DESK_PROFILE_OVERRIDE_VALUE
+    _DESK_PROFILE_OVERRIDE_EXPLICIT = False
+    _DESK_PROFILE_OVERRIDE_VALUE = None
 
 
 def _get_config_path() -> str:
@@ -51,13 +54,22 @@ def desk_profile_section(desk_profile_name: str) -> str:
     return f"profile {desk_profile_name.strip()}"
 
 
+def _desk_profile_from_config_file(config: ConfigParser) -> str | None:
+    """``desk_profile`` from ``[default]`` (preferred) or legacy ``[defaults]``."""
+    for section in ("default", "defaults"):
+        if config.has_section(section) and config.has_option(section, "desk_profile"):
+            s = config.get(section, "desk_profile").strip()
+            return s or None
+    return None
+
+
 def get_active_desk_profile_name() -> str | None:
-    """Active desk profile: CLI ``--desk-profile``, then ``DESK_PROFILE``, then ``[defaults] desk_profile``."""
-    global _CLI_DESK_PROFILE_EXPLICIT, _CLI_DESK_PROFILE_VALUE
-    if _CLI_DESK_PROFILE_EXPLICIT:
-        if _CLI_DESK_PROFILE_VALUE is None:
+    """Active desk profile: explicit override, then ``DESK_PROFILE``, then config ``desk_profile``."""
+    global _DESK_PROFILE_OVERRIDE_EXPLICIT, _DESK_PROFILE_OVERRIDE_VALUE
+    if _DESK_PROFILE_OVERRIDE_EXPLICIT:
+        if _DESK_PROFILE_OVERRIDE_VALUE is None:
             return None
-        s = _CLI_DESK_PROFILE_VALUE.strip()
+        s = _DESK_PROFILE_OVERRIDE_VALUE.strip()
         return s or None
     value = os.environ.get("DESK_PROFILE")
     if value:
@@ -65,10 +77,7 @@ def get_active_desk_profile_name() -> str | None:
         if s:
             return s
     config = _load_config()
-    if config.has_section("defaults") and config.has_option("defaults", "desk_profile"):
-        s = config.get("defaults", "desk_profile").strip()
-        return s or None
-    return None
+    return _desk_profile_from_config_file(config)
 
 
 def _sanitize_profile_segment(name: str) -> str:
@@ -84,15 +93,31 @@ def _sanitize_profile_segment(name: str) -> str:
     return s
 
 
+def _fallback_base_section(parser: ConfigParser) -> str | None:
+    """Base section for file defaults: ``[default]`` (preferred) or legacy ``[defaults]``."""
+    if parser.has_section("default"):
+        return "default"
+    if parser.has_section("defaults"):
+        return "defaults"
+    return None
+
+
 def _file_defaults_section(parser: ConfigParser) -> str | None:
-    """Section to read ``region`` / ``profile`` / ``ami_prefix`` from (named profile or ``defaults``)."""
+    """Section to read region / aws profile / ami_prefix from (named profile or base section)."""
     active = get_active_desk_profile_name()
     if active:
         sec = desk_profile_section(active)
         if parser.has_section(sec):
             return sec
-    if parser.has_section("defaults"):
-        return "defaults"
+    return _fallback_base_section(parser)
+
+
+def _aws_profile_from_section(config: ConfigParser, sec: str) -> str | None:
+    """AWS credential profile: prefer ``aws_profile``, fall back to legacy ``profile``."""
+    if config.has_option(sec, "aws_profile"):
+        return config.get(sec, "aws_profile").strip() or None
+    if config.has_option(sec, "profile"):
+        return config.get(sec, "profile").strip() or None
     return None
 
 
@@ -133,14 +158,14 @@ def get_default_region() -> str | None:
 
 
 def get_default_profile() -> str | None:
-    """Default AWS profile: env (AWS_PROFILE) then config file."""
+    """Default AWS profile: env (AWS_PROFILE) then config file (``aws_profile`` or legacy ``profile``)."""
     value = os.environ.get("AWS_PROFILE")
     if value:
         return value
     config = _load_config()
     sec = _file_defaults_section(config)
-    if sec and config.has_option(sec, "profile"):
-        return config.get(sec, "profile").strip() or None
+    if sec:
+        return _aws_profile_from_section(config, sec)
     return None
 
 

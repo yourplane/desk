@@ -74,12 +74,12 @@ def test_desk_route_add_namespaces_state_with_desk_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """--desk-profile stores routes under DESK_STATE_HOME/<profile>/."""
+    """Root --profile (desk profile) stores routes under DESK_STATE_HOME/<profile>/."""
     monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["--desk-profile", "work", "route", "add", "main", "8080"],
+        ["--profile", "work", "route", "add", "main", "8080"],
     )
     assert result.exit_code == 0
     routes = _read_routes_at_state_root(tmp_path, "work")

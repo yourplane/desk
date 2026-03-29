@@ -9,13 +9,13 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_cli_desk_profile() -> None:
-    """Clear ``--desk-profile`` override between CLI tests."""
-    from desk.config import reset_cli_desk_profile_override
+def _reset_desk_profile_override() -> None:
+    """Clear root ``--profile`` (desk profile) override between CLI tests."""
+    from desk.config import reset_desk_profile_override
 
-    reset_cli_desk_profile_override()
+    reset_desk_profile_override()
     yield
-    reset_cli_desk_profile_override()
+    reset_desk_profile_override()
 
 
 @pytest.fixture(autouse=True)
