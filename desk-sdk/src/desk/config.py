@@ -31,7 +31,7 @@ class DeskSettings:
 
 
 def set_desk_profile_override(value: str | None) -> None:
-    """Set an explicit desk profile name (overrides ``DESK_PROFILE`` and config).
+    """Set an explicit desk profile name (overrides ``DESK_PROFILE``).
 
     Used by the CLI when the user passes the global ``--profile`` before the subcommand.
     """
@@ -72,16 +72,11 @@ def desk_profile_section(desk_profile_name: str) -> str:
     return f"profile {desk_profile_name.strip()}"
 
 
-def _desk_profile_from_config_file(config: ConfigParser) -> str | None:
-    """``desk_profile`` from ``[default]``."""
-    if config.has_section("default") and config.has_option("default", "desk_profile"):
-        s = config.get("default", "desk_profile").strip()
-        return s or None
-    return None
-
-
 def _resolve_active_desk_profile_name(config: ConfigParser) -> str | None:
-    """Active desk profile: explicit override, then ``DESK_PROFILE``, then ``[default] desk_profile``."""
+    """Active desk profile: explicit CLI override, else ``DESK_PROFILE`` env.
+
+    The ``[default]`` section is itself the default profile; it does not name another profile.
+    """
     global _DESK_PROFILE_OVERRIDE_EXPLICIT, _DESK_PROFILE_OVERRIDE_VALUE
     if _DESK_PROFILE_OVERRIDE_EXPLICIT:
         if _DESK_PROFILE_OVERRIDE_VALUE is None:
@@ -93,15 +88,19 @@ def _resolve_active_desk_profile_name(config: ConfigParser) -> str | None:
         s = value.strip()
         if s:
             return s
-    return _desk_profile_from_config_file(config)
+    return None
 
 
 def _defaults_ini_section(config: ConfigParser, active_desk_profile: str | None) -> str | None:
-    """INI section for ``region`` / ``aws_profile`` / ``ami_prefix``: named profile or ``[default]``."""
+    """INI section that supplies file-based ``region`` / ``aws_profile`` / ``ami_prefix``.
+
+    When ``active_desk_profile`` is set and ``[profile NAME]`` exists, that section is used.
+    Otherwise file values come from ``[default]`` (if present). Env vars still win where set.
+    """
     if active_desk_profile:
-        sec = desk_profile_section(active_desk_profile)
-        if config.has_section(sec):
-            return sec
+        named = desk_profile_section(active_desk_profile)
+        if config.has_section(named):
+            return named
     if config.has_section("default"):
         return "default"
     return None
@@ -111,23 +110,23 @@ def get_desk_settings() -> DeskSettings:
     """Load config once and return resolved desk and AWS defaults."""
     config = _load_config()
     active = _resolve_active_desk_profile_name(config)
-    sec = _defaults_ini_section(config, active)
+    settings_section = _defaults_ini_section(config, active)
 
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-    if not region and sec and config.has_option(sec, "region"):
-        region = config.get(sec, "region").strip() or None
+    if not region and settings_section and config.has_option(settings_section, "region"):
+        region = config.get(settings_section, "region").strip() or None
 
     profile = os.environ.get("AWS_PROFILE")
-    if not profile and sec:
-        profile = _aws_profile_from_section(config, sec)
+    if not profile and settings_section:
+        profile = _aws_profile_from_section(config, settings_section)
 
     ami_env = os.environ.get("DESK_AMI_PREFIX")
     if ami_env:
         ami_prefix = ami_env.strip() or None
     else:
         ami_prefix = None
-        if sec and config.has_option(sec, "ami_prefix"):
-            ami_prefix = config.get(sec, "ami_prefix").strip() or None
+        if settings_section and config.has_option(settings_section, "ami_prefix"):
+            ami_prefix = config.get(settings_section, "ami_prefix").strip() or None
 
     return DeskSettings(
         active_desk_profile_name=active,
@@ -144,7 +143,7 @@ def _aws_profile_from_section(config: ConfigParser, sec: str) -> str | None:
 
 
 def get_active_desk_profile_name() -> str | None:
-    """Active desk profile: explicit override, then ``DESK_PROFILE``, then config ``desk_profile``."""
+    """Active desk profile: explicit ``--profile``, else ``DESK_PROFILE``."""
     return get_desk_settings().active_desk_profile_name
 
 

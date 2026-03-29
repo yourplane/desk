@@ -9,6 +9,6 @@ Install from workspace or run: `desk --help`
 Copy `config.example` to `~/.config/desk/config.ini` (or set `DESK_CONFIG`).
 
 - **AWS region and credential profile:** `AWS_REGION`, `AWS_PROFILE` (and `AWS_DEFAULT_REGION`), or `region` / `aws_profile` in the config file (`[default]` or `[profile NAME]` when a desk profile is active).
-- **Desk profile:** `[default]` is the default desk profile. Optional `[profile NAME]` blocks hold alternates. To use one, set `DESK_PROFILE`, optional `desk_profile` in `[default]`, or **`desk --profile NAME <subcommand>`** (global `--profile` must appear **before** the subcommand).
+- **Desk profile:** `[default]` is the default desk profile. Optional `[profile NAME]` blocks hold alternates. To use one, set `DESK_PROFILE` or **`desk --profile NAME <subcommand>`** (global `--profile` must appear **before** the subcommand).
 - **Region vs `aws_profile`:** `region` sets the default AWS region for boto3. It is still useful when your `~/.aws/config` entry for that profile does not set `region`, or when you want desk to use a different region than the profile’s default.
 - **State:** routes and port-forward logs live under `~/.local/state/desk/` (or `DESK_STATE_HOME`), with an extra subdirectory per desk profile when one is active.

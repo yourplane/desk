@@ -205,7 +205,7 @@ def test_get_active_desk_profile_from_env(monkeypatch: pytest.MonkeyPatch) -> No
     reset_desk_profile_override()
     monkeypatch.setenv("DESK_PROFILE", "work")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[default]\ndesk_profile = personal\n")
+        f.write("[default]\nregion = us-east-1\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -214,16 +214,16 @@ def test_get_active_desk_profile_from_env(monkeypatch: pytest.MonkeyPatch) -> No
         os.unlink(path)
 
 
-def test_get_active_desk_profile_from_default_section(monkeypatch: pytest.MonkeyPatch) -> None:
-    """[default] desk_profile used when env unset."""
+def test_desk_profile_in_default_section_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """[default] is the default profile; a desk_profile key there is not used."""
     reset_desk_profile_override()
     monkeypatch.delenv("DESK_PROFILE", raising=False)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[default]\ndesk_profile = staging\n")
+        f.write("[default]\ndesk_profile = staging\nregion = us-east-1\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_active_desk_profile_name() == "staging"
+        assert get_active_desk_profile_name() is None
     finally:
         os.unlink(path)
 

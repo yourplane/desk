@@ -172,7 +172,7 @@ Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your 
 
 AWS **region** and **credential profile** for API calls come from the environment (`AWS_REGION`, `AWS_PROFILE`, or `AWS_DEFAULT_REGION`) and from the config file (`region`, `aws_profile` in `[default]` or in `[profile NAME]` when a desk profile is active).
 
-**Desk profiles:** the `[default]` section is your default desk profile (same idea as AWS `~/.aws/config`). Optional `[profile NAME]` sections hold alternate `region`, `aws_profile`, and `ami_prefix` for other accounts. To use one of those, set `DESK_PROFILE`, optional `desk_profile` in `[default]`, or `desk --profile NAME` **before** the subcommand. Local state (routes, logs) is under `~/.local/state/desk/<NAME>/` when a named desk profile is active.
+**Desk profiles:** the `[default]` section is your default desk profile (same idea as AWS `~/.aws/config`). Optional `[profile NAME]` sections hold alternate `region`, `aws_profile`, and `ami_prefix` for other accounts. To use one of those, set `DESK_PROFILE` or `desk --profile NAME` **before** the subcommand. Local state (routes, logs) is under `~/.local/state/desk/<NAME>/` when a named desk profile is active.
 
 **Region:** optional in each section; set it when the AWS profile does not define a region in `~/.aws/config`, or to override the profile’s default region for desk.
 
