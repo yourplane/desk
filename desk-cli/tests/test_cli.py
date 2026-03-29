@@ -586,6 +586,7 @@ def test_desk_connect_help() -> None:
     assert "Connect to a workstation via SSH" in output
     assert "WORKSTATION" in output
     assert "--forward" in output or "-L" in output
+    assert "--infra" in output
 
 
 def test_desk_keygen_help() -> None:
@@ -800,11 +801,9 @@ def test_desk_connect_waits_for_ssm_then_connects(
 
 
 @patch("desk_cli.commands.connect.resolve_workstation")
-@patch("desk_cli.commands.connect.resolve_infra_instance")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_not_found(
     mock_get_default_key: object,
-    mock_resolve_infra: object,
     mock_resolve: object,
     tmp_path,
 ) -> None:
@@ -814,11 +813,51 @@ def test_desk_connect_not_found(
     mock_get_default_key.return_value = str(key_file)
 
     mock_resolve.side_effect = ValueError("Workstation 'x' not found")
-    mock_resolve_infra.side_effect = ValueError("Infrastructure instance 'x' not found")
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "x"])
     assert result.exit_code != 0
     assert "not found" in result.output
+
+
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_infra_instance")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
+def test_desk_connect_infra_uses_resolve_infra(
+    mock_get_default_key: object,
+    mock_resolve_ws: object,
+    mock_resolve_infra: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    mock_get_public_key: object,
+    mock_add_key: object,
+    tmp_path,
+) -> None:
+    """desk connect --infra resolves via resolve_infra_instance, not resolve_workstation."""
+    mock_resolve_infra.return_value = "i-nat123"
+    mock_ssm.return_value = True
+    mock_get_public_key.return_value = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 test"
+    mock_add_key.return_value = "cmd-123"
+    mock_execvp.side_effect = OSError(2, "No such file or directory")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_default_key.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "desk-nat-instance", "--infra"])
+
+    assert result.exit_code == 127
+    mock_resolve_infra.assert_called_once_with(
+        "desk-nat-instance", region=None, profile=None
+    )
+    mock_resolve_ws.assert_not_called()
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "ubuntu@i-nat123" in args
 
 
 @patch("desk_cli.commands.connect.add_temporary_ssh_key")

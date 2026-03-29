@@ -34,6 +34,8 @@ def get_connection_argv(
     remote_command: str | None = None,
     key_timeout: int = 300,
     verbose_callback: Callable[[str, float | None], None] | None = None,
+    *,
+    infra: bool = False,
 ) -> list[str]:
     """Resolve workstation, wait for SSM, inject public key via SSM, set AWS env, build SSH argv.
 
@@ -60,19 +62,18 @@ def get_connection_argv(
     if not os.path.exists(key_path):
         raise click.ClickException(f"Key not found at {key_path}.")
 
-    vb("get_connection_argv: resolve workstation")
+    vb("get_connection_argv: resolve target")
     t0 = time.perf_counter()
     try:
-        instance_id = resolve_workstation(workstation, region=region, profile=profile)
-        log.info("resolved %s -> %s", workstation, instance_id)
-    except ValueError as e:
-        # Allow connecting to special infra instances (for example NAT)
-        try:
+        if infra:
             instance_id = resolve_infra_instance(workstation, region=region, profile=profile)
             log.info("resolved infra %s -> %s", workstation, instance_id)
-        except ValueError:
-            log.debug("resolve failed workstation=%s error=%s", workstation, e)
-            raise click.UsageError(str(e)) from e
+        else:
+            instance_id = resolve_workstation(workstation, region=region, profile=profile)
+            log.info("resolved %s -> %s", workstation, instance_id)
+    except ValueError as e:
+        log.debug("resolve failed workstation=%s infra=%s error=%s", workstation, infra, e)
+        raise click.UsageError(str(e)) from e
     vb("get_connection_argv: resolved", time.perf_counter() - t0)
 
     vb("get_connection_argv: is_ssm_ready")
@@ -219,6 +220,11 @@ def get_connection_argv(
     show_default=True,
     help="Seconds to keep the injected SSH key in authorized_keys before it is removed.",
 )
+@click.option(
+    "--infra",
+    is_flag=True,
+    help="Connect to a desk infrastructure instance (for example NAT), not a workstation.",
+)
 def connect(
     workstation: str,
     user: str,
@@ -229,6 +235,7 @@ def connect(
     wait_timeout: int,
     forwards: tuple[str, ...],
     key_timeout: int,
+    infra: bool,
 ) -> None:
     """Connect to a workstation via SSH over SSM tunnel.
 
@@ -236,7 +243,8 @@ def connect(
     removes it after --key-timeout). Uses ~/.ssh/id_ed25519 or id_rsa by default; -i to override.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
-    Requires the Session Manager plugin and SSH client to be installed.
+    Use --infra for infrastructure instances (for example NAT). Requires the Session
+    Manager plugin and SSH client to be installed.
     """
     ssh_args = get_connection_argv(
         workstation=workstation,
@@ -249,6 +257,7 @@ def connect(
         forwards=forwards,
         remote_command=None,
         key_timeout=key_timeout,
+        infra=infra,
     )
     log.info("exec ssh user=%s", user)
     try:
