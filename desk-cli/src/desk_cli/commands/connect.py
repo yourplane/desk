@@ -12,8 +12,7 @@ import click
 from desk.aws import (
     add_temporary_ssh_key,
     is_ssm_ready,
-    resolve_infra_instance,
-    resolve_workstation,
+    resolve_workstation_target,
 )
 from desk.config import get_default_profile, get_default_region
 from desk.keys import get_default_private_key_path, get_public_key_content
@@ -65,12 +64,18 @@ def get_connection_argv(
     vb("get_connection_argv: resolve target")
     t0 = time.perf_counter()
     try:
-        if infra:
-            instance_id = resolve_infra_instance(workstation, region=region, profile=profile)
-            log.info("resolved infra %s -> %s", workstation, instance_id)
-        else:
-            instance_id = resolve_workstation(workstation, region=region, profile=profile)
-            log.info("resolved %s -> %s", workstation, instance_id)
+        instance_id = resolve_workstation_target(
+            workstation,
+            infra=infra,
+            region=region,
+            profile=profile,
+        )
+        log.info(
+            "resolved %s -> %s (infra=%s)",
+            workstation,
+            instance_id,
+            infra,
+        )
     except ValueError as e:
         log.debug("resolve failed workstation=%s infra=%s error=%s", workstation, infra, e)
         raise click.UsageError(str(e)) from e

@@ -22,11 +22,12 @@ from desk.aws import (
     get_running_workstations_using_key,
     is_ssm_ready,
     list_amis,
-    list_infra_instances,
+    list_infra_workstations,
     list_ec2_key_pairs,
     list_workstations,
     resolve_workstation,
     resolve_infra_instance,
+    resolve_workstation_target,
     run_workstation,
     start_workstation,
     stop_instance,
@@ -487,8 +488,8 @@ def test_list_workstations_success(mock_session: MagicMock) -> None:
 
 
 @patch("desk.aws.boto3.Session")
-def test_list_infra_instances_success(mock_session: MagicMock) -> None:
-    """list_infra_instances returns desk infra instances from describe_instances."""
+def test_list_infra_workstations_success(mock_session: MagicMock) -> None:
+    """list_infra_workstations returns desk infra instances from describe_instances."""
     mock_ec2 = MagicMock()
     mock_paginator = MagicMock()
     mock_paginator.paginate.return_value = [
@@ -514,7 +515,7 @@ def test_list_infra_instances_success(mock_session: MagicMock) -> None:
     mock_ec2.get_paginator.return_value = mock_paginator
     mock_session.return_value.client.return_value = mock_ec2
 
-    result = list_infra_instances()
+    result = list_infra_workstations()
 
     assert len(result) == 1
     assert result[0].instance_id == "i-nat123"
@@ -681,11 +682,21 @@ def test_resolve_infra_instance_by_name() -> None:
     """resolve_infra_instance resolves by infra instance name."""
     from desk.aws import InfraInstance
 
-    with patch("desk.aws.list_infra_instances") as mock_list:
+    with patch("desk.aws.list_infra_workstations") as mock_list:
         mock_list.return_value = [
             InfraInstance(instance_id="i-nat123", name="desk-nat-instance", state="running", role="nat"),
         ]
         assert resolve_infra_instance("desk-nat-instance") == "i-nat123"
+
+
+def test_resolve_workstation_target_delegates() -> None:
+    """resolve_workstation_target dispatches to infra vs workstation resolvers."""
+    with patch("desk.aws.resolve_infra_instance", return_value="i-nat") as mock_infra:
+        assert resolve_workstation_target("x", infra=True) == "i-nat"
+        mock_infra.assert_called_once_with("x", region=None, profile=None, states=None)
+    with patch("desk.aws.resolve_workstation", return_value="i-ws") as mock_ws:
+        assert resolve_workstation_target("y", infra=False, states=["stopped"]) == "i-ws"
+        mock_ws.assert_called_once_with("y", region=None, profile=None, states=["stopped"])
 
 
 @patch("desk.aws.boto3.Session")

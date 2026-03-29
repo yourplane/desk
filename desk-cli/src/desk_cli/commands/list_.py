@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import click
 
-from desk.aws import Workstation, list_infra_instances, list_workstations
+from desk.aws import Workstation, list_infra_workstations, list_workstations
 from desk.config import get_default_profile, get_default_region
 
 
@@ -115,7 +115,9 @@ def list_cmd(
     profile = profile or get_default_profile()
 
     workstations = list_workstations(region=region, profile=profile)
-    infra_instances = list_infra_instances(region=region, profile=profile) if show_all else []
+    infra_workstations = (
+        list_infra_workstations(region=region, profile=profile) if show_all else []
+    )
     infra_wrapped = [
         Workstation(
             instance_id=i.instance_id,
@@ -123,16 +125,16 @@ def list_cmd(
             state=i.state,
             shutdown_at=None,
         )
-        for i in infra_instances
+        for i in infra_workstations
     ]
-    all_instances = workstations + infra_wrapped
+    all_workstations = workstations + infra_wrapped
 
-    if not all_instances:
+    if not all_workstations:
         click.echo("No workstations found.")
         return
 
     if output == "plain":
-        for w in all_instances:
+        for w in all_workstations:
             shutdown_label, _ = _format_shutdown(w.shutdown_at, w.state)
             click.echo(
                 f"{w.instance_id}\t{w.name}\t{_color_state(w.state)}\t{shutdown_label}"
@@ -141,14 +143,14 @@ def list_cmd(
 
     # Pre-compute shutdown labels so we can measure column width
     shutdown_labels: list[tuple[str, int]] = []
-    for w in all_instances:
+    for w in all_workstations:
         label, raw_len = _format_shutdown(w.shutdown_at, w.state)
         shutdown_labels.append((label, raw_len))
 
     # Table format
-    max_id = max(len(w.instance_id) for w in all_instances)
-    max_name = max(len(w.name or "-") for w in all_instances)
-    max_state = max(len(w.state) for w in all_instances)
+    max_id = max(len(w.instance_id) for w in all_workstations)
+    max_name = max(len(w.name or "-") for w in all_workstations)
+    max_state = max(len(w.state) for w in all_workstations)
     max_shutdown = max(raw for _, raw in shutdown_labels)
     max_id = max(max_id, 12)
     max_name = max(max_name, 4)
@@ -162,7 +164,7 @@ def list_cmd(
     click.echo(header)
     click.echo("-" * len(header))
 
-    for w, (shutdown_label, shutdown_raw_len) in zip(all_instances, shutdown_labels):
+    for w, (shutdown_label, shutdown_raw_len) in zip(all_workstations, shutdown_labels):
         name = w.name or "-"
         state = _color_state(w.state)
         # Pad state by raw length (no ANSI) so columns align

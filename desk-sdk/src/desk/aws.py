@@ -365,13 +365,16 @@ def list_workstations(
     return workstations
 
 
-def list_infra_instances(
+def list_infra_workstations(
     region: str | None = None,
     profile: str | None = None,
     *,
     states: list[str] | None = None,
 ) -> list[InfraInstance]:
-    """List desk-managed infra EC2 instances (tag Type=infra)."""
+    """List desk-managed infra EC2 instances (tag Type=infra).
+
+    Parallel to list_workstations for naming consistency.
+    """
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
@@ -451,7 +454,7 @@ def resolve_infra_instance(
         states = ["running", "pending", "stopping", "stopped"]
 
     if name_or_id.startswith("i-"):
-        infra = list_infra_instances(region=region, profile=profile)
+        infra = list_infra_workstations(region=region, profile=profile)
         for inst in infra:
             if inst.instance_id == name_or_id:
                 return inst.instance_id
@@ -460,7 +463,7 @@ def resolve_infra_instance(
             "Run 'desk list --all' to see infrastructure instances."
         )
 
-    matching_state = list_infra_instances(region=region, profile=profile, states=states)
+    matching_state = list_infra_workstations(region=region, profile=profile, states=states)
     matches = [i for i in matching_state if i.name == name_or_id]
     if len(matches) > 1:
         ids = ", ".join(m.instance_id for m in matches)
@@ -474,6 +477,24 @@ def resolve_infra_instance(
     raise ValueError(
         f"Infrastructure instance '{name_or_id}' not found. "
         "Run 'desk list --all' to see infrastructure instances."
+    )
+
+
+def resolve_workstation_target(
+    name_or_id: str,
+    *,
+    infra: bool,
+    region: str | None = None,
+    profile: str | None = None,
+    states: list[str] | None = None,
+) -> str:
+    """Resolve a workstation name/ID or infra name/ID to an instance ID."""
+    if infra:
+        return resolve_infra_instance(
+            name_or_id, region=region, profile=profile, states=states
+        )
+    return resolve_workstation(
+        name_or_id, region=region, profile=profile, states=states
     )
 
 

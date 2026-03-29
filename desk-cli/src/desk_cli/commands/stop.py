@@ -6,7 +6,7 @@ import os
 
 import click
 
-from desk.aws import resolve_infra_instance, resolve_workstation, stop_instance
+from desk.aws import resolve_workstation_target, stop_instance
 from desk.config import get_default_profile, get_default_region
 
 
@@ -45,10 +45,12 @@ def stop(
     profile = profile or get_default_profile()
 
     try:
-        if infra:
-            instance_id = resolve_infra_instance(workstation, region=region, profile=profile)
-        else:
-            instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        instance_id = resolve_workstation_target(
+            workstation,
+            infra=infra,
+            region=region,
+            profile=profile,
+        )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 

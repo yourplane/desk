@@ -691,7 +691,7 @@ def test_desk_keygen_type_rsa(mock_run: object, tmp_path) -> None:
 @patch("desk_cli.commands.connect.get_public_key_content")
 @patch("desk_cli.commands.connect.os.execvp")
 @patch("desk_cli.commands.connect.is_ssm_ready")
-@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_resolves_and_execs_ssh(
     mock_get_default_key: object,
@@ -716,7 +716,7 @@ def test_desk_connect_resolves_and_execs_ssh(
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max"])
 
-    mock_resolve.assert_called_once_with("max", region=None, profile=None)
+    mock_resolve.assert_called_once_with("max", infra=False, region=None, profile=None)
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
     assert args[0] == "ssh"
@@ -729,7 +729,7 @@ def test_desk_connect_resolves_and_execs_ssh(
 @patch("desk_cli.commands.connect.get_public_key_content")
 @patch("desk_cli.commands.connect.os.execvp")
 @patch("desk_cli.commands.connect.is_ssm_ready")
-@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_key(
     mock_get_default_key: object,
@@ -774,7 +774,7 @@ def test_desk_connect_key_not_found(mock_get_default_key: object) -> None:
 @patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
 @patch("desk_cli.commands.connect.is_ssm_ready")
 @patch("desk_cli.commands.connect.os.execvp")
-@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_waits_for_ssm_then_connects(
     mock_get_default_key: object,
@@ -800,7 +800,7 @@ def test_desk_connect_waits_for_ssm_then_connects(
     mock_execvp.assert_called_once()
 
 
-@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_not_found(
     mock_get_default_key: object,
@@ -823,21 +823,19 @@ def test_desk_connect_not_found(
 @patch("desk_cli.commands.connect.get_public_key_content")
 @patch("desk_cli.commands.connect.os.execvp")
 @patch("desk_cli.commands.connect.is_ssm_ready")
-@patch("desk_cli.commands.connect.resolve_infra_instance")
-@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
-def test_desk_connect_infra_uses_resolve_infra(
+def test_desk_connect_infra_uses_resolve_target(
     mock_get_default_key: object,
-    mock_resolve_ws: object,
-    mock_resolve_infra: object,
+    mock_resolve: object,
     mock_ssm: object,
     mock_execvp: object,
     mock_get_public_key: object,
     mock_add_key: object,
     tmp_path,
 ) -> None:
-    """desk connect --infra resolves via resolve_infra_instance, not resolve_workstation."""
-    mock_resolve_infra.return_value = "i-nat123"
+    """desk connect --infra uses resolve_workstation_target with infra=True."""
+    mock_resolve.return_value = "i-nat123"
     mock_ssm.return_value = True
     mock_get_public_key.return_value = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 test"
     mock_add_key.return_value = "cmd-123"
@@ -851,10 +849,9 @@ def test_desk_connect_infra_uses_resolve_infra(
     result = runner.invoke(cli, ["connect", "desk-nat-instance", "--infra"])
 
     assert result.exit_code == 127
-    mock_resolve_infra.assert_called_once_with(
-        "desk-nat-instance", region=None, profile=None
+    mock_resolve.assert_called_once_with(
+        "desk-nat-instance", infra=True, region=None, profile=None
     )
-    mock_resolve_ws.assert_not_called()
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
     assert "ubuntu@i-nat123" in args
@@ -864,7 +861,7 @@ def test_desk_connect_infra_uses_resolve_infra(
 @patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
 @patch("desk_cli.commands.connect.os.execvp")
 @patch("desk_cli.commands.connect.is_ssm_ready")
-@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_port_forward(
     mock_get_default_key: object,
@@ -898,7 +895,7 @@ def test_desk_connect_with_port_forward(
 @patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
 @patch("desk_cli.commands.connect.os.execvp")
 @patch("desk_cli.commands.connect.is_ssm_ready")
-@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
 @patch("desk_cli.commands.connect.get_default_private_key_path")
 def test_desk_connect_with_multiple_port_forwards(
     mock_get_default_key: object,
@@ -941,7 +938,7 @@ def test_desk_stop_help() -> None:
 
 
 @patch("desk_cli.commands.stop.stop_instance")
-@patch("desk_cli.commands.stop.resolve_workstation")
+@patch("desk_cli.commands.stop.resolve_workstation_target")
 def test_desk_stop_by_name(mock_resolve: object, mock_stop: object) -> None:
     """desk stop resolves name and stops instance."""
     mock_resolve.return_value = "i-abc123"
@@ -949,13 +946,13 @@ def test_desk_stop_by_name(mock_resolve: object, mock_stop: object) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["stop", "max"])
     assert result.exit_code == 0
-    mock_resolve.assert_called_once_with("max", region=None, profile=None)
+    mock_resolve.assert_called_once_with("max", infra=False, region=None, profile=None)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
     assert "Stopped" in result.output
 
 
 @patch("desk_cli.commands.stop.stop_instance")
-@patch("desk_cli.commands.stop.resolve_workstation")
+@patch("desk_cli.commands.stop.resolve_workstation_target")
 def test_desk_stop_by_instance_id(mock_resolve: object, mock_stop: object) -> None:
     """desk stop with instance ID stops the instance."""
     mock_resolve.return_value = "i-abc123"
@@ -963,11 +960,11 @@ def test_desk_stop_by_instance_id(mock_resolve: object, mock_stop: object) -> No
     runner = CliRunner()
     result = runner.invoke(cli, ["stop", "i-abc123"])
     assert result.exit_code == 0
-    mock_resolve.assert_called_once_with("i-abc123", region=None, profile=None)
+    mock_resolve.assert_called_once_with("i-abc123", infra=False, region=None, profile=None)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
 
 
-@patch("desk_cli.commands.stop.resolve_workstation")
+@patch("desk_cli.commands.stop.resolve_workstation_target")
 def test_desk_stop_not_found(mock_resolve: object) -> None:
     """desk stop with unknown name shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -988,7 +985,7 @@ def test_desk_kill_help() -> None:
 
 
 @patch("desk_cli.commands.kill.terminate_instance")
-@patch("desk_cli.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.resolve_workstation_target")
 def test_desk_kill_with_yes_flag(mock_resolve: object, mock_terminate: object) -> None:
     """desk kill --yes terminates without prompting."""
     mock_resolve.return_value = "i-abc123"
@@ -997,14 +994,18 @@ def test_desk_kill_with_yes_flag(mock_resolve: object, mock_terminate: object) -
     result = runner.invoke(cli, ["kill", "max", "--yes"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with(
-        "max", region=None, profile=None, states=["pending", "running", "stopping", "stopped"]
+        "max",
+        infra=False,
+        region=None,
+        profile=None,
+        states=["pending", "running", "stopping", "stopped"],
     )
     mock_terminate.assert_called_once_with("i-abc123", region=None, profile=None)
     assert "Terminated" in result.output
 
 
 @patch("desk_cli.commands.kill.terminate_instance")
-@patch("desk_cli.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.resolve_workstation_target")
 def test_desk_kill_confirms_before_terminate(mock_resolve: object, mock_terminate: object) -> None:
     """desk kill prompts for confirmation."""
     mock_resolve.return_value = "i-abc123"
@@ -1017,7 +1018,7 @@ def test_desk_kill_confirms_before_terminate(mock_resolve: object, mock_terminat
 
 
 @patch("desk_cli.commands.kill.terminate_instance")
-@patch("desk_cli.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.resolve_workstation_target")
 def test_desk_kill_aborts_on_no(mock_resolve: object, mock_terminate: object) -> None:
     """desk kill aborts when user declines confirmation."""
     mock_resolve.return_value = "i-abc123"
@@ -1027,7 +1028,7 @@ def test_desk_kill_aborts_on_no(mock_resolve: object, mock_terminate: object) ->
     mock_terminate.assert_not_called()
 
 
-@patch("desk_cli.commands.kill.resolve_workstation")
+@patch("desk_cli.commands.kill.resolve_workstation_target")
 def test_desk_kill_not_found(mock_resolve: object) -> None:
     """desk kill with unknown name shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -1047,7 +1048,7 @@ def test_desk_start_help() -> None:
 
 
 @patch("desk_cli.commands.start.start_workstation")
-@patch("desk_cli.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.resolve_workstation_target")
 def test_desk_start_by_name(
     mock_resolve: object, mock_start: object
 ) -> None:
@@ -1058,14 +1059,14 @@ def test_desk_start_by_name(
     result = runner.invoke(cli, ["start", "max"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with(
-        "max", region=None, profile=None, states=["stopped"]
+        "max", infra=False, region=None, profile=None, states=["stopped"]
     )
     mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None)
     assert "Started" in result.output
 
 
 @patch("desk_cli.commands.start.start_workstation")
-@patch("desk_cli.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.resolve_workstation_target")
 def test_desk_start_by_instance_id(
     mock_resolve: object, mock_start: object
 ) -> None:
@@ -1076,12 +1077,12 @@ def test_desk_start_by_instance_id(
     result = runner.invoke(cli, ["start", "i-abc123"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with(
-        "i-abc123", region=None, profile=None, states=["stopped"]
+        "i-abc123", infra=False, region=None, profile=None, states=["stopped"]
     )
     mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None)
 
 
-@patch("desk_cli.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.resolve_workstation_target")
 def test_desk_start_not_found(mock_resolve: object) -> None:
     """desk start with unknown name shows error."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -1892,7 +1893,7 @@ def test_desk_list_plain_includes_shutdown(mock_list: object) -> None:
 
 
 @patch("desk_cli.commands.start.start_workstation")
-@patch("desk_cli.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.resolve_workstation_target")
 def test_desk_start_sets_shutdown_tag(
     mock_resolve: object,
     mock_start: object,
@@ -1907,7 +1908,7 @@ def test_desk_start_sets_shutdown_tag(
 
 
 @patch("desk_cli.commands.start.start_workstation")
-@patch("desk_cli.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.resolve_workstation_target")
 def test_desk_start_custom_shutdown_hours(
     mock_resolve: object,
     mock_start: object,
@@ -1922,7 +1923,7 @@ def test_desk_start_custom_shutdown_hours(
 
 
 @patch("desk_cli.commands.start.start_workstation")
-@patch("desk_cli.commands.start.resolve_workstation")
+@patch("desk_cli.commands.start.resolve_workstation_target")
 def test_desk_start_shutdown_zero_skips_tag(
     mock_resolve: object,
     mock_start: object,
