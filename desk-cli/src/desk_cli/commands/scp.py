@@ -81,19 +81,6 @@ def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) ->
     help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
 @click.option(
-    "--region",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--wait/--no-wait",
     default=True,
     show_default=True,
@@ -119,8 +106,6 @@ def scp(
     destination: str,
     user: str,
     identity_file: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     recursive: bool,
@@ -137,8 +122,8 @@ def scp(
       desk scp main -r ./local-dir :~/remote-dir            # Upload directory recursively
       desk scp main :/etc/hosts ./hosts                     # Download from remote path
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     log.debug(
         "scp source=%s dest=%s workstation=%s region=%s profile=%s",

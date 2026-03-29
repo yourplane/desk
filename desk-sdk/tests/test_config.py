@@ -25,7 +25,7 @@ def test_get_default_region_env_takes_precedence(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("AWS_REGION", "us-west-2")
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nregion = us-east-1\n")
+        f.write("[default]\nregion = us-east-1\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -39,7 +39,7 @@ def test_get_default_region_from_config(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nregion = eu-west-1\n")
+        f.write("[default]\nregion = eu-west-1\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -53,7 +53,7 @@ def test_get_default_region_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nprofile = only-profile\n")  # no region
+        f.write("[default]\naws_profile = only-profile\n")  # no region
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -66,7 +66,7 @@ def test_get_default_profile_env_takes_precedence(monkeypatch: pytest.MonkeyPatc
     """Environment AWS_PROFILE overrides config file."""
     monkeypatch.setenv("AWS_PROFILE", "env-profile")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nprofile = config-profile\n")
+        f.write("[default]\naws_profile = config-profile\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -88,24 +88,11 @@ def test_get_default_profile_from_config(monkeypatch: pytest.MonkeyPatch) -> Non
         os.unlink(path)
 
 
-def test_get_default_profile_legacy_profile_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Legacy ``profile`` key still read if ``aws_profile`` is absent."""
-    monkeypatch.delenv("AWS_PROFILE", raising=False)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nprofile = legacy-aws\n")
-        path = f.name
-    try:
-        monkeypatch.setenv("DESK_CONFIG", path)
-        assert get_default_profile() == "legacy-aws"
-    finally:
-        os.unlink(path)
-
-
 def test_get_default_profile_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     """No profile when env and config are absent."""
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nregion = us-east-1\n")  # no profile
+        f.write("[default]\nregion = us-east-1\n")  # no profile
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -153,7 +140,7 @@ def test_get_default_ami_prefix_env_takes_precedence(monkeypatch: pytest.MonkeyP
     """DESK_AMI_PREFIX env overrides config file."""
     monkeypatch.setenv("DESK_AMI_PREFIX", "my-desk-ami")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nami_prefix = config-prefix\n")
+        f.write("[default]\nami_prefix = config-prefix\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -166,7 +153,7 @@ def test_get_default_ami_prefix_from_config(monkeypatch: pytest.MonkeyPatch) -> 
     """Config file ami_prefix used when env is not set."""
     monkeypatch.delenv("DESK_AMI_PREFIX", raising=False)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nami_prefix = default-desk-ami\n")
+        f.write("[default]\nami_prefix = default-desk-ami\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -179,7 +166,7 @@ def test_get_default_ami_prefix_none_when_unset(monkeypatch: pytest.MonkeyPatch)
     """No ami_prefix when env and config are absent."""
     monkeypatch.delenv("DESK_AMI_PREFIX", raising=False)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nregion = us-east-1\n")
+        f.write("[default]\nregion = us-east-1\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -198,7 +185,7 @@ def test_get_active_desk_profile_from_env(monkeypatch: pytest.MonkeyPatch) -> No
     reset_desk_profile_override()
     monkeypatch.setenv("DESK_PROFILE", "work")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\ndesk_profile = personal\n")
+        f.write("[default]\ndesk_profile = personal\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -270,14 +257,14 @@ def test_get_default_profile_from_named_profile_section(monkeypatch: pytest.Monk
         os.unlink(path)
 
 
-def test_named_profile_missing_section_falls_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If [profile NAME] is missing, use [default] / [defaults] for file values."""
+def test_named_profile_missing_section_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If [profile NAME] is missing, use [default] for file values."""
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     reset_desk_profile_override()
     monkeypatch.setenv("DESK_PROFILE", "missing")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nregion = us-west-2\n")
+        f.write("[default]\nregion = us-west-2\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)
@@ -304,7 +291,7 @@ def test_get_state_home_not_namespaced_without_profile(monkeypatch: pytest.Monke
     monkeypatch.setenv("HOME", "/home/testuser")
     reset_desk_profile_override()
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
-        f.write("[defaults]\nregion = us-east-1\n")
+        f.write("[default]\nregion = us-east-1\n")
         path = f.name
     try:
         monkeypatch.setenv("DESK_CONFIG", path)

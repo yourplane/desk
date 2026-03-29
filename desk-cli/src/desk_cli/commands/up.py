@@ -35,27 +35,6 @@ from desk.keys import get_default_private_key_path
     help="AMI ID. Default: latest AMI matching config ami_prefix, or latest Ubuntu 24.04 LTS.",
 )
 @click.option(
-    "--stack",
-    "-s",
-    default="desk",
-    show_default=True,
-    help="CloudFormation stack name for desk VPC.",
-)
-@click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--user",
     "-u",
     default="ubuntu",
@@ -94,9 +73,6 @@ def up(
     tab_name: str | None,
     instance_type: str,
     ami: str | None,
-    stack: str,
-    region: str | None,
-    profile: str | None,
     user: str,
     wait: bool,
     wait_timeout: int,
@@ -109,9 +85,11 @@ def up(
     skips create and runs desk tab up. If stopped or stopping, starts then
     runs desk tab up. Otherwise creates then runs desk tab up.
     TAB_NAME defaults to "main" when omitted.
+
+    AWS region and credential profile come from the environment or desk config.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
     ctx = click.get_current_context()
     try:
         resolve_workstation(workstation, region=region, profile=profile)
@@ -167,9 +145,6 @@ def up(
                 workstation=workstation,
                 instance_type=instance_type,
                 ami=ami,
-                stack=stack,
-                region=region,
-                profile=profile,
                 shutdown_after=shutdown_after,
             )
     else:
@@ -192,8 +167,6 @@ def up(
         window_index=None,
         user=user,
         identity_file=None,
-        region=region,
-        profile=profile,
         wait=wait,
         wait_timeout=wait_timeout,
         forwards=forwards,

@@ -13,20 +13,6 @@ from desk.config import get_default_profile, get_default_region
 @click.command("start")
 @click.argument("workstation", required=True)
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--shutdown",
     "shutdown_after",
     type=str,
@@ -36,16 +22,16 @@ from desk.config import get_default_profile, get_default_region
 )
 def start(
     workstation: str,
-    region: str | None,
-    profile: str | None,
     shutdown_after: str,
 ) -> None:
     """Start a stopped workstation instance.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
+
+    AWS region and credential profile come from the environment or desk config.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     try:
         instance_id = resolve_workstation(

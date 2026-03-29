@@ -314,19 +314,6 @@ def _dispatch_copy(
     help="Recursively copy directories / S3 prefixes.",
 )
 @click.option(
-    "--region",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--wait/--no-wait",
     default=True,
     show_default=True,
@@ -348,8 +335,6 @@ def copy_cmd(
     source: str,
     destination: str,
     recursive: bool,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     stack: str,
@@ -371,8 +356,8 @@ def copy_cmd(
       desk copy main:/var/log/app s3:/logs/app -r
       desk copy s3:/logs/app main:/tmp/restored -r
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     try:
         src_loc = parse_location(source)

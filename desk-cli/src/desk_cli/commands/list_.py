@@ -73,20 +73,6 @@ def _format_shutdown(shutdown_at: str | None, state: str = "running") -> tuple[s
 
 @click.command("list")
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--output",
     "-o",
     type=click.Choice(["table", "plain"]),
@@ -94,18 +80,17 @@ def _format_shutdown(shutdown_at: str | None, state: str = "running") -> tuple[s
     show_default=True,
     help="Output format.",
 )
-def list_cmd(
-    region: str | None,
-    profile: str | None,
-    output: str,
-) -> None:
+def list_cmd(output: str) -> None:
     """List workstation instances.
 
     Shows EC2 instances tagged Type=workstation with their instance ID,
     name, and state. Connect with: desk connect <name-or-id>
+
+    AWS region and credential profile come from the environment
+    (``AWS_REGION``, ``AWS_PROFILE``) or the desk config file.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     workstations = list_workstations(region=region, profile=profile)
 

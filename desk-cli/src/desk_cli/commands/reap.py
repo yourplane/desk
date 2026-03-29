@@ -17,32 +17,16 @@ from desk.config import get_default_profile, get_default_region
     default=False,
     help="Show what would be stopped without actually stopping.",
 )
-@click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-def reap(
-    dry_run: bool,
-    region: str | None,
-    profile: str | None,
-) -> None:
+def reap(dry_run: bool) -> None:
     """Stop all workstations past their auto-stop time.
 
     Finds running instances with a desk:shutdown-at tag in the past
     and stops them. Use --dry-run to preview without stopping.
+
+    AWS region and credential profile come from the environment or desk config.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     overdue = reap_overdue(region=region, profile=profile, dry_run=dry_run)
 

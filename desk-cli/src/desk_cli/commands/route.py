@@ -202,8 +202,6 @@ def route_group() -> None:
 @route_group.command("add")
 @click.argument("workstation")
 @click.argument("port", type=click.IntRange(1, 65535))
-@click.option("--region", "-r", default=None, envvar="AWS_REGION", help="AWS region.")
-@click.option("--profile", "-p", default=None, envvar="AWS_PROFILE", help="AWS profile.")
 @click.option(
     "--wait/--no-wait",
     default=True,
@@ -221,16 +219,14 @@ def route_group() -> None:
 def route_add(
     workstation: str,
     port: int,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     local_port_start: int | None,
     local_port_end: int | None,
 ) -> None:
     """Add a route to forward WORKSTATION PORT to a local port."""
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
     start, end = _parse_port_range(local_port_start, local_port_end)
     routes = _load_routes()
     duplicate = next((r for r in routes if r.get("workstation") == workstation and r.get("remote_port") == port), None)

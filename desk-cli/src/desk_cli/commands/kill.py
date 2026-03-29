@@ -18,34 +18,20 @@ from desk.config import get_default_profile, get_default_region
     is_flag=True,
     help="Skip confirmation prompt.",
 )
-@click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
 def kill(
     workstation: str,
     yes: bool,
-    region: str | None,
-    profile: str | None,
 ) -> None:
     """Terminate a workstation instance.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
 
     This permanently destroys the instance and all data on its root volume.
+
+    AWS region and credential profile come from the environment or desk config.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     try:
         instance_id = resolve_workstation(

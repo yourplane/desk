@@ -25,26 +25,10 @@ from desk.config import get_default_profile, get_default_region
     default=False,
     help="Remove the auto-stop timer instead of setting one.",
 )
-@click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
 def auto_stop(
     workstation: str,
     duration: str,
     clear: bool,
-    region: str | None,
-    profile: str | None,
 ) -> None:
     """Set or change the auto-stop time on a workstation.
 
@@ -60,8 +44,8 @@ def auto_stop(
       desk auto-stop dev 2h30m      # set 'dev' to 2h30m from now
       desk auto-stop main --clear   # remove auto-stop timer
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)

@@ -73,21 +73,7 @@ def _parse_session_arg(session_arg: str) -> tuple[str, str | None]:
 
 
 def _common_tab_options(f):
-    """Add region, profile, wait options (workstation is always a required positional)."""
-    f = click.option(
-        "--region",
-        "-r",
-        default=None,
-        envvar="AWS_REGION",
-        help="AWS region.",
-    )(f)
-    f = click.option(
-        "--profile",
-        "-p",
-        default=None,
-        envvar="AWS_PROFILE",
-        help="AWS profile.",
-    )(f)
+    """Add wait options (workstation is always a required positional)."""
     f = click.option(
         "--wait/--no-wait",
         default=True,
@@ -139,8 +125,6 @@ def tab_group() -> None:
     default=None,
     help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
-@click.option("--region", "-r", default=None, envvar="AWS_REGION", help="AWS region.")
-@click.option("--profile", "-p", default=None, envvar="AWS_PROFILE", help="AWS profile.")
 @click.option(
     "--wait/--no-wait",
     default=True,
@@ -173,8 +157,6 @@ def tab_connect(
     window_index: int | None,
     user: str,
     identity_file: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
@@ -190,8 +172,8 @@ def tab_connect(
     t0 = time.perf_counter()
     _verbose_echo(verbose, "start tab connect")
 
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
     # Full session id is pid.name (e.g. 23434.foo-tab)
     full_session_id = (
         session
@@ -311,8 +293,6 @@ def tab_connect(
 def tab_list(
     workstation: str,
     windows: bool,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
 ) -> None:
@@ -321,8 +301,8 @@ def tab_list(
     Each line shows a session id; use that exact value with 'desk tab connect'
     and 'desk tab close'.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
@@ -474,8 +454,6 @@ def tab_list(
 def tab_create(
     workstation: str,
     name: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
 ) -> None:
@@ -484,8 +462,8 @@ def tab_create(
     WORKSTATION is the name or instance ID (e.g. main). NAME is an optional tab
     name; if omitted, a short unique name is generated.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
@@ -567,8 +545,6 @@ def tab_create(
     default=None,
     help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
-@click.option("--region", "-r", default=None, envvar="AWS_REGION", help="AWS region.")
-@click.option("--profile", "-p", default=None, envvar="AWS_PROFILE", help="AWS profile.")
 @click.option(
     "--wait/--no-wait",
     default=True,
@@ -601,8 +577,6 @@ def tab_up(
     window_index: int | None,
     user: str,
     identity_file: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
@@ -617,8 +591,8 @@ def tab_up(
     t0 = time.perf_counter()
     _verbose_echo(verbose, "start tab up")
 
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
 
     t1 = time.perf_counter()
     _verbose_echo(verbose, "resolving workstation", t1 - t0)
@@ -740,8 +714,6 @@ def tab_up(
 def tab_close(
     workstation: str,
     session: str,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
 ) -> None:
@@ -750,8 +722,8 @@ def tab_close(
     WORKSTATION is the name or instance ID (e.g. main). SESSION is the session
     id or name from 'desk tab list WORKSTATION' (e.g. 1084.foo-tab or foo-tab).
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    region = get_default_region()
+    profile = get_default_profile()
     try:
         instance_id = resolve_workstation(workstation, region=region, profile=profile)
     except ValueError as e:

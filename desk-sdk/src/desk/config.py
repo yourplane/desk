@@ -55,11 +55,10 @@ def desk_profile_section(desk_profile_name: str) -> str:
 
 
 def _desk_profile_from_config_file(config: ConfigParser) -> str | None:
-    """``desk_profile`` from ``[default]`` (preferred) or legacy ``[defaults]``."""
-    for section in ("default", "defaults"):
-        if config.has_section(section) and config.has_option(section, "desk_profile"):
-            s = config.get(section, "desk_profile").strip()
-            return s or None
+    """``desk_profile`` from ``[default]``."""
+    if config.has_section("default") and config.has_option("default", "desk_profile"):
+        s = config.get("default", "desk_profile").strip()
+        return s or None
     return None
 
 
@@ -94,11 +93,9 @@ def _sanitize_profile_segment(name: str) -> str:
 
 
 def _fallback_base_section(parser: ConfigParser) -> str | None:
-    """Base section for file defaults: ``[default]`` (preferred) or legacy ``[defaults]``."""
+    """Base section for file defaults: ``[default]``."""
     if parser.has_section("default"):
         return "default"
-    if parser.has_section("defaults"):
-        return "defaults"
     return None
 
 
@@ -113,11 +110,9 @@ def _file_defaults_section(parser: ConfigParser) -> str | None:
 
 
 def _aws_profile_from_section(config: ConfigParser, sec: str) -> str | None:
-    """AWS credential profile: prefer ``aws_profile``, fall back to legacy ``profile``."""
+    """AWS credential profile from ``aws_profile``."""
     if config.has_option(sec, "aws_profile"):
         return config.get(sec, "aws_profile").strip() or None
-    if config.has_option(sec, "profile"):
-        return config.get(sec, "profile").strip() or None
     return None
 
 
@@ -158,7 +153,7 @@ def get_default_region() -> str | None:
 
 
 def get_default_profile() -> str | None:
-    """Default AWS profile: env (AWS_PROFILE) then config file (``aws_profile`` or legacy ``profile``)."""
+    """Default AWS profile: env (AWS_PROFILE) then config file ``aws_profile``."""
     value = os.environ.get("AWS_PROFILE")
     if value:
         return value

@@ -171,20 +171,6 @@ def get_connection_argv(
     help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--wait/--no-wait",
     default=True,
     show_default=True,
@@ -213,8 +199,6 @@ def connect(
     workstation: str,
     user: str,
     identity_file: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
@@ -227,7 +211,11 @@ def connect(
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
     Requires the Session Manager plugin and SSH client to be installed.
+
+    AWS region and credential profile come from the environment or desk config.
     """
+    region = get_default_region()
+    profile = get_default_profile()
     ssh_args = get_connection_argv(
         workstation=workstation,
         user=user,
