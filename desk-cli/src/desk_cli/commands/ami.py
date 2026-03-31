@@ -133,7 +133,7 @@ def _run_desk(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run desk CLI with given args and env."""
-    cmd = [sys.executable, "-m", "desk.cli"] + args
+    cmd = [sys.executable, "-m", "desk_cli.cli"] + args
     run_env = os.environ.copy()
     if region:
         run_env["AWS_REGION"] = region

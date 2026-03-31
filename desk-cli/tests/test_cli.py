@@ -332,6 +332,23 @@ def test_desk_ami_build_missing_config() -> None:
     assert "No such file" in result.stderr or "nonexistent" in result.stderr.lower()
 
 
+@patch("desk_cli.commands.ami.subprocess.run")
+def test_ami_build_internal_runner_uses_desk_cli_module(mock_run: object) -> None:
+    """AMI build helper runs nested commands via desk_cli.cli module."""
+    from subprocess import CompletedProcess
+
+    from desk_cli.commands import ami as ami_commands
+
+    mock_run.return_value = CompletedProcess(args=[], returncode=0)
+
+    ami_commands._run_desk(["create", "builder"], region=None, profile=None)
+
+    assert mock_run.call_count == 1
+    cmd = mock_run.call_args[0][0]
+    assert cmd[:3] == [sys.executable, "-m", "desk_cli.cli"]
+    assert cmd[3:] == ["create", "builder"]
+
+
 def test_desk_ami_build_invalid_config(tmp_path: object) -> None:
     """desk ami build fails when config is invalid JSON or schema."""
     from pathlib import Path
