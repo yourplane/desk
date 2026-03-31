@@ -332,6 +332,36 @@ def test_desk_ami_build_missing_config() -> None:
     assert "No such file" in result.stderr or "nonexistent" in result.stderr.lower()
 
 
+@patch("desk_cli.commands.ami.terminate_instance")
+@patch("desk_cli.commands.ami.wait_for_ami_available", return_value=True)
+@patch("desk_cli.commands.ami.create_ami", return_value="ami-12345")
+@patch("desk_cli.commands.ami.wait_for_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.resolve_workstation", return_value="i-builder")
+@patch("desk_cli.commands.ami.create_workstation")
+@patch("desk_cli.commands.ami.get_latest_ubuntu_ami", return_value="ami-ubuntu")
+def test_ami_build_uses_sdk_instead_of_nested_desk_process(
+    _mock_latest: object,
+    mock_create_ws: object,
+    _mock_resolve: object,
+    _mock_wait_ssm: object,
+    _mock_create_ami: object,
+    _mock_wait_ami: object,
+    _mock_terminate: object,
+    tmp_path,
+) -> None:
+    """AMI build should call SDK helpers directly."""
+    import json
+
+    config_path = tmp_path / "ami-config.json"
+    config_path.write_text(json.dumps({"ami_name": "my-ami", "steps": []}))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", str(config_path)])
+
+    assert result.exit_code == 0
+    mock_create_ws.assert_called_once()
+
+
 def test_desk_ami_build_invalid_config(tmp_path: object) -> None:
     """desk ami build fails when config is invalid JSON or schema."""
     from pathlib import Path

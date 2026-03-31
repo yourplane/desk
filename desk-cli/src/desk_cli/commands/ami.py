@@ -6,8 +6,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
-import sys
 import time
 from datetime import datetime
 from typing import Any
@@ -16,6 +14,7 @@ import click
 
 from desk.aws import (
     create_ami,
+    create_workstation,
     get_ami_state,
     get_instance_state,
     get_latest_ubuntu_ami,
@@ -28,6 +27,8 @@ from desk.aws import (
     wait_for_instance_state,
     wait_for_ssm_ready,
 )
+from desk_cli.commands.run import run_script_on_instance
+from desk_cli.commands.scp import scp_transfer
 from desk.config import get_desk_settings
 
 
@@ -124,29 +125,6 @@ def _versioned_ami_name(ami_name: str) -> str:
     if len(base) > max_base:
         base = base[:max_base]
     return f"{base}-{timestamp}"
-
-
-def _run_desk(
-    args: list[str],
-    region: str | None,
-    profile: str | None,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[bytes]:
-    """Run desk CLI with given args and env."""
-    cmd = [sys.executable, "-m", "desk.cli"] + args
-    run_env = os.environ.copy()
-    if region:
-        run_env["AWS_REGION"] = region
-    if profile:
-        run_env["AWS_PROFILE"] = profile
-    if env:
-        run_env.update(env)
-    return subprocess.run(
-        cmd,
-        env=run_env,
-        check=False,
-        capture_output=False,
-    )
 
 
 @ami_group.command("list")
@@ -276,18 +254,18 @@ def ami_build(
 
     # 1. Create instance from Ubuntu (never use config default/ami_prefix for builder)
     builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
-    create_args = [
-        "create",
-        workstation_name,
-        "--instance-type", instance_type,
-        "--ami", builder_ami,
-    ]
-    # Clear ami prefix so create never falls back to config default
-    create_env = {"DESK_AMI_PREFIX": ""}
     click.echo("Step 1/4: Creating builder instance...")
-    result = _run_desk(create_args, region, profile, env=create_env)
-    if result.returncode != 0:
-        raise click.ClickException("desk create failed.")
+    try:
+        create_workstation(
+            workstation_name,
+            instance_type,
+            ami_id=builder_ami,
+            shutdown_after="0",
+            region=region,
+            profile=profile,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
 
     # 2. Wait for SSM
     click.echo("Step 2/4: Waiting for instance to be ready (SSM)...")
@@ -321,16 +299,18 @@ def ami_build(
                 if os.path.isfile(candidate):
                     run_cmd = candidate
             click.echo(f"Step 3/4: Run ({i + 1}/{len(steps)}): {run_cmd}")
-            run_args = [
-                "run",
-                "--follow",
-                "--no-wait",
-                workstation_name,
-                run_cmd,
-            ]
-            result = _run_desk(run_args, region, profile)
-            if result.returncode != 0:
-                raise click.ClickException(f"desk run failed for: {run_cmd}")
+            script_content = run_cmd
+            if os.path.isfile(run_cmd):
+                with open(run_cmd) as f:
+                    script_content = f.read()
+            run_script_on_instance(
+                instance_id,
+                script_content,
+                follow=True,
+                region=region,
+                profile=profile,
+                command_timeout=7200,
+            )
         else:
             item = step["copy"]
             src = item["source"]
@@ -339,18 +319,19 @@ def ami_build(
             if not os.path.isabs(src):
                 src = os.path.normpath(os.path.join(config_dir, src))
             click.echo(f"Step 3/4: Copy ({i + 1}/{len(steps)}): {src} -> {workstation_name}:{dest}")
-            scp_args = [
-                "scp",
-                "--no-wait",
+            scp_transfer(
                 workstation_name,
                 src,
                 f"{workstation_name}:{dest}",
-            ]
-            if recursive:
-                scp_args.insert(2, "-r")  # after --no-wait, before positionals
-            result = _run_desk(scp_args, region, profile, env={"PWD": config_dir})
-            if result.returncode != 0:
-                raise click.ClickException(f"desk scp failed for {src} -> {dest}.")
+                user="ubuntu",
+                identity_file=None,
+                wait=False,
+                wait_timeout=300,
+                recursive=recursive,
+                region=region,
+                profile=profile,
+                replace_process=False,
+            )
 
     click.echo()
 
@@ -358,15 +339,26 @@ def ami_build(
     versioned_name = _versioned_ami_name(ami_name)
     click.echo("Step 4/4: Creating AMI from builder...")
     click.echo(f"  AMI name: {versioned_name}")
-    ami_create_args = [
-        "ami", "create",
-        workstation_name,
-        "--name", versioned_name,
-        "--no-wait" if no_wait else "--wait",
-    ]
-    result = _run_desk(ami_create_args, region, profile)
-    if result.returncode != 0:
-        raise click.ClickException("desk ami create failed.")
+    image_id = create_ami(
+        instance_id=instance_id,
+        name=versioned_name,
+        description=None,
+        no_reboot=False,
+        region=region,
+        profile=profile,
+    )
+    click.echo(f"  AMI ID: {image_id}")
+    if not no_wait:
+        click.echo("  Waiting for AMI to become available...")
+        if not wait_for_ami_available(
+            image_id,
+            region=region,
+            profile=profile,
+            timeout=1200,
+        ):
+            raise click.ClickException(
+                f"AMI {image_id} did not become available within timeout."
+            )
 
     click.echo()
     click.echo("Terminating builder instance...")
