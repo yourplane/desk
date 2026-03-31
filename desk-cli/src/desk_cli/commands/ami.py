@@ -7,7 +7,6 @@ import os
 import re
 import secrets
 import subprocess
-import sys
 import time
 from datetime import datetime
 from typing import Any
@@ -15,7 +14,10 @@ from typing import Any
 import click
 
 from desk.aws import (
+    add_temporary_ssh_key,
     create_ami,
+    create_workstation,
+    get_command_invocation,
     get_ami_state,
     get_instance_state,
     get_latest_ubuntu_ami,
@@ -27,8 +29,10 @@ from desk.aws import (
     wait_for_ami_available,
     wait_for_instance_state,
     wait_for_ssm_ready,
+    send_ssm_command,
 )
 from desk.config import get_desk_settings
+from desk.keys import get_default_private_key_path, get_public_key_content
 
 
 @click.group("ami")
@@ -126,27 +130,105 @@ def _versioned_ami_name(ami_name: str) -> str:
     return f"{base}-{timestamp}"
 
 
-def _run_desk(
-    args: list[str],
+def _run_remote_script(
+    instance_id: str,
+    script: str,
     region: str | None,
     profile: str | None,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[bytes]:
-    """Run desk CLI with given args and env."""
-    cmd = [sys.executable, "-m", "desk_cli.cli"] + args
+    timeout_seconds: int = 7200,
+) -> None:
+    """Send a shell script/command via SSM and wait for completion."""
+    script_content = script
+    if os.path.isfile(script):
+        with open(script) as f:
+            script_content = f.read()
+
+    command_id = send_ssm_command(
+        instance_id,
+        script_content,
+        region=region,
+        profile=profile,
+        timeout_seconds=timeout_seconds,
+    )
+
+    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
+    start = time.monotonic()
+    while True:
+        result = get_command_invocation(command_id, instance_id, region=region, profile=profile)
+        if result.status in terminal_states:
+            if result.stdout:
+                click.echo(result.stdout, nl=False)
+            if result.stderr:
+                click.echo(result.stderr, nl=False, err=True)
+            if result.status != "Success":
+                raise click.ClickException(
+                    f"Remote command failed ({result.status}, exit={result.exit_code})."
+                )
+            return
+        if time.monotonic() - start > timeout_seconds:
+            raise click.ClickException(
+                f"Remote command timed out after {timeout_seconds}s (command {command_id})."
+            )
+        time.sleep(1)
+
+
+def _copy_to_instance(
+    instance_id: str,
+    source: str,
+    dest: str,
+    recursive: bool,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Copy a local path to a remote path on the instance via scp over SSM."""
+    key_path = get_default_private_key_path()
+    if not key_path:
+        raise click.ClickException(
+            "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa) for copy steps."
+        )
+    if not os.path.exists(key_path):
+        raise click.ClickException(f"Key not found at {key_path}.")
+
+    try:
+        public_key = get_public_key_content(key_path)
+    except (FileNotFoundError, RuntimeError) as e:
+        raise click.ClickException(str(e)) from e
+
+    add_temporary_ssh_key(
+        instance_id,
+        user="ubuntu",
+        public_key_content=public_key,
+        timeout_seconds=300,
+        region=region,
+        profile=profile,
+    )
+    time.sleep(1.5)
+
+    proxy_cmd = (
+        "sh -c \"aws ssm start-session --target %h "
+        "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
+    )
+    scp_args = [
+        "scp",
+        "-o",
+        f"ProxyCommand={proxy_cmd}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-i",
+        key_path,
+    ]
+    if recursive:
+        scp_args.append("-r")
+    scp_args.extend([source, f"ubuntu@{instance_id}:{dest}"])
+
     run_env = os.environ.copy()
     if region:
         run_env["AWS_REGION"] = region
     if profile:
         run_env["AWS_PROFILE"] = profile
-    if env:
-        run_env.update(env)
-    return subprocess.run(
-        cmd,
-        env=run_env,
-        check=False,
-        capture_output=False,
-    )
+    result = subprocess.run(scp_args, env=run_env, check=False, capture_output=False)
+    if result.returncode != 0:
+        raise click.ClickException(f"scp failed for {source} -> {dest}.")
 
 
 @ami_group.command("list")
@@ -276,18 +358,18 @@ def ami_build(
 
     # 1. Create instance from Ubuntu (never use config default/ami_prefix for builder)
     builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
-    create_args = [
-        "create",
-        workstation_name,
-        "--instance-type", instance_type,
-        "--ami", builder_ami,
-    ]
-    # Clear ami prefix so create never falls back to config default
-    create_env = {"DESK_AMI_PREFIX": ""}
     click.echo("Step 1/4: Creating builder instance...")
-    result = _run_desk(create_args, region, profile, env=create_env)
-    if result.returncode != 0:
-        raise click.ClickException("desk create failed.")
+    try:
+        create_workstation(
+            workstation_name,
+            instance_type,
+            ami_id=builder_ami,
+            shutdown_after="0",
+            region=region,
+            profile=profile,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
 
     # 2. Wait for SSM
     click.echo("Step 2/4: Waiting for instance to be ready (SSM)...")
@@ -321,16 +403,7 @@ def ami_build(
                 if os.path.isfile(candidate):
                     run_cmd = candidate
             click.echo(f"Step 3/4: Run ({i + 1}/{len(steps)}): {run_cmd}")
-            run_args = [
-                "run",
-                "--follow",
-                "--no-wait",
-                workstation_name,
-                run_cmd,
-            ]
-            result = _run_desk(run_args, region, profile)
-            if result.returncode != 0:
-                raise click.ClickException(f"desk run failed for: {run_cmd}")
+            _run_remote_script(instance_id, run_cmd, region, profile)
         else:
             item = step["copy"]
             src = item["source"]
@@ -339,18 +412,7 @@ def ami_build(
             if not os.path.isabs(src):
                 src = os.path.normpath(os.path.join(config_dir, src))
             click.echo(f"Step 3/4: Copy ({i + 1}/{len(steps)}): {src} -> {workstation_name}:{dest}")
-            scp_args = [
-                "scp",
-                "--no-wait",
-                workstation_name,
-                src,
-                f"{workstation_name}:{dest}",
-            ]
-            if recursive:
-                scp_args.insert(2, "-r")  # after --no-wait, before positionals
-            result = _run_desk(scp_args, region, profile, env={"PWD": config_dir})
-            if result.returncode != 0:
-                raise click.ClickException(f"desk scp failed for {src} -> {dest}.")
+            _copy_to_instance(instance_id, src, dest, recursive, region, profile)
 
     click.echo()
 
@@ -358,15 +420,26 @@ def ami_build(
     versioned_name = _versioned_ami_name(ami_name)
     click.echo("Step 4/4: Creating AMI from builder...")
     click.echo(f"  AMI name: {versioned_name}")
-    ami_create_args = [
-        "ami", "create",
-        workstation_name,
-        "--name", versioned_name,
-        "--no-wait" if no_wait else "--wait",
-    ]
-    result = _run_desk(ami_create_args, region, profile)
-    if result.returncode != 0:
-        raise click.ClickException("desk ami create failed.")
+    image_id = create_ami(
+        instance_id=instance_id,
+        name=versioned_name,
+        description=None,
+        no_reboot=False,
+        region=region,
+        profile=profile,
+    )
+    click.echo(f"  AMI ID: {image_id}")
+    if not no_wait:
+        click.echo("  Waiting for AMI to become available...")
+        if not wait_for_ami_available(
+            image_id,
+            region=region,
+            profile=profile,
+            timeout=1200,
+        ):
+            raise click.ClickException(
+                f"AMI {image_id} did not become available within timeout."
+            )
 
     click.echo()
     click.echo("Terminating builder instance...")
