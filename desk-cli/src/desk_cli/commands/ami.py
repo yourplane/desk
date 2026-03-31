@@ -6,7 +6,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import time
 from datetime import datetime
 from typing import Any
@@ -14,10 +13,8 @@ from typing import Any
 import click
 
 from desk.aws import (
-    add_temporary_ssh_key,
     create_ami,
     create_workstation,
-    get_command_invocation,
     get_ami_state,
     get_instance_state,
     get_latest_ubuntu_ami,
@@ -29,10 +26,10 @@ from desk.aws import (
     wait_for_ami_available,
     wait_for_instance_state,
     wait_for_ssm_ready,
-    send_ssm_command,
 )
+from desk_cli.commands.run import run_script_on_instance
+from desk_cli.commands.scp import scp_transfer
 from desk.config import get_desk_settings
-from desk.keys import get_default_private_key_path, get_public_key_content
 
 
 @click.group("ami")
@@ -128,107 +125,6 @@ def _versioned_ami_name(ami_name: str) -> str:
     if len(base) > max_base:
         base = base[:max_base]
     return f"{base}-{timestamp}"
-
-
-def _run_remote_script(
-    instance_id: str,
-    script: str,
-    region: str | None,
-    profile: str | None,
-    timeout_seconds: int = 7200,
-) -> None:
-    """Send a shell script/command via SSM and wait for completion."""
-    script_content = script
-    if os.path.isfile(script):
-        with open(script) as f:
-            script_content = f.read()
-
-    command_id = send_ssm_command(
-        instance_id,
-        script_content,
-        region=region,
-        profile=profile,
-        timeout_seconds=timeout_seconds,
-    )
-
-    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
-    start = time.monotonic()
-    while True:
-        result = get_command_invocation(command_id, instance_id, region=region, profile=profile)
-        if result.status in terminal_states:
-            if result.stdout:
-                click.echo(result.stdout, nl=False)
-            if result.stderr:
-                click.echo(result.stderr, nl=False, err=True)
-            if result.status != "Success":
-                raise click.ClickException(
-                    f"Remote command failed ({result.status}, exit={result.exit_code})."
-                )
-            return
-        if time.monotonic() - start > timeout_seconds:
-            raise click.ClickException(
-                f"Remote command timed out after {timeout_seconds}s (command {command_id})."
-            )
-        time.sleep(1)
-
-
-def _copy_to_instance(
-    instance_id: str,
-    source: str,
-    dest: str,
-    recursive: bool,
-    region: str | None,
-    profile: str | None,
-) -> None:
-    """Copy a local path to a remote path on the instance via scp over SSM."""
-    key_path = get_default_private_key_path()
-    if not key_path:
-        raise click.ClickException(
-            "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa) for copy steps."
-        )
-    if not os.path.exists(key_path):
-        raise click.ClickException(f"Key not found at {key_path}.")
-
-    try:
-        public_key = get_public_key_content(key_path)
-    except (FileNotFoundError, RuntimeError) as e:
-        raise click.ClickException(str(e)) from e
-
-    add_temporary_ssh_key(
-        instance_id,
-        user="ubuntu",
-        public_key_content=public_key,
-        timeout_seconds=300,
-        region=region,
-        profile=profile,
-    )
-    time.sleep(1.5)
-
-    proxy_cmd = (
-        "sh -c \"aws ssm start-session --target %h "
-        "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
-    )
-    scp_args = [
-        "scp",
-        "-o",
-        f"ProxyCommand={proxy_cmd}",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-i",
-        key_path,
-    ]
-    if recursive:
-        scp_args.append("-r")
-    scp_args.extend([source, f"ubuntu@{instance_id}:{dest}"])
-
-    run_env = os.environ.copy()
-    if region:
-        run_env["AWS_REGION"] = region
-    if profile:
-        run_env["AWS_PROFILE"] = profile
-    result = subprocess.run(scp_args, env=run_env, check=False, capture_output=False)
-    if result.returncode != 0:
-        raise click.ClickException(f"scp failed for {source} -> {dest}.")
 
 
 @ami_group.command("list")
@@ -403,7 +299,18 @@ def ami_build(
                 if os.path.isfile(candidate):
                     run_cmd = candidate
             click.echo(f"Step 3/4: Run ({i + 1}/{len(steps)}): {run_cmd}")
-            _run_remote_script(instance_id, run_cmd, region, profile)
+            script_content = run_cmd
+            if os.path.isfile(run_cmd):
+                with open(run_cmd) as f:
+                    script_content = f.read()
+            run_script_on_instance(
+                instance_id,
+                script_content,
+                follow=True,
+                region=region,
+                profile=profile,
+                command_timeout=7200,
+            )
         else:
             item = step["copy"]
             src = item["source"]
@@ -412,7 +319,19 @@ def ami_build(
             if not os.path.isabs(src):
                 src = os.path.normpath(os.path.join(config_dir, src))
             click.echo(f"Step 3/4: Copy ({i + 1}/{len(steps)}): {src} -> {workstation_name}:{dest}")
-            _copy_to_instance(instance_id, src, dest, recursive, region, profile)
+            scp_transfer(
+                workstation_name,
+                src,
+                f"{workstation_name}:{dest}",
+                user="ubuntu",
+                identity_file=None,
+                wait=False,
+                wait_timeout=300,
+                recursive=recursive,
+                region=region,
+                profile=profile,
+                replace_process=False,
+            )
 
     click.echo()
 

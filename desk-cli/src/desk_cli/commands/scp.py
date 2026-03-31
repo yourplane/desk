@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 
@@ -14,6 +15,134 @@ from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
 
 log = get_logger("scp")
+
+
+def scp_transfer(
+    workstation: str,
+    source: str,
+    destination: str,
+    *,
+    user: str,
+    identity_file: str | None,
+    wait: bool,
+    wait_timeout: int,
+    recursive: bool,
+    region: str | None,
+    profile: str | None,
+    replace_process: bool = True,
+) -> None:
+    """Execute a full SCP transfer using desk's SSM-backed SSH path."""
+    key_path = identity_file or get_default_private_key_path()
+    if not key_path:
+        raise click.ClickException(
+            "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa) or use -i PATH."
+        )
+    if not os.path.exists(key_path):
+        raise click.ClickException(f"Key not found at {key_path}.")
+
+    # If source or destination is "workstation_name:path", use that workstation
+    for path in (source, destination):
+        ws_from_path = _remote_workstation_from_path(path)
+        if ws_from_path:
+            workstation = ws_from_path
+            break
+
+    try:
+        instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        log.info("resolved %s -> %s", workstation, instance_id)
+    except ValueError as e:
+        log.debug("resolve failed workstation=%s error=%s", workstation, e)
+        raise click.UsageError(str(e)) from e
+
+    # Wait for SSM agent if not yet ready
+    ssm_ready = is_ssm_ready(instance_id, region=region, profile=profile)
+    log.debug("initial is_ssm_ready=%s", ssm_ready)
+    if wait and not ssm_ready:
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        idx = 0
+        deadline = time.monotonic() + wait_timeout
+        err = sys.stderr
+        log.info("waiting for SSM ready instance_id=%s timeout=%ds", instance_id, wait_timeout)
+        while time.monotonic() < deadline:
+            if is_ssm_ready(instance_id, region=region, profile=profile):
+                elapsed = time.monotonic() - (deadline - wait_timeout)
+                log.info("SSM ready after %.1fs", elapsed)
+                err.write("\r" + " " * 50 + "\r")
+                err.flush()
+                break
+            char = spinner[idx % len(spinner)]
+            err.write(f"\r{char} Waiting for instance to be ready... ")
+            err.flush()
+            idx += 1
+            if idx % 10 == 0:
+                log.debug("SSM wait poll %d elapsed=%.1fs", idx, time.monotonic() - (deadline - wait_timeout))
+            time.sleep(0.5)
+        else:
+            err.write("\n")
+            err.flush()
+            log.warning("SSM wait timed out instance_id=%s", instance_id)
+            raise click.ClickException(
+                f"Instance {instance_id} did not become ready within {wait_timeout}s. "
+                "Check that the instance is running and has the SSM agent."
+            )
+
+    # Set AWS env so ProxyCommand inherits them
+    if region:
+        os.environ["AWS_REGION"] = region
+    if profile:
+        os.environ["AWS_PROFILE"] = profile
+
+    try:
+        public_key = get_public_key_content(key_path)
+    except (FileNotFoundError, RuntimeError) as e:
+        raise click.ClickException(str(e)) from e
+    add_temporary_ssh_key(
+        instance_id,
+        user=user,
+        public_key_content=public_key,
+        timeout_seconds=300,
+        region=region,
+        profile=profile,
+    )
+    time.sleep(1.5)
+
+    # Parse source and destination paths
+    scp_source = _parse_scp_path(source, workstation, user, instance_id)
+    scp_dest = _parse_scp_path(destination, workstation, user, instance_id)
+
+    proxy_cmd = (
+        "sh -c \"aws ssm start-session --target %h "
+        "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
+    )
+
+    scp_args = [
+        "scp",
+        "-o",
+        f"ProxyCommand={proxy_cmd}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]
+
+    scp_args.extend(["-i", key_path])
+
+    if recursive:
+        scp_args.append("-r")
+
+    scp_args.extend([scp_source, scp_dest])
+
+    log.info("exec scp source=%s dest=%s", scp_source, scp_dest)
+    if replace_process:
+        # Replace our process with scp for proper terminal handling
+        try:
+            os.execvp("scp", scp_args)
+        except OSError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(127)
+    result = subprocess.run(scp_args, check=False, capture_output=False)
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"scp failed ({result.returncode}) for {source} -> {destination}"
+        )
 
 
 def _remote_workstation_from_path(path: str) -> str | None:
@@ -134,109 +263,16 @@ def scp(
         region,
         profile,
     )
-
-    key_path = identity_file or get_default_private_key_path()
-    if not key_path:
-        raise click.ClickException(
-            "No SSH key found. Create ~/.ssh/id_ed25519 (or id_rsa) or use -i PATH."
-        )
-    if not os.path.exists(key_path):
-        raise click.ClickException(f"Key not found at {key_path}.")
-
-    # If source or destination is "workstation_name:path", use that workstation
-    for path in (source, destination):
-        ws_from_path = _remote_workstation_from_path(path)
-        if ws_from_path:
-            workstation = ws_from_path
-            break
-
-    try:
-        instance_id = resolve_workstation(workstation, region=region, profile=profile)
-        log.info("resolved %s -> %s", workstation, instance_id)
-    except ValueError as e:
-        log.debug("resolve failed workstation=%s error=%s", workstation, e)
-        raise click.UsageError(str(e)) from e
-
-    # Wait for SSM agent if not yet ready
-    ssm_ready = is_ssm_ready(instance_id, region=region, profile=profile)
-    log.debug("initial is_ssm_ready=%s", ssm_ready)
-    if wait and not ssm_ready:
-        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-        idx = 0
-        deadline = time.monotonic() + wait_timeout
-        err = sys.stderr
-        log.info("waiting for SSM ready instance_id=%s timeout=%ds", instance_id, wait_timeout)
-        while time.monotonic() < deadline:
-            if is_ssm_ready(instance_id, region=region, profile=profile):
-                elapsed = time.monotonic() - (deadline - wait_timeout)
-                log.info("SSM ready after %.1fs", elapsed)
-                err.write("\r" + " " * 50 + "\r")
-                err.flush()
-                break
-            char = spinner[idx % len(spinner)]
-            err.write(f"\r{char} Waiting for instance to be ready... ")
-            err.flush()
-            idx += 1
-            if idx % 10 == 0:
-                log.debug("SSM wait poll %d elapsed=%.1fs", idx, time.monotonic() - (deadline - wait_timeout))
-            time.sleep(0.5)
-        else:
-            err.write("\n")
-            err.flush()
-            log.warning("SSM wait timed out instance_id=%s", instance_id)
-            raise click.ClickException(
-                f"Instance {instance_id} did not become ready within {wait_timeout}s. "
-                "Check that the instance is running and has the SSM agent."
-            )
-
-    # Set AWS env so ProxyCommand inherits them
-    if region:
-        os.environ["AWS_REGION"] = region
-    if profile:
-        os.environ["AWS_PROFILE"] = profile
-
-    try:
-        public_key = get_public_key_content(key_path)
-    except (FileNotFoundError, RuntimeError) as e:
-        raise click.ClickException(str(e)) from e
-    add_temporary_ssh_key(
-        instance_id,
+    scp_transfer(
+        workstation,
+        source,
+        destination,
         user=user,
-        public_key_content=public_key,
-        timeout_seconds=300,
+        identity_file=identity_file,
+        wait=wait,
+        wait_timeout=wait_timeout,
+        recursive=recursive,
         region=region,
         profile=profile,
+        replace_process=True,
     )
-    time.sleep(1.5)
-
-    # Parse source and destination paths
-    scp_source = _parse_scp_path(source, workstation, user, instance_id)
-    scp_dest = _parse_scp_path(destination, workstation, user, instance_id)
-
-    proxy_cmd = (
-        "sh -c \"aws ssm start-session --target %h "
-        "--document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
-    )
-
-    scp_args = [
-        "scp",
-        "-o",
-        f"ProxyCommand={proxy_cmd}",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-    ]
-
-    scp_args.extend(["-i", key_path])
-
-    if recursive:
-        scp_args.append("-r")
-
-    scp_args.extend([scp_source, scp_dest])
-
-    log.info("exec scp source=%s dest=%s", scp_source, scp_dest)
-    # Replace our process with scp for proper terminal handling
-    try:
-        os.execvp("scp", scp_args)
-    except OSError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(127)

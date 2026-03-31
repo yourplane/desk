@@ -21,6 +21,107 @@ from desk.log import get_logger
 log = get_logger("run")
 
 
+def run_script_on_instance(
+    instance_id: str,
+    script_content: str,
+    *,
+    follow: bool,
+    region: str | None,
+    profile: str | None,
+    command_timeout: int,
+) -> None:
+    """Send and optionally follow an SSM command on a resolved instance."""
+    # Send the command
+    click.echo(f"Sending command to {instance_id}...", err=True)
+    try:
+        command_id = send_ssm_command(
+            instance_id,
+            script_content,
+            region=region,
+            profile=profile,
+            timeout_seconds=command_timeout,
+        )
+    except Exception as e:
+        log.debug("send_ssm_command failed: %s", e)
+        raise click.ClickException(f"Failed to send command: {e}") from e
+
+    log.info("command sent command_id=%s", command_id)
+
+    # Wait for command to start (Pending -> InProgress or terminal state)
+    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
+    started_states = {"InProgress"} | terminal_states
+
+    for _ in range(30):  # Max 30 seconds to start
+        try:
+            result = get_command_invocation(
+                command_id, instance_id, region=region, profile=profile
+            )
+            if result.status in started_states:
+                break
+        except Exception as e:
+            # InvocationDoesNotExist can happen briefly after send_command
+            log.debug("get_command_invocation not ready yet: %s", e)
+        time.sleep(1)
+    else:
+        raise click.ClickException(
+            f"Command {command_id} did not start within 30 seconds."
+        )
+
+    if result.status in terminal_states and not follow:
+        # Command already finished
+        _print_result(result)
+        exit_code = result.exit_code if result.exit_code is not None else 1
+        sys.exit(0 if result.status == "Success" else exit_code)
+
+    click.echo(f"Command started (id: {command_id})", err=True)
+
+    if not follow:
+        # Just confirm it started and exit
+        click.secho("Command is running.", fg="green", err=True)
+        return
+
+    # Follow mode: tail output until completion
+    click.echo("Following output...", err=True)
+    click.echo("-" * 40, err=True)
+
+    last_stdout_len = 0
+    last_stderr_len = 0
+
+    while True:
+        result = get_command_invocation(
+            command_id, instance_id, region=region, profile=profile
+        )
+
+        # Print new output
+        if len(result.stdout) > last_stdout_len:
+            new_stdout = result.stdout[last_stdout_len:]
+            click.echo(new_stdout, nl=False)
+            last_stdout_len = len(result.stdout)
+
+        if len(result.stderr) > last_stderr_len:
+            new_stderr = result.stderr[last_stderr_len:]
+            click.echo(new_stderr, nl=False, err=True)
+            last_stderr_len = len(result.stderr)
+
+        if result.status in terminal_states:
+            break
+
+        time.sleep(1)
+
+    click.echo("", err=True)  # Newline after output
+    click.echo("-" * 40, err=True)
+
+    if result.status == "Success":
+        click.secho(f"Command completed successfully (exit code: {result.exit_code})", fg="green", err=True)
+    else:
+        click.secho(
+            f"Command {result.status.lower()} (exit code: {result.exit_code})",
+            fg="red",
+            err=True,
+        )
+        sys.exit(1 if result.exit_code is None else result.exit_code)
+
+
 def _shell_quote(s: str) -> str:
     """Quote a string for safe use in a shell command.
 
@@ -154,95 +255,14 @@ def run(
             "Use --wait to wait for it, or check the instance status."
         )
 
-    # Send the command
-    click.echo(f"Sending command to {instance_id}...", err=True)
-    try:
-        command_id = send_ssm_command(
-            instance_id,
-            script_content,
-            region=region,
-            profile=profile,
-            timeout_seconds=command_timeout,
-        )
-    except Exception as e:
-        log.debug("send_ssm_command failed: %s", e)
-        raise click.ClickException(f"Failed to send command: {e}") from e
-
-    log.info("command sent command_id=%s", command_id)
-
-    # Wait for command to start (Pending -> InProgress or terminal state)
-    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
-    started_states = {"InProgress"} | terminal_states
-
-    for _ in range(30):  # Max 30 seconds to start
-        try:
-            result = get_command_invocation(
-                command_id, instance_id, region=region, profile=profile
-            )
-            if result.status in started_states:
-                break
-        except Exception as e:
-            # InvocationDoesNotExist can happen briefly after send_command
-            log.debug("get_command_invocation not ready yet: %s", e)
-        time.sleep(1)
-    else:
-        raise click.ClickException(
-            f"Command {command_id} did not start within 30 seconds."
-        )
-
-    if result.status in terminal_states and not follow:
-        # Command already finished
-        _print_result(result)
-        exit_code = result.exit_code if result.exit_code is not None else 1
-        sys.exit(0 if result.status == "Success" else exit_code)
-
-    click.echo(f"Command started (id: {command_id})", err=True)
-
-    if not follow:
-        # Just confirm it started and exit
-        click.secho("Command is running.", fg="green", err=True)
-        return
-
-    # Follow mode: tail output until completion
-    click.echo("Following output...", err=True)
-    click.echo("-" * 40, err=True)
-
-    last_stdout_len = 0
-    last_stderr_len = 0
-
-    while True:
-        result = get_command_invocation(
-            command_id, instance_id, region=region, profile=profile
-        )
-
-        # Print new output
-        if len(result.stdout) > last_stdout_len:
-            new_stdout = result.stdout[last_stdout_len:]
-            click.echo(new_stdout, nl=False)
-            last_stdout_len = len(result.stdout)
-
-        if len(result.stderr) > last_stderr_len:
-            new_stderr = result.stderr[last_stderr_len:]
-            click.echo(new_stderr, nl=False, err=True)
-            last_stderr_len = len(result.stderr)
-
-        if result.status in terminal_states:
-            break
-
-        time.sleep(1)
-
-    click.echo("", err=True)  # Newline after output
-    click.echo("-" * 40, err=True)
-
-    if result.status == "Success":
-        click.secho(f"Command completed successfully (exit code: {result.exit_code})", fg="green", err=True)
-    else:
-        click.secho(
-            f"Command {result.status.lower()} (exit code: {result.exit_code})",
-            fg="red",
-            err=True,
-        )
-        sys.exit(1 if result.exit_code is None else result.exit_code)
+    run_script_on_instance(
+        instance_id,
+        script_content,
+        follow=follow,
+        region=region,
+        profile=profile,
+        command_timeout=command_timeout,
+    )
 
 
 def _print_result(result) -> None:
