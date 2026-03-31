@@ -82,6 +82,7 @@ export function InstanceList() {
   const [createName, setCreateName] = useState('')
   const [createInstanceType, setCreateInstanceType] = useState('t3.medium')
   const [creating, setCreating] = useState(false)
+  const [createStatus, setCreateStatus] = useState<string | null>(null)
   const [createError, setCreateError] = useState<string | null>(null)
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const loadInFlightRef = useRef(false)
@@ -252,15 +253,21 @@ export function InstanceList() {
     e.preventDefault()
     const trimmed = createName.trim()
     if (!trimmed) return
+    const selectedType = createInstanceType || 't3.medium'
     setCreating(true)
     setCreateError(null)
+    setCreateStatus(`Launching instance '${trimmed}' (${selectedType})...`)
     try {
-      await createWorkstation(trimmed, createInstanceType || undefined)
+      const created = await createWorkstation(trimmed, createInstanceType || undefined)
+      setCreateStatus(
+        `Workstation created successfully! Instance ID: ${created.instance_id} · State: pending (initializing)`
+      )
       setShowCreateForm(false)
       setCreateName('')
       setCreateInstanceType('t3.medium')
       await load()
     } catch (err) {
+      setCreateStatus(null)
       setCreateError(err instanceof Error ? err.message : String(err))
     } finally {
       setCreating(false)
@@ -320,22 +327,34 @@ export function InstanceList() {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => { setShowCreateForm(false); setCreateError(null) }}
+              onClick={() => {
+                setShowCreateForm(false)
+                setCreateError(null)
+                setCreateStatus(null)
+              }}
               disabled={creating}
             >
               Cancel
             </button>
           </div>
+          {createStatus && !createError && <p className="create-status" role="status">{createStatus}</p>}
           {createError && <p className="create-error" role="alert">{createError}</p>}
         </form>
       ) : (
-        <button
-          type="button"
-          className="btn btn-start"
-          onClick={() => { setShowCreateForm(true); setCreateError(null) }}
-        >
-          Create
-        </button>
+        <>
+          <button
+            type="button"
+            className="btn btn-start"
+            onClick={() => {
+              setShowCreateForm(true)
+              setCreateError(null)
+              setCreateStatus(null)
+            }}
+          >
+            Create
+          </button>
+          {createStatus && <p className="create-status" role="status">{createStatus}</p>}
+        </>
       )}
     </div>
   )
