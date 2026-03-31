@@ -9,6 +9,16 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _reset_desk_profile_override() -> None:
+    """Clear root ``--profile`` (desk profile) override between CLI tests."""
+    from desk.config import reset_desk_profile_override
+
+    reset_desk_profile_override()
+    yield
+    reset_desk_profile_override()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_desk_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point DESK_CONFIG at an empty file so tests don't use the user's config."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:

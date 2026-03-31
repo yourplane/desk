@@ -28,7 +28,7 @@ from desk.aws import (
     wait_for_instance_state,
     wait_for_ssm_ready,
 )
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 @click.group("ami")
@@ -151,20 +151,6 @@ def _run_desk(
 
 @ami_group.command("list")
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--output",
     "-o",
     type=click.Choice(["table", "plain"]),
@@ -179,8 +165,6 @@ def _run_desk(
     help="Show all owned AMIs, not only desk-created ones.",
 )
 def ami_list(
-    region: str | None,
-    profile: str | None,
     output: str,
     show_all: bool,
 ) -> None:
@@ -189,8 +173,9 @@ def ami_list(
     By default shows only AMIs created with 'desk ami create'. Use --all to show
     all AMIs you own in this region.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     amis = list_amis(region=region, profile=profile, managed_only=not show_all)
 
@@ -237,28 +222,12 @@ def ami_list(
     type=click.Path(exists=True),
 )
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--no-wait",
     is_flag=True,
     help="Do not wait for AMI to become available after creation.",
 )
 def ami_build(
     config_file: str,
-    region: str | None,
-    profile: str | None,
     no_wait: bool,
 ) -> None:
     """Build an AMI from a config file: create instance, copy files, run scripts, then ami create.
@@ -279,8 +248,9 @@ def ami_build(
     you can rerun the same recipe without duplicate-name errors. On success the builder is
     terminated; on failure it is left running for debugging.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     config = _load_build_config(config_file)
     if "base_ami" in config:
@@ -434,20 +404,6 @@ def ami_build(
     show_default=True,
     help="Timeout in seconds when waiting for AMI to become available.",
 )
-@click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
 def ami_create(
     workstation: str,
     name: str | None,
@@ -455,8 +411,6 @@ def ami_create(
     no_reboot: bool,
     wait: bool,
     timeout: int,
-    region: str | None,
-    profile: str | None,
 ) -> None:
     """Create an AMI from a workstation.
 
@@ -471,8 +425,9 @@ def ami_create(
         desk ami create main --name my-custom-ami
         desk ami create i-abc123 --no-reboot --no-wait
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     # Resolve workstation - allow any state except terminated
     try:

@@ -168,13 +168,24 @@ See [AWS docs](https://docs.aws.amazon.com/systems-manager/latest/userguide/sess
 
 ## Configuration
 
-Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `desk-cli/config.example`. Overrides: `--region` / `--profile` or `AWS_REGION` / `AWS_PROFILE`.
+Optional config file: `~/.config/desk/config.ini` (or set `DESK_CONFIG` to your path). Copy from `desk-cli/config.example`.
+
+AWS **region** and **credential profile** for API calls come from the environment (`AWS_REGION`, `AWS_PROFILE`, or `AWS_DEFAULT_REGION`) and from the config file (`region`, `aws_profile` in `[default]` or in `[profile NAME]` when a desk profile is active).
+
+**Desk profiles:** the `[default]` section is your default desk profile (same idea as AWS `~/.aws/config`). Optional `[profile NAME]` sections hold alternate `region`, `aws_profile`, and `ami_prefix` for other accounts. To use one of those, set `DESK_PROFILE` or `desk --profile NAME` **before** the subcommand. Local state (routes, logs) is under `~/.local/state/desk/<NAME>/` when a named desk profile is active.
+
+**Region:** optional in each section; set it when the AWS profile does not define a region in `~/.aws/config`, or to override the profile’s default region for desk.
 
 ```ini
-[defaults]
+[default]
 region = us-east-1
-profile = my-aws-profile
+aws_profile = my-aws-profile
 ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations without --ami
+
+[profile work]
+region = eu-west-1
+aws_profile = work-aws
+ami_prefix = desk-ami-work
 ```
 
 ---

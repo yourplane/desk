@@ -14,7 +14,7 @@ from typing import Any
 import click
 
 from desk.aws import is_ssm_ready, resolve_workstation, wait_for_ssm_ready
-from desk.config import get_default_profile, get_default_region, get_state_home
+from desk.config import get_desk_settings, get_state_home
 
 DEFAULT_LOCAL_PORT_START = 45000
 DEFAULT_LOCAL_PORT_END = 45100
@@ -202,8 +202,6 @@ def route_group() -> None:
 @route_group.command("add")
 @click.argument("workstation")
 @click.argument("port", type=click.IntRange(1, 65535))
-@click.option("--region", "-r", default=None, envvar="AWS_REGION", help="AWS region.")
-@click.option("--profile", "-p", default=None, envvar="AWS_PROFILE", help="AWS profile.")
 @click.option(
     "--wait/--no-wait",
     default=True,
@@ -221,16 +219,15 @@ def route_group() -> None:
 def route_add(
     workstation: str,
     port: int,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     local_port_start: int | None,
     local_port_end: int | None,
 ) -> None:
     """Add a route to forward WORKSTATION PORT to a local port."""
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     start, end = _parse_port_range(local_port_start, local_port_end)
     routes = _load_routes()
     duplicate = next((r for r in routes if r.get("workstation") == workstation and r.get("remote_port") == port), None)

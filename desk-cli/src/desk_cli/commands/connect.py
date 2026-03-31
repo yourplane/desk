@@ -10,7 +10,7 @@ from typing import Callable
 import click
 
 from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
 
@@ -42,8 +42,9 @@ def get_connection_argv(
         if verbose_callback:
             verbose_callback(msg, elapsed)
 
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = region or aws.region
+    profile = profile or aws.profile
 
     log.debug("get_connection_argv workstation=%s region=%s profile=%s", workstation, region, profile)
 
@@ -171,20 +172,6 @@ def get_connection_argv(
     help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--wait/--no-wait",
     default=True,
     show_default=True,
@@ -213,8 +200,6 @@ def connect(
     workstation: str,
     user: str,
     identity_file: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
@@ -227,7 +212,12 @@ def connect(
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
     Requires the Session Manager plugin and SSH client to be installed.
+
+    AWS region and credential profile come from the environment or desk config.
     """
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     ssh_args = get_connection_argv(
         workstation=workstation,
         user=user,

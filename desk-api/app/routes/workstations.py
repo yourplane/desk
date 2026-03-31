@@ -22,14 +22,15 @@ from desk.aws import (
     stop_instance,
     terminate_instance,
 )
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["workstations"])
 
 
 def _region_profile():
-    return get_default_region(), get_default_profile()
+    aws = get_desk_settings().aws_settings
+    return aws.region, aws.profile
 
 
 class CreateWorkstationBody(BaseModel):

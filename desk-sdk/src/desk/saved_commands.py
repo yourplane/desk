@@ -12,7 +12,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.log import get_logger
 
 log = get_logger("saved_commands")
@@ -43,9 +43,8 @@ def _get_data_bucket() -> str:
 
 
 def _s3_client():
-    region = get_default_region()
-    profile = get_default_profile()
-    session = boto3.Session(region_name=region, profile_name=profile)
+    aws = get_desk_settings().aws_settings
+    session = boto3.Session(region_name=aws.region, profile_name=aws.profile)
     return session.client("s3")
 
 

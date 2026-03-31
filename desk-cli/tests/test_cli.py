@@ -7,7 +7,15 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
+from desk.config import AwsSettings, DeskSettings
+
 from desk_cli.cli import cli
+
+_TAB_CLI_SETTINGS = DeskSettings(
+    active_desk_profile_name=None,
+    aws_settings=AwsSettings("us-east-1", None),
+    ami_prefix=None,
+)
 
 
 def _run_desk(*args: str) -> subprocess.CompletedProcess[str]:
@@ -2225,11 +2233,9 @@ def test_desk_tab_help() -> None:
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_connect_calls_connection_with_screen(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2258,11 +2264,9 @@ def test_desk_tab_connect_calls_connection_with_screen(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_connect_with_session_uses_session_id(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2288,11 +2292,9 @@ def test_desk_tab_connect_with_session_uses_session_id(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.wait_for_ssm_ready")
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_no_session(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_wait: object,
     mock_run_remote: object,
@@ -2312,11 +2314,9 @@ def test_desk_tab_list_no_session(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_connect_fails_when_no_session(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2336,11 +2336,9 @@ def test_desk_tab_connect_fails_when_no_session(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_shows_session_and_windows(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2369,11 +2367,9 @@ def test_desk_tab_list_shows_session_and_windows(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_default_no_winlist_call(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2401,11 +2397,9 @@ def test_desk_tab_list_default_no_winlist_call(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_tree_two_levels_one_line_per_window(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2441,11 +2435,9 @@ def test_desk_tab_list_tree_two_levels_one_line_per_window(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2472,13 +2464,11 @@ def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 @patch("desk_cli.commands.tab.new_session_name", return_value="abc123")
 def test_desk_tab_create_success(
     mock_new_session: object,
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2508,11 +2498,9 @@ def test_desk_tab_create_success(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_create_with_optional_name(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2538,11 +2526,9 @@ def test_desk_tab_create_with_optional_name(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_up_connects_when_session_exists(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2572,13 +2558,11 @@ def test_desk_tab_up_connects_when_session_exists(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 @patch("desk_cli.commands.tab.new_session_name", return_value="abc123")
 def test_desk_tab_up_creates_then_connects_when_no_session(
     mock_new_session: object,
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2611,11 +2595,9 @@ def test_desk_tab_up_creates_then_connects_when_no_session(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_up_with_tab_name_connects_to_matching(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2642,11 +2624,9 @@ def test_desk_tab_up_with_tab_name_connects_to_matching(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_up_with_tab_name_creates_when_no_match(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2686,11 +2666,9 @@ def test_desk_tab_up_help() -> None:
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_close_success(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,

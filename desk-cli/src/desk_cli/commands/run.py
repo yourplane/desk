@@ -15,7 +15,7 @@ from desk.aws import (
     send_ssm_command,
     wait_for_ssm_ready,
 )
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.log import get_logger
 
 log = get_logger("run")
@@ -48,20 +48,6 @@ def _shell_quote(s: str) -> str:
     help="Tail the command output as it runs.",
 )
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--wait/--no-wait",
     default=True,
     show_default=True,
@@ -86,8 +72,6 @@ def run(
     script: str,
     user: str | None,
     follow: bool,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     command_timeout: int,
@@ -110,8 +94,9 @@ def run(
         desk run main /path/to/script.sh --follow
         desk run main "whoami" --user ubuntu
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     # Check if script is a local file path
     script_content = script

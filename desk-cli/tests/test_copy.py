@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
+from desk.config import AwsSettings, DeskSettings
+
 from desk_cli.commands.copy import (
     Location,
     LocationKind,
@@ -116,12 +118,11 @@ def test_copy_help(parse_mock: object, _bucket_mock: object) -> None:
     assert "Local" in out or "local" in out
 
 
-@patch("desk.config.get_default_region", return_value="us-east-1")
-@patch("desk.config.get_default_profile", return_value=None)
+@patch("desk.config.get_desk_settings", return_value=DeskSettings(None, AwsSettings("us-east-1", None), None))
 @patch("desk_cli.commands.copy.get_desk_copy_bucket", return_value="desk-123-us-east-1-copy")
 @patch("desk_cli.commands.copy._copy_local_s3")
 def test_copy_local_to_s3_invoked(
-    mock_copy: object, mock_bucket: object, _mock_profile: object, _mock_region: object
+    mock_copy: object, mock_bucket: object, _mock_settings: object
 ) -> None:
     """desk copy ./file s3:/key invokes _copy_local_s3."""
     from click.testing import CliRunner
