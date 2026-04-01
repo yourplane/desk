@@ -624,6 +624,7 @@ def test_desk_connect_help() -> None:
     assert "Connect to a workstation via SSH" in output
     assert "WORKSTATION" in output
     assert "--forward" in output or "-L" in output
+    assert "--forward-agent" in output or "-A" in output
 
 
 def test_desk_keygen_help() -> None:
@@ -923,6 +924,70 @@ def test_desk_connect_with_multiple_port_forwards(
     assert args.count("-L") == 2
     assert "8080:localhost:80" in args
     assert "3000:localhost:3000" in args
+
+
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
+def test_desk_connect_with_forward_agent(
+    mock_get_default_key: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
+    tmp_path,
+) -> None:
+    """desk connect -A passes -A to ssh."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_default_key.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "max", "-A"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "-A" in args
+
+
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
+def test_desk_connect_with_forward_agent_long_option(
+    mock_get_default_key: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
+    tmp_path,
+) -> None:
+    """desk connect --forward-agent passes -A to ssh."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_default_key.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "max", "--forward-agent"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "-A" in args
 
 
 def test_desk_stop_help() -> None:
