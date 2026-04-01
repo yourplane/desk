@@ -26,6 +26,7 @@ def get_connection_argv(
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
+    forward_agent: bool = False,
     remote_command: str | None = None,
     key_timeout: int = 300,
     verbose_callback: Callable[[str, float | None], None] | None = None,
@@ -148,6 +149,9 @@ def get_connection_argv(
     for fwd in forwards:
         ssh_args[1:1] = ["-L", fwd]
 
+    if forward_agent:
+        ssh_args[1:1] = ["-A"]
+
     if remote_command:
         ssh_args.insert(-1, "-t")  # Force TTY so remote command (e.g. screen) gets a terminal
         ssh_args.append(remote_command)
@@ -191,6 +195,14 @@ def get_connection_argv(
     help="Port forward in SSH -L format: [local_port:]remote_host:remote_port. Can be repeated.",
 )
 @click.option(
+    "-A",
+    "--forward-agent",
+    "forward_agent",
+    is_flag=True,
+    default=False,
+    help="Forward authentication agent to the remote machine (same as ssh -A).",
+)
+@click.option(
     "--key-timeout",
     default=300,
     show_default=True,
@@ -203,6 +215,7 @@ def connect(
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
+    forward_agent: bool,
     key_timeout: int,
 ) -> None:
     """Connect to a workstation via SSH over SSM tunnel.
@@ -227,6 +240,7 @@ def connect(
         wait=wait,
         wait_timeout=wait_timeout,
         forwards=forwards,
+        forward_agent=forward_agent,
         remote_command=None,
         key_timeout=key_timeout,
     )
