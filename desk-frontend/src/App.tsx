@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from './auth'
-import { InstanceList } from './pages/InstanceList'
+import { WorkstationsPage } from './pages/WorkstationsPage'
 import { CostTracker } from './pages/CostTracker'
 import { ReaperPage } from './pages/ReaperPage'
 import { CommandPage } from './pages/CommandPage'
@@ -121,7 +121,7 @@ function App() {
           Command
         </button>
       </nav>
-      {page === 'workstations' && <InstanceList />}
+      {page === 'workstations' && <WorkstationsPage />}
       {page === 'costs' && <CostTracker />}
       {page === 'reaper' && <ReaperPage />}
       {page === 'command' && (
