@@ -564,6 +564,51 @@ def test_ami_build_status_recipe_ssm_ready(
     assert "echo hi" in result.output
 
 
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_evaluates_recipe_once(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+    mock_eval: object,
+) -> None:
+    """ami build step calls _evaluate_async_recipe only once (shared with status print)."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hello"},),
+        blocked=False,
+        blocked_step_index=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=0,
+        recipe_complete=False,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hello"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_eval.assert_called_once()
+    mock_send.assert_called_once()
+
+
 @patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
 @patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
 @patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)

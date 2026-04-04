@@ -695,8 +695,39 @@ def _evaluate_async_recipe(
     )
 
 
-def _print_async_ami_build_status(snap: AsyncAmiBuildSnapshot) -> None:
-    """Human-readable status for async AMI build (also used at the start of `step`)."""
+def _maybe_evaluate_async_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval | None:
+    """Load SSM recipe state when the builder can run steps; otherwise return None.
+
+    Used so `ami build step` can evaluate once, print status, and advance using the same data.
+    """
+    if not snap.recorded_instance_id:
+        return None
+    if snap.ec2_missing or snap.ec2_state == "terminated":
+        return None
+    if snap.ec2_state not in ("running", "pending"):
+        return None
+    if snap.ssm_ready is not True:
+        return None
+    aws = get_desk_settings().aws_settings
+    return _evaluate_async_recipe(
+        snap.recorded_instance_id,
+        build_id=snap.build_id,
+        config=snap.config,
+        bucket=snap.bucket,
+        region=aws.region,
+        profile=aws.profile,
+    )
+
+
+def _print_async_ami_build_status(
+    snap: AsyncAmiBuildSnapshot,
+    *,
+    recipe_eval: AsyncRecipeEval | None = None,
+) -> None:
+    """Human-readable status for async AMI build (also used at the start of `step`).
+
+    Pass ``recipe_eval`` from `ami build step` so status matches the step logic (single fetch).
+    """
     ami_name = snap.config.get("ami_name", "-")
     click.echo(f"AMI build (async): {snap.build_id}")
     click.echo(f"  Staged config: present (ami_name={ami_name!r})")
@@ -745,15 +776,9 @@ def _print_async_ami_build_status(snap: AsyncAmiBuildSnapshot) -> None:
     click.echo()
     if snap.ec2_state in ("running", "pending") and snap.ssm_ready is True:
         assert snap.recorded_instance_id is not None
-        aws = get_desk_settings().aws_settings
-        ev = _evaluate_async_recipe(
-            snap.recorded_instance_id,
-            build_id=snap.build_id,
-            config=snap.config,
-            bucket=snap.bucket,
-            region=aws.region,
-            profile=aws.profile,
-        )
+        ev = recipe_eval if recipe_eval is not None else _maybe_evaluate_async_recipe(snap)
+        if ev is None:
+            return
         steps = _get_build_steps(snap.config)
         click.echo("  Recipe:")
         click.echo(f"    Steps in config: {ev.total_steps}")
@@ -817,8 +842,16 @@ def _print_async_ami_build_status(snap: AsyncAmiBuildSnapshot) -> None:
         )
 
 
-def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot, *, retry: bool = False) -> None:
-    """Perform at most one quick action for `desk ami build step` (after status output)."""
+def _run_async_ami_build_step(
+    snap: AsyncAmiBuildSnapshot,
+    *,
+    recipe_eval: AsyncRecipeEval | None = None,
+    retry: bool = False,
+) -> None:
+    """Perform at most one quick action for `desk ami build step` (after status output).
+
+    Pass ``recipe_eval`` from the same evaluation used for `_print_async_ami_build_status`.
+    """
     aws = get_desk_settings().aws_settings
     region = aws.region
     profile = aws.profile
@@ -832,14 +865,11 @@ def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot, *, retry: bool = Fals
             )
         if snap.ec2_state in ("running", "pending") and snap.ssm_ready is True:
             assert snap.recorded_instance_id is not None
-            ev = _evaluate_async_recipe(
-                snap.recorded_instance_id,
-                build_id=snap.build_id,
-                config=snap.config,
-                bucket=snap.bucket,
-                region=region,
-                profile=profile,
-            )
+            ev = recipe_eval if recipe_eval is not None else _maybe_evaluate_async_recipe(snap)
+            if ev is None:
+                raise click.ClickException(
+                    "Internal error: recipe state missing for running builder with SSM ready."
+                )
             if retry:
                 if ev.recipe_complete:
                     raise click.ClickException(
@@ -1039,15 +1069,17 @@ def ami_build_status(build_id: str, stack: str) -> None:
 def ami_build_step(build_id: str, stack: str, retry: bool) -> None:
     """Advance the async AMI build by one quick action, or no-op if there is nothing to do.
 
-    Prints the same summary as `desk ami build status`, then creates the builder instance
+    Resolves S3/EC2/SSM once, evaluates recipe state once, prints status from that snapshot,
+    then applies the same snapshot to decide how to step. Creates the builder instance
     (recording its id in S3) when needed. When SSM is ready, starts at most one recipe
     ``run``/``copy`` step via SSM and returns immediately after ``SendCommand`` (does not
     wait for the remote command). Skips if a prior step failed (use ``--retry`` or
     ``cancel``) or a step is still in progress on SSM. Final AMI registration is not performed here.
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
-    _print_async_ami_build_status(snap)
-    _run_async_ami_build_step(snap, retry=retry)
+    recipe_eval = _maybe_evaluate_async_recipe(snap)
+    _print_async_ami_build_status(snap, recipe_eval=recipe_eval)
+    _run_async_ami_build_step(snap, recipe_eval=recipe_eval, retry=retry)
 
 
 @ami_build_group.command("run")
