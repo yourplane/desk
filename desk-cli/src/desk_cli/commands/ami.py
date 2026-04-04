@@ -255,6 +255,10 @@ class AsyncAmiBuildSnapshot:
     ec2_missing: bool
     ssm_ready: bool | None
     ami_result: dict[str, Any] | None
+    # Populated in _resolve_async_ami_build_snapshot (one DescribeImages per build when image_id exists).
+    registered_ami_id: str | None
+    registered_ami_state: str | None
+    async_pipeline_fully_complete: bool
 
 
 def _read_s3_object_json(
@@ -324,6 +328,15 @@ def _safe_get_instance_state(
         raise
 
 
+def _async_ami_image_id_from_result(ami_result: dict[str, Any] | None) -> str | None:
+    if not ami_result:
+        return None
+    raw = ami_result.get("image_id")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
 def _resolve_async_ami_build_snapshot(build_id: str, *, stack: str) -> AsyncAmiBuildSnapshot:
     aws = get_desk_settings().aws_settings
     region = aws.region
@@ -385,6 +398,22 @@ def _resolve_async_ami_build_snapshot(build_id: str, *, stack: str) -> AsyncAmiB
     result_key = f"{prefix}{AMI_RESULT_KEY}"
     ami_result = _read_s3_object_json(s3, bucket, result_key)
 
+    reg_image_id = _async_ami_image_id_from_result(ami_result)
+    reg_ami_state: str | None = None
+    if reg_image_id:
+        reg_ami_state = get_ami_state(reg_image_id, region=region, profile=profile)
+
+    # Completion: AMI available and builder gone, or legacy ami-result.json pipeline_complete flag.
+    pipeline_done = False
+    if ami_result and ami_result.get("pipeline_complete") is True and reg_image_id:
+        pipeline_done = True
+    elif (
+        reg_image_id
+        and reg_ami_state == "available"
+        and (ec2_state == "terminated" or ec2_missing)
+    ):
+        pipeline_done = True
+
     return AsyncAmiBuildSnapshot(
         build_id=bid,
         bucket=bucket,
@@ -395,6 +424,9 @@ def _resolve_async_ami_build_snapshot(build_id: str, *, stack: str) -> AsyncAmiB
         ec2_missing=ec2_missing,
         ssm_ready=ssm_ready,
         ami_result=ami_result,
+        registered_ami_id=reg_image_id,
+        registered_ami_state=reg_ami_state,
+        async_pipeline_fully_complete=pipeline_done,
     )
 
 
@@ -786,49 +818,15 @@ def _maybe_evaluate_async_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval
     )
 
 
-def _async_ami_image_id_from_result(ami_result: dict[str, Any] | None) -> str | None:
-    if not ami_result:
-        return None
-    raw = ami_result.get("image_id")
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    return None
+def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:
+    """Post-recipe AMI registration lines (after recipe steps are done).
 
-
-def _is_async_ami_pipeline_fully_complete(
-    snap: AsyncAmiBuildSnapshot,
-    *,
-    region: str | None,
-    profile: str | None,
-) -> bool:
-    """True when the AMI is registered and the builder is gone or terminated (or explicit S3 flag)."""
-    ar = snap.ami_result
-    if ar and ar.get("pipeline_complete") is True:
-        return True
-    image_id = _async_ami_image_id_from_result(ar)
-    if not image_id:
-        return False
-    st = get_ami_state(image_id, region=region, profile=profile)
-    if st != "available":
-        return False
-    if snap.ec2_state == "terminated" or snap.ec2_missing:
-        return True
-    return False
-
-
-def _print_async_post_recipe_section(
-    snap: AsyncAmiBuildSnapshot,
-    *,
-    region: str | None,
-    profile: str | None,
-) -> None:
-    """Post-recipe AMI registration lines (after recipe steps are done)."""
+    Uses only fields on ``snap`` (AMI state is resolved once in `_resolve_async_ami_build_snapshot`).
+    """
     click.echo("  Post-recipe (AMI):")
-    ar = snap.ami_result or {}
-    image_id = _async_ami_image_id_from_result(ar)
-    pipeline_complete = bool(ar.get("pipeline_complete"))
+    image_id = snap.registered_ami_id
 
-    if pipeline_complete and image_id:
+    if snap.async_pipeline_fully_complete and image_id:
         click.echo(f"    Pipeline: complete (registered {image_id}).")
         return
 
@@ -839,7 +837,7 @@ def _print_async_post_recipe_section(
         )
         return
 
-    st = get_ami_state(image_id, region=region, profile=profile)
+    st = snap.registered_ami_state
     click.echo(f"    Image: {image_id}")
     click.echo(f"    AMI state (AWS): {st or 'unknown'}")
     if st == "available":
@@ -847,7 +845,7 @@ def _print_async_post_recipe_section(
             "    Next: `desk ami build step` will terminate the builder instance "
             "(no long waits in this command)."
         )
-    elif st in ("failed", "error") or st is None:
+    elif st in ("failed", "error", "deregistered") or st is None:
         click.echo("    AMI creation did not succeed; fix the problem in AWS or `desk ami build cancel`.")
     else:
         click.echo(
@@ -890,8 +888,8 @@ def _print_async_ami_build_status(
         click.echo("  EC2: instance not found (no longer visible to DescribeInstances)")
         click.echo("  SSM ready: n/a")
         click.echo()
-        if _is_async_ami_pipeline_fully_complete(snap, region=region, profile=profile):
-            _print_async_post_recipe_section(snap, region=region, profile=profile)
+        if snap.async_pipeline_fully_complete:
+            _print_async_post_recipe_section(snap)
         else:
             click.echo(
                 "The builder instance for this build was created earlier but is no longer "
@@ -905,8 +903,8 @@ def _print_async_ami_build_status(
     if snap.ec2_state == "terminated":
         click.echo("  SSM ready: n/a")
         click.echo()
-        if _is_async_ami_pipeline_fully_complete(snap, region=region, profile=profile):
-            _print_async_post_recipe_section(snap, region=region, profile=profile)
+        if snap.async_pipeline_fully_complete:
+            _print_async_post_recipe_section(snap)
         else:
             click.echo(
                 "The builder instance for this build has terminated. "
@@ -937,7 +935,7 @@ def _print_async_ami_build_status(
                     f"{_describe_recipe_step_for_status(last)}"
                 )
             click.echo()
-            _print_async_post_recipe_section(snap, region=region, profile=profile)
+            _print_async_post_recipe_section(snap)
         elif ev.blocked and ev.blocked_step_index is not None:
             bad = steps[ev.blocked_step_index]
             click.echo(
@@ -982,8 +980,8 @@ def _print_async_ami_build_status(
         )
     elif snap.ec2_state in ("stopped", "stopping", "shutting-down"):
         click.echo()
-        if _is_async_ami_pipeline_fully_complete(snap, region=region, profile=profile):
-            _print_async_post_recipe_section(snap, region=region, profile=profile)
+        if snap.async_pipeline_fully_complete:
+            _print_async_post_recipe_section(snap)
         else:
             click.echo(
                 "The builder instance is not in a running state; fix the instance or terminate "
@@ -1008,7 +1006,7 @@ def _run_async_ami_build_step(
 
     if snap.recorded_instance_id:
         if snap.ec2_missing or snap.ec2_state == "terminated":
-            if _is_async_ami_pipeline_fully_complete(snap, region=region, profile=profile):
+            if snap.async_pipeline_fully_complete:
                 click.echo()
                 click.secho("AMI build pipeline already complete.", fg="green")
                 return
@@ -1087,14 +1085,11 @@ def _run_async_ami_build_step(
             if ev.recipe_complete:
                 session = boto3.Session(region_name=region, profile_name=profile)
                 s3 = session.client("s3")
-                ar = snap.ami_result or {}
-                if ar.get("pipeline_complete") is True or _is_async_ami_pipeline_fully_complete(
-                    snap, region=region, profile=profile
-                ):
+                if snap.async_pipeline_fully_complete:
                     click.echo()
                     click.secho("AMI build pipeline already complete.", fg="green")
                     return
-                image_id = _async_ami_image_id_from_result(snap.ami_result)
+                image_id = snap.registered_ami_id
                 if not image_id:
                     ami_name = snap.config.get("ami_name")
                     if not ami_name or not isinstance(ami_name, str):
@@ -1124,7 +1119,7 @@ def _run_async_ami_build_step(
                         fg="green",
                     )
                     return
-                st = get_ami_state(image_id, region=region, profile=profile)
+                st = snap.registered_ami_state
                 if st in ("failed", "error", "deregistered") or st is None:
                     raise click.ClickException(
                         f"AMI {image_id} is not usable (state={st!r}). See AWS console or cancel this build."
@@ -1137,12 +1132,6 @@ def _run_async_ami_build_step(
                     )
                     return
                 terminate_instance(snap.recorded_instance_id, region=region, profile=profile)
-                _merge_ami_result_s3(
-                    s3,
-                    snap.bucket,
-                    snap.s3_prefix,
-                    {"image_id": image_id, "pipeline_complete": True},
-                )
                 click.echo()
                 click.secho(
                     f"Terminated builder {snap.recorded_instance_id}; AMI {image_id} is available.",
@@ -1187,7 +1176,7 @@ def _run_async_ami_build_step(
             return
         if snap.ec2_state in ("stopped", "stopping", "shutting-down"):
             click.echo()
-            if _is_async_ami_pipeline_fully_complete(snap, region=region, profile=profile):
+            if snap.async_pipeline_fully_complete:
                 click.secho(
                     "AMI build pipeline complete (builder stopped or shutting down).",
                     fg="green",

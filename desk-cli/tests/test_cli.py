@@ -974,7 +974,7 @@ def test_ami_build_step_terminates_builder_when_ami_available(
     _mock_ami_state: object,
     mock_terminate: object,
 ) -> None:
-    """When the AMI is available, step terminates the builder and marks the pipeline complete."""
+    """When the AMI is available, step terminates the builder (completion is inferred from AWS + S3)."""
     from desk_cli.commands.ami import AsyncRecipeEval
 
     mock_eval.return_value = AsyncRecipeEval(
@@ -1002,11 +1002,7 @@ def test_ami_build_step_terminates_builder_when_ami_available(
     assert result.exit_code == 0
     mock_terminate.assert_called_once_with("i-abc", region=None, profile=None)
     put_calls = [c for c in s3.put_object.call_args_list if "ami-result.json" in str(c)]
-    assert len(put_calls) == 1
-    assert json.loads(put_calls[0][1]["Body"].decode()) == {
-        "image_id": "ami-reg1",
-        "pipeline_complete": True,
-    }
+    assert len(put_calls) == 0
 
 
 @patch("desk_cli.commands.ami._maybe_evaluate_async_recipe")
