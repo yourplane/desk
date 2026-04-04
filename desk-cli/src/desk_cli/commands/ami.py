@@ -13,7 +13,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 import boto3
 import click
@@ -37,11 +37,8 @@ from desk.aws import (
     terminate_instance,
     wait_for_ami_available,
     wait_for_instance_state,
-    wait_for_ssm_ready,
 )
 from desk_cli import __version__
-from desk_cli.commands.run import run_script_on_instance
-from desk_cli.commands.scp import scp_transfer
 from desk.config import get_desk_settings
 
 
@@ -157,26 +154,6 @@ def _describe_recipe_step_for_status(step: dict[str, Any]) -> str:
     return (
         f"copy{extra}: {_truncate_status_text(src)} -> {_truncate_status_text(dst)}"
     )
-
-
-def _builder_name(ami_name: str) -> str:
-    """Generate a unique builder instance name from the target AMI name."""
-    base = ami_name.lower().strip()
-    base = re.sub(r"[^a-z0-9]+", "-", base)
-    base = base.strip("-") or "ami-builder"
-    base = base[: 240]  # leave room for "-" + 8 hex chars
-    return f"{base}-{secrets.token_hex(4)}"
-
-
-def _versioned_ami_name(ami_name: str) -> str:
-    """Append a timestamp to the AMI name so repeated builds do not collide."""
-    # AWS AMI names are limited to 128 characters
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    max_base = 128 - len(timestamp) - 1  # 1 for the hyphen
-    base = ami_name.strip()
-    if len(base) > max_base:
-        base = base[:max_base]
-    return f"{base}-{timestamp}"
 
 
 def _registration_ami_name_for_async_build(ami_name: str, build_id: str) -> str:
@@ -304,13 +281,277 @@ def _merge_ami_result_s3(
     _put_s3_object_json(s3, bucket, key, merged)
 
 
-def _workstation_name_for_async_build(build_id: str) -> str:
-    """Deterministic workstation Name tag for the async AMI builder instance."""
+def _workstation_name_for_staged_build(build_id: str) -> str:
+    """Deterministic workstation Name tag for a staged AMI builder instance."""
     bid = _normalize_build_id_arg(build_id)
     base = bid.lower()
     base = re.sub(r"[^a-z0-9-]+", "-", base).strip("-") or "build"
     base = base[:220]
-    return f"ami-build-async-{base}"
+    return f"ami-build-{base}"
+
+
+def _move_s3_prefix_within_bucket(
+    bucket: str,
+    src_prefix: str,
+    dest_prefix: str,
+    *,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Copy all objects under src_prefix to dest_prefix and delete sources."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+    pages = list(paginator.paginate(Bucket=bucket, Prefix=src_prefix))
+    keys: list[str] = []
+    for page in pages:
+        for obj in page.get("Contents") or []:
+            keys.append(obj["Key"])
+    if not keys:
+        raise click.ClickException(
+            f"No objects found under s3://{bucket}/{src_prefix}"
+        )
+    for key in keys:
+        suffix = key[len(src_prefix) :]
+        new_key = f"{dest_prefix}{suffix}"
+        s3.copy_object(
+            Bucket=bucket,
+            Key=new_key,
+            CopySource={"Bucket": bucket, "Key": key},
+        )
+        s3.delete_object(Bucket=bucket, Key=key)
+
+
+def _archive_staged_ami_build_prefix(build_id: str, *, stack: str) -> None:
+    """Move ami-builds/<id>/ to ami-build-archive/<id>/ (same layout as ``desk ami build cancel``)."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+    bid = _normalize_build_id_arg(build_id)
+    if not bid:
+        raise click.ClickException("Build id is empty.")
+    try:
+        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+    src_prefix = f"{AMI_BUILDS_PREFIX}{bid}/"
+    dest_prefix = f"{AMI_BUILD_ARCHIVE_PREFIX}{bid}/"
+    _move_s3_prefix_within_bucket(
+        bucket, src_prefix, dest_prefix, region=region, profile=profile
+    )
+    click.echo(f"Archived AMI build {bid} to s3:/{dest_prefix}")
+
+
+def _stage_ami_build_to_s3(
+    config_file: str,
+    *,
+    stack: str,
+) -> tuple[str, str, str]:
+    """Upload recipe and artifacts; returns ``(build_id, bucket, s3_key_prefix)``."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+
+    config = _load_build_config(config_file)
+    _validate_build_recipe_config(config, config_file)
+    steps = _get_build_steps(config)
+    ami_name = config.get("ami_name")
+    assert ami_name
+    config_dir = os.path.dirname(os.path.abspath(config_file))
+
+    try:
+        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    build_id = _new_build_id()
+    prefix = f"{AMI_BUILDS_PREFIX}{build_id}/"
+
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+
+    normalized_steps: list[dict[str, Any]] = []
+
+    for i, step in enumerate(steps):
+        if "run" in step:
+            cmd = step["run"]
+            resolved, is_file = _resolve_run_for_build(cmd, config_dir)
+            if is_file:
+                rel = _artifact_rel_path(resolved, config_dir)
+                key = f"{prefix}files/run/{i}/{rel}"
+                s3.upload_file(resolved, bucket, key)
+                normalized_steps.append({"run": _s3_uri_for_key(key)})
+            else:
+                normalized_steps.append({"run": cmd})
+        else:
+            item = dict(step["copy"])
+            src = item["source"]
+            recursive = item.get("recursive", False)
+            resolved = _resolve_copy_source(src, config_dir)
+            if not os.path.exists(resolved):
+                raise click.ClickException(
+                    f"Copy step {i}: source path does not exist: {resolved}"
+                )
+            if os.path.isdir(resolved):
+                if not recursive:
+                    raise click.ClickException(
+                        f"Copy step {i}: source is a directory; set \"recursive\": true."
+                    )
+            tar_path = _write_ami_copy_tarball(
+                resolved, item["dest"], recursive=recursive
+            )
+            try:
+                key = f"{prefix}files/copy/{i}/{AMI_COPY_BUNDLE_NAME}"
+                s3.upload_file(tar_path, bucket, key)
+            finally:
+                os.unlink(tar_path)
+            item["source"] = _s3_uri_for_key(key)
+            normalized_steps.append({"copy": item})
+
+    out_config: dict[str, Any] = {
+        "ami_name": ami_name,
+        "instance_type": config.get("instance_type", "t3.medium"),
+        "steps": normalized_steps,
+    }
+
+    config_key = f"{prefix}config.json"
+    manifest_key = f"{prefix}manifest.json"
+    manifest = {
+        "build_id": build_id,
+        "ami_name": ami_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "original_config_path": os.path.abspath(config_file),
+        "desk_version": __version__,
+    }
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=config_key,
+        Body=json.dumps(out_config, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+    s3.put_object(
+        Bucket=bucket,
+        Key=manifest_key,
+        Body=json.dumps(manifest, indent=2).encode("utf-8"),
+    )
+
+    return build_id, bucket, prefix
+
+
+def _stream_ssm_invocation_follow(
+    instance_id: str,
+    command_id: str,
+    *,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Print stdout/stderr as they grow until the SSM command finishes (cf. ``run_script_on_instance``)."""
+    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
+    last_stdout = 0
+    last_stderr = 0
+    while True:
+        result = get_command_invocation(
+            command_id, instance_id, region=region, profile=profile
+        )
+        if len(result.stdout) > last_stdout:
+            click.echo(result.stdout[last_stdout:], nl=False)
+            last_stdout = len(result.stdout)
+        if len(result.stderr) > last_stderr:
+            click.echo(result.stderr[last_stderr:], nl=False, err=True)
+            last_stderr = len(result.stderr)
+        if result.status in terminal_states:
+            break
+        time.sleep(1)
+    click.echo(err=True)
+    click.echo()
+
+
+def _print_verbose_recipe_command_io(
+    snap: AsyncAmiBuildSnapshot,
+    recipe_eval: AsyncRecipeEval,
+    *,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Print SSM command script and invocation stdout/stderr (for ``status --verbose`` / ``step --verbose``)."""
+    if not snap.recorded_instance_id:
+        return
+    iid = snap.recorded_instance_id
+    cid: str | None = None
+    if recipe_eval.blocked and recipe_eval.blocked_command_id:
+        cid = recipe_eval.blocked_command_id
+    elif recipe_eval.in_progress_command_id:
+        cid = recipe_eval.in_progress_command_id
+    if not cid:
+        return
+    try:
+        doc = get_ssm_command(cid, region=region, profile=profile)
+        params = doc.get("Parameters") or {}
+        cmds = params.get("commands")
+        if isinstance(cmds, list) and cmds:
+            click.echo("    Command script:")
+            for line in str(cmds[0]).splitlines():
+                click.echo(f"      {line}")
+        inv = get_command_invocation(cid, iid, region=region, profile=profile)
+        click.echo("    StandardOutputContent:")
+        click.echo(inv.stdout if inv.stdout else "(empty)")
+        click.echo("    StandardErrorContent:")
+        click.echo(inv.stderr if inv.stderr else "(empty)", err=True)
+    except (ClientError, RuntimeError, OSError) as e:
+        click.echo(f"    (Could not load SSM invocation details: {e})")
+
+
+def _drive_ami_build_run_loop(
+    build_id: str,
+    *,
+    stack: str,
+    no_wait: bool,
+) -> None:
+    """Orchestrate staged create + step loop until pipeline complete, then archive."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+    bid = _normalize_build_id_arg(build_id)
+
+    while True:
+        snap = _resolve_async_ami_build_snapshot(bid, stack=stack)
+        if snap.async_pipeline_fully_complete:
+            _archive_staged_ami_build_prefix(bid, stack=stack)
+            click.secho("AMI build complete.", fg="green", bold=True)
+            return
+
+        recipe_eval = _maybe_evaluate_async_recipe(snap)
+
+        if recipe_eval is not None and recipe_eval.blocked:
+            _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=False)
+            raise click.ClickException(
+                "Recipe step failed. Run `desk ami build step --retry`, or "
+                "`desk ami build cancel` to archive this build."
+            )
+
+        if (
+            snap.recorded_instance_id
+            and recipe_eval is not None
+            and recipe_eval.in_progress_step_index is not None
+            and recipe_eval.in_progress_command_id
+        ):
+            _stream_ssm_invocation_follow(
+                snap.recorded_instance_id,
+                recipe_eval.in_progress_command_id,
+                region=region,
+                profile=profile,
+            )
+            continue
+
+        _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=False)
+        _run_async_ami_build_step(
+            snap,
+            recipe_eval=recipe_eval,
+            retry=False,
+            no_wait=no_wait,
+        )
+        time.sleep(2)
 
 
 def _safe_get_instance_state(
@@ -599,6 +840,7 @@ class AsyncRecipeEval:
     steps: tuple[dict[str, Any], ...]
     blocked: bool
     blocked_step_index: int | None
+    blocked_command_id: str | None
     last_error: str | None
     in_progress_step_index: int | None
     in_progress_command_id: str | None
@@ -673,6 +915,7 @@ def _evaluate_async_recipe(
             steps=tuple(),
             blocked=False,
             blocked_step_index=None,
+            blocked_command_id=None,
             last_error=None,
             in_progress_step_index=None,
             in_progress_command_id=None,
@@ -731,6 +974,7 @@ def _evaluate_async_recipe(
                 steps=tuple(steps),
                 blocked=False,
                 blocked_step_index=None,
+                blocked_command_id=None,
                 last_error=None,
                 in_progress_step_index=None,
                 in_progress_command_id=None,
@@ -745,6 +989,7 @@ def _evaluate_async_recipe(
                 steps=tuple(steps),
                 blocked=False,
                 blocked_step_index=None,
+                blocked_command_id=None,
                 last_error=None,
                 in_progress_step_index=i,
                 in_progress_command_id=cid if isinstance(cid, str) else None,
@@ -762,6 +1007,7 @@ def _evaluate_async_recipe(
                 steps=tuple(steps),
                 blocked=True,
                 blocked_step_index=i,
+                blocked_command_id=cid if isinstance(cid, str) else None,
                 last_error=detail,
                 in_progress_step_index=None,
                 in_progress_command_id=None,
@@ -774,6 +1020,7 @@ def _evaluate_async_recipe(
                 steps=tuple(steps),
                 blocked=False,
                 blocked_step_index=None,
+                blocked_command_id=None,
                 last_error=None,
                 in_progress_step_index=i,
                 in_progress_command_id=cid if isinstance(cid, str) else None,
@@ -786,6 +1033,7 @@ def _evaluate_async_recipe(
         steps=tuple(steps),
         blocked=False,
         blocked_step_index=None,
+        blocked_command_id=None,
         last_error=None,
         in_progress_step_index=None,
         in_progress_command_id=None,
@@ -857,8 +1105,9 @@ def _print_async_ami_build_status(
     snap: AsyncAmiBuildSnapshot,
     *,
     recipe_eval: AsyncRecipeEval | None = None,
+    verbose: bool = False,
 ) -> None:
-    """Human-readable status for async AMI build (also used at the start of `step`).
+    """Human-readable status for staged AMI build (also used at the start of `step`).
 
     Pass ``recipe_eval`` from `ami build step` so status matches the step logic (single fetch).
     """
@@ -867,7 +1116,7 @@ def _print_async_ami_build_status(
     profile = aws.profile
 
     ami_name = snap.config.get("ami_name", "-")
-    click.echo(f"AMI build (async): {snap.build_id}")
+    click.echo(f"AMI build: {snap.build_id}")
     click.echo(f"  Staged config: present (ami_name={ami_name!r})")
     click.echo(f"  s3://{snap.bucket}/{snap.s3_prefix}")
 
@@ -947,6 +1196,8 @@ def _print_async_ami_build_status(
             )
             if ev.last_error:
                 click.echo(f"    Last error: {ev.last_error}")
+            if verbose:
+                _print_verbose_recipe_command_io(snap, ev, region=region, profile=profile)
         elif ev.in_progress_step_index is not None:
             cur = steps[ev.in_progress_step_index]
             click.echo(
@@ -960,6 +1211,8 @@ def _print_async_ami_build_status(
                     f"    Last completed: step {ev.in_progress_step_index - 1} — "
                     f"{_describe_recipe_step_for_status(prev)}"
                 )
+            if verbose:
+                _print_verbose_recipe_command_io(snap, ev, region=region, profile=profile)
         elif ev.next_step_index is not None:
             nxt = steps[ev.next_step_index]
             click.echo(
@@ -994,6 +1247,7 @@ def _run_async_ami_build_step(
     *,
     recipe_eval: AsyncRecipeEval | None = None,
     retry: bool = False,
+    no_wait: bool = False,
 ) -> None:
     """Perform at most one quick action for `desk ami build step` (after status output).
 
@@ -1125,6 +1379,27 @@ def _run_async_ami_build_step(
                         f"AMI {image_id} is not usable (state={st!r}). See AWS console or cancel this build."
                     )
                 if st != "available":
+                    if (
+                        no_wait
+                        and snap.recorded_instance_id
+                        and st not in ("failed", "error", "deregistered")
+                    ):
+                        _merge_ami_result_s3(
+                            s3,
+                            snap.bucket,
+                            snap.s3_prefix,
+                            {"pipeline_complete": True},
+                        )
+                        terminate_instance(
+                            snap.recorded_instance_id, region=region, profile=profile
+                        )
+                        click.echo()
+                        click.secho(
+                            f"Terminated builder {snap.recorded_instance_id} (--no-wait; "
+                            f"AMI {image_id} was {st!r}).",
+                            fg="yellow",
+                        )
+                        return
                     click.echo()
                     click.echo(
                         f"(No step taken: AMI {image_id} is still {st!r}; run `desk ami build step` "
@@ -1190,7 +1465,7 @@ def _run_async_ami_build_step(
         )
 
     instance_type = snap.config.get("instance_type", "t3.medium")
-    workstation_name = _workstation_name_for_async_build(snap.build_id)
+    workstation_name = _workstation_name_for_staged_build(snap.build_id)
     builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
     click.echo()
     click.echo(f"Creating builder instance {workstation_name!r}...")
@@ -1250,15 +1525,22 @@ def ami_build_group() -> None:
     show_default=True,
     help="CloudFormation stack name for desk (used to resolve S3 bucket).",
 )
-def ami_build_status(build_id: str, stack: str) -> None:
-    """Show async AMI build progress from S3, EC2, and SSM Run Command history (quick; does not wait).
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Include SSM command script and invocation stdout/stderr for the active or failed step.",
+)
+def ami_build_status(build_id: str, stack: str, verbose: bool) -> None:
+    """Show staged AMI build progress from S3, EC2, and SSM Run Command history (quick; does not wait).
 
     Recipe progress is derived from SSM commands on the builder instance (Comment tag and/or
     command body match). After a step fails, use `desk ami build step --retry` or archive with
     `desk ami build cancel` before staging a new build.
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
-    _print_async_ami_build_status(snap)
+    recipe_eval = _maybe_evaluate_async_recipe(snap)
+    _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=verbose)
 
 
 @ami_build_group.command("step")
@@ -1274,7 +1556,13 @@ def ami_build_status(build_id: str, stack: str) -> None:
     is_flag=True,
     help="After a failed recipe step, re-send that step's SSM command (new presigned URLs).",
 )
-def ami_build_step(build_id: str, stack: str, retry: bool) -> None:
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Include SSM command script and invocation stdout/stderr for the active or failed step.",
+)
+def ami_build_step(build_id: str, stack: str, retry: bool, verbose: bool) -> None:
     """Advance the async AMI build by one quick action, or no-op if there is nothing to do.
 
     Resolves S3/EC2/SSM once, evaluates recipe state once, prints status from that snapshot,
@@ -1287,170 +1575,92 @@ def ami_build_step(build_id: str, stack: str, retry: bool) -> None:
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
     recipe_eval = _maybe_evaluate_async_recipe(snap)
-    _print_async_ami_build_status(snap, recipe_eval=recipe_eval)
+    _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=verbose)
     _run_async_ami_build_step(snap, recipe_eval=recipe_eval, retry=retry)
 
 
 @ami_build_group.command("run")
 @click.argument(
     "config_file",
-    type=click.Path(exists=True),
+    required=False,
+    type=click.Path(exists=True, dir_okay=False),
+)
+@click.option(
+    "--continue",
+    "resume_build_id",
+    metavar="BUILD_ID",
+    default=None,
+    help="Resume a staged build under ami-builds/<id>/ (e.g. after Ctrl-C).",
 )
 @click.option(
     "--no-wait",
     is_flag=True,
-    help="Do not wait for AMI to become available after creation.",
+    help="Do not wait for AMI to become available before terminating the builder (legacy behavior).",
+)
+@click.option(
+    "--stack",
+    default="desk",
+    show_default=True,
+    help="CloudFormation stack name for desk (used to resolve S3 bucket).",
 )
 def ami_build_run(
-    config_file: str,
+    config_file: Optional[str],
+    resume_build_id: Optional[str],
     no_wait: bool,
+    stack: str,
 ) -> None:
-    """Build an AMI from a config file: create instance, copy files, run scripts, then ami create.
+    """Stage a recipe to S3, drive ``step`` until the pipeline completes, then archive the build.
 
     CONFIG_FILE is a JSON file with:
       instance_type (optional): e.g. t3.medium (default: t3.medium).
-      The builder always starts from the latest Ubuntu 24.04 LTS AMI (config default/ami_prefix is not used).
-      steps: list of steps in order; each step is {\"run\": \"cmd\"} or {\"copy\": {\"source\": \"...\", \"dest\": \"...\", \"recursive\": optional}}.
+      The builder always starts from the latest Ubuntu 24.04 LTS AMI.
+      steps: list of steps; each step is {\"run\": \"cmd\"} or {\"copy\": {\"source\": \"...\", \"dest\": \"...\", \"recursive\": optional}}.
       Alternatively (legacy) copy + run + optional run_before_copy.
-      ami_name: base name for the created AMI (a timestamp is appended so reruns do not collide)
+      ami_name: base name for the registered AMI (async builds append the build id for uniqueness).
 
-    To keep the builder home directory clean, configure the recipe to copy into a staging
-    directory (e.g. /tmp/desk-build), run install scripts from there, and install only final
-    deliverables into home or system paths.
+    This command uses the same S3 + SSM pipeline as ``desk ami build create`` / ``step`` (not
+    direct SCP). Remote command output is streamed from SSM while steps run. On success the staged
+    prefix is moved to ami-build-archive/. On failure the build is left under ami-builds/ for
+    debugging.
 
-    The builder instance name is auto-generated from ami_name plus random characters so multiple
-    builds can run in parallel. The final AMI name is ami_name with a -YYYYMMDD-HHMMSS suffix so
-    you can rerun the same recipe without duplicate-name errors. On success the builder is
-    terminated; on failure it is left running for debugging.
+    Use ``--continue BUILD_ID`` to resume after an interrupt without re-uploading artifacts.
     """
-    aws = get_desk_settings().aws_settings
-    region = aws.region
-    profile = aws.profile
+    if resume_build_id and config_file:
+        raise click.UsageError("Pass either CONFIG_FILE or --continue BUILD_ID, not both.")
+    if not resume_build_id and not config_file:
+        raise click.UsageError("Missing CONFIG_FILE (or use --continue BUILD_ID).")
 
-    config = _load_build_config(config_file)
-    _validate_build_recipe_config(config, config_file)
-    instance_type = config.get("instance_type", "t3.medium")
-    steps = _get_build_steps(config)
-    ami_name = config.get("ami_name")
-    assert ami_name  # validated above
-    workstation_name = _builder_name(ami_name)
-
-    click.echo(f"Building AMI from config: {config_file}")
-    click.echo(f"  Workstation: {workstation_name}")
-    click.echo()
-
-    # 1. Create instance from Ubuntu (never use config default/ami_prefix for builder)
-    builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
-    click.echo("Step 1/4: Creating builder instance...")
+    bid = ""
     try:
-        create_workstation(
-            workstation_name,
-            instance_type,
-            ami_id=builder_ami,
-            shutdown_after="4h",
-            region=region,
-            profile=profile,
-        )
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
-
-    # 2. Wait for SSM
-    click.echo("Step 2/4: Waiting for instance to be ready (SSM)...")
-    try:
-        instance_id = resolve_workstation(
-            workstation_name,
-            region=region,
-            profile=profile,
-            states=["pending", "running"],
-        )
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
-    if not wait_for_ssm_ready(
-        instance_id, region=region, profile=profile, timeout=600
-    ):
-        raise click.ClickException(
-            f"Instance {instance_id} did not become SSM-ready within 600s."
-        )
-    click.echo("  Instance ready.")
-    click.echo()
-
-    # 3. Copy files and run scripts (steps can be intermixed)
-    config_dir = os.path.dirname(os.path.abspath(config_file))
-
-    for i, step in enumerate(steps):
-        if "run" in step:
-            cmd = step["run"]
-            run_cmd = cmd
-            if not os.path.isabs(cmd) and ("/" in cmd or cmd.endswith(".sh")):
-                candidate = os.path.normpath(os.path.join(config_dir, cmd))
-                if os.path.isfile(candidate):
-                    run_cmd = candidate
-            click.echo(f"Step 3/4: Run ({i + 1}/{len(steps)}): {run_cmd}")
-            script_content = run_cmd
-            if os.path.isfile(run_cmd):
-                with open(run_cmd) as f:
-                    script_content = f.read()
-            run_script_on_instance(
-                instance_id,
-                script_content,
-                follow=True,
-                region=region,
-                profile=profile,
-                command_timeout=7200,
-            )
+        if resume_build_id:
+            bid = _normalize_build_id_arg(resume_build_id)
+            if not bid:
+                raise click.ClickException("Build id is empty.")
+            click.echo(f"Resuming AMI build {bid}")
+            click.echo(f"  s3:/{AMI_BUILDS_PREFIX}{bid}/")
+            click.echo(f"  Builder name: {_workstation_name_for_staged_build(bid)}")
+            click.echo()
+            _drive_ami_build_run_loop(bid, stack=stack, no_wait=no_wait)
         else:
-            item = step["copy"]
-            src = item["source"]
-            dest = item["dest"]
-            recursive = item.get("recursive", False)
-            if not os.path.isabs(src):
-                src = os.path.normpath(os.path.join(config_dir, src))
-            click.echo(f"Step 3/4: Copy ({i + 1}/{len(steps)}): {src} -> {workstation_name}:{dest}")
-            scp_transfer(
-                workstation_name,
-                src,
-                f"{workstation_name}:{dest}",
-                user="ubuntu",
-                identity_file=None,
-                wait=False,
-                wait_timeout=300,
-                recursive=recursive,
-                region=region,
-                profile=profile,
-                replace_process=False,
+            assert config_file is not None
+            build_id, bucket, prefix = _stage_ami_build_to_s3(config_file, stack=stack)
+            bid = build_id
+            click.echo(f"Staged AMI build {build_id}")
+            click.echo(f"  s3:/{prefix}")
+            click.echo(f"  Bucket: s3://{bucket}/{prefix}")
+            click.echo()
+            click.echo(f"Building AMI from config: {config_file}")
+            click.echo(f"  Builder name: {_workstation_name_for_staged_build(build_id)}")
+            click.echo()
+            _drive_ami_build_run_loop(build_id, stack=stack, no_wait=no_wait)
+    except KeyboardInterrupt:
+        click.echo()
+        if bid:
+            click.secho(
+                f"Interrupted. Resume with: desk ami build run --continue {bid}",
+                fg="yellow",
             )
-
-    click.echo()
-
-    # 4. Create AMI
-    versioned_name = _versioned_ami_name(ami_name)
-    click.echo("Step 4/4: Creating AMI from builder...")
-    click.echo(f"  AMI name: {versioned_name}")
-    image_id = create_ami(
-        instance_id=instance_id,
-        name=versioned_name,
-        description=None,
-        no_reboot=False,
-        region=region,
-        profile=profile,
-    )
-    click.echo(f"  AMI ID: {image_id}")
-    if not no_wait:
-        click.echo("  Waiting for AMI to become available...")
-        if not wait_for_ami_available(
-            image_id,
-            region=region,
-            profile=profile,
-            timeout=1200,
-        ):
-            raise click.ClickException(
-                f"AMI {image_id} did not become available within timeout."
-            )
-
-    click.echo()
-    click.echo("Terminating builder instance...")
-    terminate_instance(instance_id, region=region, profile=profile)
-    click.secho("AMI build complete.", fg="green", bold=True)
+        raise SystemExit(130) from None
 
 
 @ami_build_group.command("create")
@@ -1470,95 +1680,7 @@ def ami_build_create(config_file: str, stack: str) -> None:
     Writes a normalized config (steps only) whose copy steps stage a ``bundle.tar`` per step
     (preserving Unix modes) and whose run paths reference s3:/ keys under ami-builds/<build-id>/.
     """
-    aws = get_desk_settings().aws_settings
-    region = aws.region
-    profile = aws.profile
-
-    config = _load_build_config(config_file)
-    _validate_build_recipe_config(config, config_file)
-    steps = _get_build_steps(config)
-    ami_name = config.get("ami_name")
-    assert ami_name
-    config_dir = os.path.dirname(os.path.abspath(config_file))
-
-    try:
-        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
-    except RuntimeError as e:
-        raise click.ClickException(str(e)) from e
-
-    build_id = _new_build_id()
-    prefix = f"{AMI_BUILDS_PREFIX}{build_id}/"
-
-    session = boto3.Session(region_name=region, profile_name=profile)
-    s3 = session.client("s3")
-
-    normalized_steps: list[dict[str, Any]] = []
-
-    for i, step in enumerate(steps):
-        if "run" in step:
-            cmd = step["run"]
-            resolved, is_file = _resolve_run_for_build(cmd, config_dir)
-            if is_file:
-                rel = _artifact_rel_path(resolved, config_dir)
-                key = f"{prefix}files/run/{i}/{rel}"
-                s3.upload_file(resolved, bucket, key)
-                normalized_steps.append({"run": _s3_uri_for_key(key)})
-            else:
-                normalized_steps.append({"run": cmd})
-        else:
-            item = dict(step["copy"])
-            src = item["source"]
-            recursive = item.get("recursive", False)
-            resolved = _resolve_copy_source(src, config_dir)
-            if not os.path.exists(resolved):
-                raise click.ClickException(
-                    f"Copy step {i}: source path does not exist: {resolved}"
-                )
-            if os.path.isdir(resolved):
-                if not recursive:
-                    raise click.ClickException(
-                        f"Copy step {i}: source is a directory; set \"recursive\": true."
-                    )
-            tar_path = _write_ami_copy_tarball(
-                resolved, item["dest"], recursive=recursive
-            )
-            try:
-                key = f"{prefix}files/copy/{i}/{AMI_COPY_BUNDLE_NAME}"
-                s3.upload_file(tar_path, bucket, key)
-            finally:
-                os.unlink(tar_path)
-            item["source"] = _s3_uri_for_key(key)
-            normalized_steps.append({"copy": item})
-
-    out_config: dict[str, Any] = {
-        "ami_name": ami_name,
-        "instance_type": config.get("instance_type", "t3.medium"),
-        "steps": normalized_steps,
-    }
-
-    config_key = f"{prefix}config.json"
-    manifest_key = f"{prefix}manifest.json"
-    manifest = {
-        "build_id": build_id,
-        "ami_name": ami_name,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "original_config_path": os.path.abspath(config_file),
-        "desk_version": __version__,
-    }
-
-    s3.put_object(
-        Bucket=bucket,
-        Key=config_key,
-        Body=json.dumps(out_config, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
-    s3.put_object(
-        Bucket=bucket,
-        Key=manifest_key,
-        Body=json.dumps(manifest, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
-
+    build_id, bucket, prefix = _stage_ami_build_to_s3(config_file, stack=stack)
     click.echo(f"Staged AMI build {build_id}")
     click.echo(f"  s3:/{prefix}")
     click.echo(f"  Bucket: s3://{bucket}/{prefix}")
@@ -1658,48 +1780,17 @@ def ami_build_list_staged(
 )
 def ami_build_cancel(build_id: str, stack: str) -> None:
     """Move a staged AMI build from ami-builds/ to ami-build-archive/ in the desk bucket."""
-    aws = get_desk_settings().aws_settings
-    region = aws.region
-    profile = aws.profile
-
     bid = _normalize_build_id_arg(build_id)
     if not bid:
         raise click.ClickException("Build id is empty.")
-
     try:
-        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
-    except RuntimeError as e:
-        raise click.ClickException(str(e)) from e
-
-    src_prefix = f"{AMI_BUILDS_PREFIX}{bid}/"
-    dest_prefix = f"{AMI_BUILD_ARCHIVE_PREFIX}{bid}/"
-
-    session = boto3.Session(region_name=region, profile_name=profile)
-    s3 = session.client("s3")
-
-    paginator = s3.get_paginator("list_objects_v2")
-    pages = list(paginator.paginate(Bucket=bucket, Prefix=src_prefix))
-    keys: list[str] = []
-    for page in pages:
-        for obj in page.get("Contents") or []:
-            keys.append(obj["Key"])
-
-    if not keys:
-        raise click.ClickException(
-            f"No active staged build found for id {bid!r} under {AMI_BUILDS_PREFIX}"
-        )
-
-    for key in keys:
-        suffix = key[len(src_prefix) :]
-        new_key = f"{dest_prefix}{suffix}"
-        s3.copy_object(
-            Bucket=bucket,
-            Key=new_key,
-            CopySource={"Bucket": bucket, "Key": key},
-        )
-        s3.delete_object(Bucket=bucket, Key=key)
-
-    click.echo(f"Archived AMI build {bid} to s3:/{dest_prefix}")
+        _archive_staged_ami_build_prefix(bid, stack=stack)
+    except click.ClickException as e:
+        if "No objects found" in str(e):
+            raise click.ClickException(
+                f"No active staged build found for id {bid!r} under {AMI_BUILDS_PREFIX}"
+            ) from e
+        raise
 
 
 @ami_group.command("list")
