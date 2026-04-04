@@ -8,6 +8,8 @@ import os
 import re
 import secrets
 import shlex
+import tarfile
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -30,7 +32,6 @@ from desk.aws import (
     is_ssm_ready,
     list_amis,
     list_command_invocations_for_instance,
-    list_s3_object_keys_under_prefix,
     resolve_workstation,
     send_ssm_command,
     terminate_instance,
@@ -50,6 +51,8 @@ AMI_BUILD_ARCHIVE_PREFIX = "ami-build-archive/"
 BUILDER_INSTANCE_KEY = "builder-instance.json"
 # SSM Run Command Comment prefix to map invocations to recipe steps (≤100 chars; see _ami_build_comment_tag).
 AMI_BUILD_COMMENT_PREFIX = "desk-ami-build:"
+# Single tar object per copy step under files/copy/<i>/ (async AMI staging).
+AMI_COPY_BUNDLE_NAME = "bundle.tar"
 
 
 @click.group("ami")
@@ -405,6 +408,51 @@ def _staged_s3_object_key(src: str) -> str:
     return s[4:].lstrip("/")
 
 
+def _tar_member_name_for_single_file(source: str, dest: str) -> str:
+    """Path inside the tarball for a single-file copy (matches final basename on extract)."""
+    if dest.endswith("/") or dest.endswith(os.sep):
+        return os.path.basename(source)
+    d = dest.rstrip("/")
+    base = os.path.basename(d)
+    if not base:
+        return os.path.basename(source)
+    return base
+
+
+def _parent_dir_for_file_copy_dest(dest: str) -> str:
+    """Directory to pass to ``tar -C`` for a single-file copy (handles ``…/`` targets)."""
+    if dest.endswith("/") or dest.endswith(os.sep):
+        return dest.rstrip("/") or "."
+    d = os.path.dirname(dest)
+    return d if d else "."
+
+
+def _write_ami_copy_tarball(
+    resolved: str,
+    dest: str,
+    *,
+    recursive: bool,
+) -> str:
+    """Create a temporary tar file with full permission bits preserved. Caller must unlink."""
+    fd, tmp_path = tempfile.mkstemp(suffix=".tar")
+    os.close(fd)
+    try:
+        with tarfile.open(tmp_path, "w", format=tarfile.GNU_FORMAT) as tf:
+            if os.path.isdir(resolved):
+                assert recursive
+                tf.add(os.path.abspath(resolved), arcname=".", recursive=True)
+            else:
+                arc = _tar_member_name_for_single_file(resolved, dest)
+                tf.add(os.path.abspath(resolved), arcname=arc, recursive=False)
+        return tmp_path
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def _async_shell_for_copy_step(
     copy_item: dict[str, Any],
     *,
@@ -412,54 +460,28 @@ def _async_shell_for_copy_step(
     region: str | None,
     profile: str | None,
 ) -> str:
-    """Download staged artifacts via presigned URLs and ``curl`` (no AWS CLI on the builder).
-
-    ``curl -o`` creates new files without the execute bit, unlike ``scp``. Restore ``+x`` for
-    ``*.sh`` trees so recipe scripts that must be directly executed (e.g. systemd ``ExecStart``)
-    still work after async staging.
-    """
+    """Download a staged tar bundle via ``curl`` and extract with ``tar`` (preserves modes)."""
     src = copy_item["source"]
-    dest = copy_item["dest"]
+    raw_dest = copy_item["dest"]
     recursive = copy_item.get("recursive", False)
-    key_or_prefix = _staged_s3_object_key(src)
-    if recursive:
-        prefix = key_or_prefix.rstrip("/") + "/"
-        keys = list_s3_object_keys_under_prefix(
-            bucket, prefix, region=region, profile=profile
-        )
-        if not keys:
-            raise click.ClickException(
-                f"No objects found under s3://{bucket}/{prefix} (recursive copy)."
-            )
-        lines: list[str] = ["set -eu"]
-        dest_base = dest.rstrip("/")
-        for k in keys:
-            rel = k[len(prefix) :] if k.startswith(prefix) else os.path.basename(k)
-            rel = rel.lstrip("/")
-            target = f"{dest_base}/{rel}" if rel else dest_base
-            url = generate_presigned_get_object_url(
-                bucket, k, region=region, profile=profile
-            )
-            lines.append(
-                f"install -d -m 0755 $(dirname {shlex.quote(target)})"
-            )
-            lines.append(
-                f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(target)}"
-            )
-        lines.append(
-            f"find {shlex.quote(dest_base)} -type f -name '*.sh' -exec chmod +x {{}} +"
-        )
-        return "\n".join(lines) + "\n"
+    key = _staged_s3_object_key(src)
     url = generate_presigned_get_object_url(
-        bucket, key_or_prefix, region=region, profile=profile
+        bucket, key, region=region, profile=profile
     )
     lines = [
         "set -eu",
-        f"install -d -m 0755 $(dirname {shlex.quote(dest)})",
-        f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(dest)}",
+        "TMP=$(mktemp)",
+        "trap 'rm -f \"$TMP\"' EXIT",
+        f"curl -fsSL {shlex.quote(url)} -o \"$TMP\"",
     ]
-    if dest.endswith(".sh"):
-        lines.append(f"chmod +x {shlex.quote(dest)}")
+    if recursive:
+        dest = raw_dest.rstrip("/")
+        lines.append(f"install -d -m 0755 {shlex.quote(dest)}")
+        lines.append(f'tar -xf "$TMP" -C {shlex.quote(dest)}')
+    else:
+        dest_dir = _parent_dir_for_file_copy_dest(raw_dest)
+        lines.append(f"install -d -m 0755 {shlex.quote(dest_dir)}")
+        lines.append(f'tar -xf "$TMP" -C {shlex.quote(dest_dir)}')
     return "\n".join(lines) + "\n"
 
 
@@ -1271,8 +1293,8 @@ def ami_build_run(
 def ami_build_create(config_file: str, stack: str) -> None:
     """Upload an AMI build recipe and local artifacts to a dedicated folder in the desk S3 bucket.
 
-    Writes a normalized config (steps only) whose copy/run paths reference s3:/ keys under
-    ami-builds/<build-id>/.
+    Writes a normalized config (steps only) whose copy steps stage a ``bundle.tar`` per step
+    (preserving Unix modes) and whose run paths reference s3:/ keys under ami-builds/<build-id>/.
     """
     aws = get_desk_settings().aws_settings
     region = aws.region
@@ -1323,19 +1345,15 @@ def ami_build_create(config_file: str, stack: str) -> None:
                     raise click.ClickException(
                         f"Copy step {i}: source is a directory; set \"recursive\": true."
                     )
-                base_prefix = f"{prefix}files/copy/{i}/"
-                for root, _dirs, files in os.walk(resolved):
-                    for f in files:
-                        full = os.path.join(root, f)
-                        rel = os.path.relpath(full, resolved).replace(os.sep, "/")
-                        key = f"{base_prefix}{rel}"
-                        s3.upload_file(full, bucket, key)
-                item["source"] = _s3_uri_for_key(base_prefix.rstrip("/") + "/")
-            else:
-                rel = _artifact_rel_path(resolved, config_dir)
-                key = f"{prefix}files/copy/{i}/{rel}"
-                s3.upload_file(resolved, bucket, key)
-                item["source"] = _s3_uri_for_key(key)
+            tar_path = _write_ami_copy_tarball(
+                resolved, item["dest"], recursive=recursive
+            )
+            try:
+                key = f"{prefix}files/copy/{i}/{AMI_COPY_BUNDLE_NAME}"
+                s3.upload_file(tar_path, bucket, key)
+            finally:
+                os.unlink(tar_path)
+            item["source"] = _s3_uri_for_key(key)
             normalized_steps.append({"copy": item})
 
     out_config: dict[str, Any] = {

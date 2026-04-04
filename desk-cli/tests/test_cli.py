@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import sys
+import tarfile
 from unittest.mock import MagicMock, patch
 
 from botocore.exceptions import ClientError
@@ -449,6 +450,56 @@ def test_ami_build_create_uploads(
 
 @patch("desk_cli.commands.ami.boto3.Session")
 @patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.commands.ami._new_build_id", return_value="20260101-010101-abcdef01")
+def test_ami_build_create_tar_preserves_mode_bits(
+    _mock_new_id: object,
+    _mock_bucket: object,
+    mock_session: object,
+    tmp_path: object,
+) -> None:
+    """Copy steps stage bundle.tar so non-.sh files can remain executable."""
+    from pathlib import Path
+
+    p = Path(tmp_path)
+    exe = p / "daemon"
+    exe.write_text("#!/bin/sh\necho ok\n")
+    exe.chmod(0o755)
+    cfg = p / "recipe.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "ami_name": "my-ami",
+                "steps": [{"copy": {"source": "daemon", "dest": "/tmp/daemon"}}],
+            }
+        )
+    )
+
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+    uploaded: list[tuple[str, str]] = []
+    bundle_bytes: list[bytes] = []
+
+    def _capture(local: str, bucket: str, key: str) -> None:
+        uploaded.append((local, key))
+        if key.endswith("bundle.tar"):
+            with open(local, "rb") as f:
+                bundle_bytes.append(f.read())
+
+    s3.upload_file.side_effect = _capture
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "create", str(cfg)])
+
+    assert result.exit_code == 0
+    assert len(bundle_bytes) == 1
+    with tarfile.open(fileobj=io.BytesIO(bundle_bytes[0]), mode="r") as tf:
+        by_name = {m.name.lstrip("./"): m for m in tf.getmembers() if m.isreg()}
+    assert "daemon" in by_name
+    assert by_name["daemon"].mode & 0o111
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_list_active(_mock_bucket: object, mock_session: object) -> None:
     """ami build list reads manifests under ami-builds/."""
     s3 = MagicMock()
@@ -548,7 +599,7 @@ def test_ami_build_status_recipe_ssm_ready(
         config={
             "steps": [
                 {"run": "echo hi"},
-                {"copy": {"source": "s3:/ami-builds/b1/files/copy/0/x", "dest": "/tmp/x"}},
+                {"copy": {"source": "s3:/ami-builds/b1/files/copy/0/bundle.tar", "dest": "/tmp/x"}},
             ]
         },
     )
@@ -659,7 +710,7 @@ def test_ami_build_step_copy_uses_curl_presigned_url(
     mock_send: object,
     _mock_presign: object,
 ) -> None:
-    """Copy steps download via curl and a presigned URL (no AWS CLI on the builder)."""
+    """Copy steps download bundle.tar via curl and extract with tar (preserves modes)."""
     s3 = _s3_get_for_async_build(
         has_builder_record=True,
         instance_id="i-abc",
@@ -667,7 +718,7 @@ def test_ami_build_step_copy_uses_curl_presigned_url(
             "steps": [
                 {
                     "copy": {
-                        "source": "s3:/ami-builds/b1/files/copy/0/file.sh",
+                        "source": "s3:/ami-builds/b1/files/copy/0/bundle.tar",
                         "dest": "/tmp/file.sh",
                     }
                 },
@@ -685,8 +736,51 @@ def test_ami_build_step_copy_uses_curl_presigned_url(
     script = _args[1]
     assert "curl -fsSL" in script
     assert "https://example.com/presigned" in script
-    assert "chmod +x" in script
+    assert 'tar -xf "$TMP"' in script
+    assert "chmod" not in script
     assert "aws s3" not in script
+
+
+@patch("desk_cli.commands.ami.generate_presigned_get_object_url", return_value="https://example.com/presigned")
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-copy")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_recursive_copy_extracts_tar_to_dest(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+    _mock_presign: object,
+) -> None:
+    """Recursive copy steps extract bundle.tar into the destination directory."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={
+            "steps": [
+                {
+                    "copy": {
+                        "source": "s3:/ami-builds/b1/files/copy/0/bundle.tar",
+                        "dest": "/tmp/desk-git",
+                        "recursive": True,
+                    }
+                },
+            ]
+        },
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    script = mock_send.call_args[0][1]
+    assert 'tar -xf "$TMP" -C /tmp/desk-git' in script
 
 
 @patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-retry")
