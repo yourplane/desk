@@ -610,23 +610,61 @@ def send_ssm_command(
     region: str | None = None,
     profile: str | None = None,
     timeout_seconds: int = 3600,
+    comment: str | None = None,
 ) -> str:
     """
     Send a command to an instance via SSM. Returns the command ID.
+
+    Optional ``comment`` is stored on the command (max 100 chars per AWS) for
+    correlation in ``list_commands`` / ``get_command``.
     """
     session = boto3.Session(region_name=region, profile_name=profile)
     ssm = session.client("ssm")
 
-    response = ssm.send_command(
-        InstanceIds=[instance_id],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": [command]},
-        TimeoutSeconds=timeout_seconds,
-    )
+    send_kw: dict = {
+        "InstanceIds": [instance_id],
+        "DocumentName": "AWS-RunShellScript",
+        "Parameters": {"commands": [command]},
+        "TimeoutSeconds": timeout_seconds,
+    }
+    if comment is not None:
+        send_kw["Comment"] = comment[:100]
+
+    response = ssm.send_command(**send_kw)
 
     command_id = response["Command"]["CommandId"]
     log.debug("send_ssm_command instance_id=%s command_id=%s", instance_id, command_id)
     return command_id
+
+
+def get_ssm_command(
+    command_id: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> dict:
+    """Return the SSM ``Command`` object from ``get_command`` (includes Comment, Parameters)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+    resp = ssm.get_command(CommandId=command_id)
+    return resp["Command"]
+
+
+def list_command_invocations_for_instance(
+    instance_id: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[dict]:
+    """Return all command invocations for an instance (paginated), oldest first."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+    out: list[dict] = []
+    paginator = ssm.get_paginator("list_command_invocations")
+    for page in paginator.paginate(InstanceId=instance_id):
+        out.extend(page.get("CommandInvocations") or [])
+    out.sort(key=lambda x: x.get("RequestedDateTime") or "")
+    return out
 
 
 def add_temporary_ssh_key(

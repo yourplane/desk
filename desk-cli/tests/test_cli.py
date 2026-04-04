@@ -470,14 +470,19 @@ def _s3_get_for_async_build(
     *,
     has_builder_record: bool,
     instance_id: str | None = None,
+    config: dict | None = None,
 ) -> MagicMock:
     """Return a mock S3 client get_object that serves config.json and optional builder-instance.json."""
+
+    cfg = {"ami_name": "my-ami", "instance_type": "t3.medium"}
+    if config is not None:
+        cfg = {**cfg, **config}
 
     def get_object(Bucket: object, Key: str) -> dict:
         if Key.endswith("config.json"):
             return {
                 "Body": io.BytesIO(
-                    json.dumps({"ami_name": "my-ami", "instance_type": "t3.medium"}).encode()
+                    json.dumps(cfg).encode()
                 )
             }
         if Key.endswith("builder-instance.json"):
@@ -526,6 +531,70 @@ def test_ami_build_status_running_not_ssm(
     assert result.exit_code == 0
     assert "SSM" in result.output
     assert "no" in result.output.lower() or "not ready" in result.output.lower()
+
+
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_recipe_ssm_ready(
+    _mock_bucket: object, mock_session: object, _mock_state: object, _mock_ssm: object, _mock_list: object
+) -> None:
+    """ami build status shows recipe section when SSM is ready."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={
+            "steps": [
+                {"run": "echo hi"},
+                {"copy": {"source": "s3:/ami-builds/b1/files/copy/0/x", "dest": "/tmp/x"}},
+            ]
+        },
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "Recipe:" in result.output
+    assert "Steps in config: 2" in result.output
+    assert "ready to start step index 0" in result.output
+
+
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_starts_recipe_run(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+) -> None:
+    """ami build step sends async SSM for first recipe step when idle."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hello"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_send.assert_called_once()
+    _args, kwargs = mock_send.call_args
+    assert _args[0] == "i-abc"
+    assert "echo hello" in _args[1]
+    assert kwargs.get("comment") is not None
+    assert "cmd-ssm-1" in result.output
 
 
 @patch("desk_cli.commands.ami._put_s3_object_json")
