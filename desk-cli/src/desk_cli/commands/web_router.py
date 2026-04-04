@@ -173,11 +173,15 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         except click.ClickException:
             continue
         proxied_upstream.append((bind, local))
+        # Exact /prefix -> trailing slash (handle_path /prefix alone matches ONLY exact /prefix in JSON).
         lines.append(f"    handle {prefix} {{")
         lines.append(f"        redir {prefix}/ 308")
         lines.append("    }")
-        # Prefix match (not /prefix/*) so /prefix/ is included; strip prefix for upstream.
-        lines.append(f"    handle_path {prefix} {{")
+        safe = re.sub(r"[^a-zA-Z0-9]", "_", f"{ws}_{remote}").strip("_") or "route"
+        matcher = f"desk_route_{safe}"
+        lines.append(f"    @{matcher} path {prefix} {prefix}/*")
+        lines.append(f"    handle @{matcher} {{")
+        lines.append(f"        uri strip_prefix {prefix}")
         lines.extend(_reverse_proxy_block_lines(f"{bind}:{local}"))
         lines.append("    }")
         lines.append("")
@@ -425,7 +429,7 @@ def _apply_caddyfile_from_active_routes() -> tuple[str, int]:
 
 
 def _caddyfile_out_of_sync_with_active_routes() -> bool:
-    """True if the Caddyfile is missing handle_path for any active route."""
+    """True if the Caddyfile is missing uri strip_prefix for any active route."""
     active = _active_routes()
     if not active:
         return False
@@ -443,7 +447,7 @@ def _caddyfile_out_of_sync_with_active_routes() -> bool:
             pfx = _path_prefix(ws, rp)
         except click.ClickException:
             continue
-        if f"handle_path {pfx}" not in text:
+        if f"uri strip_prefix {pfx}" not in text:
             return True
     return False
 

@@ -116,7 +116,7 @@ def test_desk_web_router_sync_writes_and_reloads(
     assert "Reloaded Caddy" in result.output
     cf = tmp_path / "web-router" / "Caddyfile"
     assert cf.is_file()
-    assert "handle_path /dev/8080" in cf.read_text()
+    assert "uri strip_prefix /dev/8080" in cf.read_text()
     mock_reload.assert_called_once()
 
 
@@ -183,8 +183,8 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert "http://127.0.0.1:8780" in text
     assert "auto_https off" in text
     assert "admin 127.0.0.1:29789" in text
-    assert "handle_path /dev/5001" in text
-    assert "handle_path /dev/5001/*" not in text
+    assert "uri strip_prefix /dev/5001" in text
+    assert "@desk_route_" in text
     assert "/@vite/*" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
     assert "header_up Host {http.request.host}" in text
@@ -366,5 +366,5 @@ def test_refresh_writes_caddyfile_without_reload_when_router_stopped(
         refresh_web_router_after_route_change()
     caddyfile = tmp_path / "web-router" / "Caddyfile"
     assert caddyfile.is_file()
-    assert "handle_path /dev/80" in caddyfile.read_text()
+    assert "uri strip_prefix /dev/80" in caddyfile.read_text()
     _mock_reload.assert_not_called()
