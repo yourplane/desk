@@ -22,6 +22,14 @@ def test_desk_web_router_help() -> None:
     assert "stop" in result.output
     assert "status" in result.output
     assert "probe" in result.output
+    assert "sync" in result.output
+
+
+def test_desk_web_router_sync_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["web-router", "sync", "--help"])
+    assert result.exit_code == 0
+    assert "Caddyfile" in result.output or "reload" in result.output.lower()
 
 
 def test_desk_web_router_probe_help() -> None:
@@ -29,6 +37,31 @@ def test_desk_web_router_probe_help() -> None:
     result = runner.invoke(cli, ["web-router", "probe", "--help"])
     assert result.exit_code == 0
     assert "health" in result.output.lower()
+
+
+@patch("desk_cli.commands.web_router._http_probe_get")
+@patch("desk_cli.commands.route._pid_alive", return_value=True)
+def test_desk_web_router_probe_suggests_sync_on_caddy_placeholder_404(
+    _mock_pid: object,
+    mock_get: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mock_get.side_effect = [
+        (200, 2, "ok", None),
+        (404, 69, "No matching desk route. Use desk route add and desk web-router start.", None),
+    ]
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "routes.json").write_text(
+        json.dumps(
+            [{"workstation": "dev", "remote_port": 80, "local_port": 45001, "pid": 1}],
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["web-router", "probe"])
+    assert result.exit_code == 0
+    assert "desk web-router sync" in result.output
 
 
 @patch("desk_cli.commands.web_router._http_probe_get")
@@ -56,6 +89,35 @@ def test_desk_web_router_probe_checks_active_route(
     assert "GET /health" in result.output
     assert "/dev/80/" in result.output
     assert mock_get.call_count == 2
+
+
+@patch("desk_cli.commands.web_router._run_caddy_reload")
+@patch("desk_cli.commands.web_router._is_web_router_running", return_value=True)
+@patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
+def test_desk_web_router_sync_writes_and_reloads(
+    _mock_which: object,
+    _mock_running: object,
+    mock_reload: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "routes.json").write_text(
+        json.dumps(
+            [{"workstation": "dev", "remote_port": 8080, "local_port": 45000, "pid": 1}],
+        )
+    )
+    runner = CliRunner()
+    with patch("desk_cli.commands.route._pid_alive", return_value=True):
+        result = runner.invoke(cli, ["web-router", "sync"])
+    assert result.exit_code == 0
+    assert "Wrote Caddyfile" in result.output
+    assert "Reloaded Caddy" in result.output
+    cf = tmp_path / "web-router" / "Caddyfile"
+    assert cf.is_file()
+    assert "handle_path /dev/8080" in cf.read_text()
+    mock_reload.assert_called_once()
 
 
 @patch("desk_cli.commands.web_router._http_probe_get", return_value=(200, 2, "ok", None))

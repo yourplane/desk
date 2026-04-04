@@ -415,6 +415,39 @@ def _start_caddy_background(caddyfile: str, log_path: str) -> int:
     return proc.pid
 
 
+def _apply_caddyfile_from_active_routes() -> tuple[str, int]:
+    """Build and write Caddyfile from current active desk routes. Returns (path, route_count)."""
+    listen = _listen_address()
+    routes = _active_routes()
+    content = _build_caddyfile(listen=listen, routes=routes)
+    path = _write_caddyfile(content)
+    return path, len(routes)
+
+
+def _caddyfile_out_of_sync_with_active_routes() -> bool:
+    """True if the Caddyfile is missing handle_path for any active route."""
+    active = _active_routes()
+    if not active:
+        return False
+    path = _caddyfile_path()
+    if not os.path.isfile(path):
+        return True
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return True
+    for r in active:
+        ws = str(r.get("workstation", ""))
+        rp = int(r.get("remote_port", 0) or 0)
+        try:
+            pfx = _path_prefix(ws, rp)
+        except click.ClickException:
+            continue
+        if f"handle_path {pfx}" not in text:
+            return True
+    return False
+
+
 def _run_caddy_reload(caddyfile: str) -> None:
     admin = _admin_address()
     r = subprocess.run(
@@ -446,10 +479,7 @@ def _is_web_router_running() -> bool:
 
 def _refresh_web_router_after_route_change_impl() -> None:
     """Rewrite Caddyfile; reload Caddy in place if the web router is already running."""
-    listen = _listen_address()
-    routes = _active_routes()
-    caddyfile_content = _build_caddyfile(listen=listen, routes=routes)
-    caddyfile = _write_caddyfile(caddyfile_content)
+    caddyfile, _n = _apply_caddyfile_from_active_routes()
 
     if not _which_caddy():
         return
@@ -490,9 +520,7 @@ def web_router_start(on_boot: bool, foreground: bool) -> None:
         raise click.ClickException("`caddy` not found on PATH; install Caddy and try again.")
 
     listen = _listen_address()
-    routes = _active_routes()
-    caddyfile_content = _build_caddyfile(listen=listen, routes=routes)
-    caddyfile = _write_caddyfile(caddyfile_content)
+    caddyfile, _n = _apply_caddyfile_from_active_routes()
     access_log = _access_log_path()
     _ensure_router_dir()
 
@@ -612,6 +640,26 @@ def web_router_status() -> None:
     click.echo(f"Desk route forward logs (SSM): {_logs_dir()}/")
 
 
+@web_router_group.command("sync")
+def web_router_sync() -> None:
+    """Rewrite the Caddyfile from active desk routes and reload Caddy if it is running."""
+    path, n = _apply_caddyfile_from_active_routes()
+    click.echo(f"Wrote Caddyfile with {n} active route(s): {path}")
+
+    if not _is_web_router_running():
+        click.echo("Web router is not running; start with desk web-router start.")
+        return
+
+    if not _which_caddy():
+        raise click.ClickException("Cannot reload: `caddy` not on PATH.")
+
+    try:
+        _run_caddy_reload(path)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo("Reloaded Caddy.")
+
+
 @web_router_group.command("probe")
 @click.option(
     "--timeout",
@@ -660,6 +708,7 @@ def web_router_probe(timeout: float) -> None:
         click.echo("Fix: `desk route add <workstation> <remote_port>` while SSM can reach the instance.")
         return
 
+    saw_caddy_placeholder_404 = False
     for r in active:
         ws = str(r.get("workstation", ""))
         rp = int(r.get("remote_port", 0) or 0)
@@ -673,9 +722,25 @@ def web_router_probe(timeout: float) -> None:
         if err:
             click.echo(click.style(f"GET {path} — error: {err}", fg="red"))
         else:
+            if (
+                status == 404
+                and prev
+                and "No matching desk route" in prev
+            ):
+                saw_caddy_placeholder_404 = True
             warn = status is None or status >= 400 or blen == 0
             fg = "yellow" if warn else "green"
             code = status if status is not None else "?"
             click.echo(click.style(f"GET {path} — HTTP {code}, {blen} bytes", fg=fg))
             if prev:
                 click.echo(f"  body preview: {prev!r}")
+
+    click.echo("")
+    if _caddyfile_out_of_sync_with_active_routes() or saw_caddy_placeholder_404:
+        click.echo(
+            click.style(
+                "Caddy is using a stale config (active routes exist but proxy rules are missing or not loaded). "
+                "Run: desk web-router sync",
+                fg="yellow",
+            )
+        )

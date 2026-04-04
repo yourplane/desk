@@ -13,6 +13,7 @@ If you run the web router **on the workstation** and use `desk route add … 878
 ### Debugging
 
 - Run **`desk web-router probe`** — HTTP GETs `/health` and each **active** route path, printing status code, byte length, and a short body preview (similar to `curl`).
+- Run **`desk web-router sync`** — rewrite the Caddyfile from **active** `desk route` entries and **`caddy reload`** if the web router is already running. Use this when probe reports a **stale config** (active routes but Caddy still returns the default “No matching desk route” 404).
 - Manual checks, e.g. `curl -sv http://127.0.0.1:8780/health` and `curl -sv http://127.0.0.1:8780/<workstation>/<remote_port>/`.
 
-If `/health` works but routed paths 404, **`desk route list`** may show **stale** forwards (dead PID). The Caddyfile only includes **active** routes; re-create the forward with `desk route add` or remove stale rows.
+If `/health` works but routed paths 404, **`desk route list`** may show **stale** forwards (dead PID), or Caddy may need **`desk web-router sync`**. The Caddyfile only includes **active** routes; re-create the forward with `desk route add` or remove stale rows.
