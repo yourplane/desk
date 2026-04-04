@@ -685,6 +685,7 @@ def test_ami_build_step_copy_uses_curl_presigned_url(
     script = _args[1]
     assert "curl -fsSL" in script
     assert "https://example.com/presigned" in script
+    assert "chmod +x" in script
     assert "aws s3" not in script
 
 

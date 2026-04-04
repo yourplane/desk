@@ -412,7 +412,12 @@ def _async_shell_for_copy_step(
     region: str | None,
     profile: str | None,
 ) -> str:
-    """Download staged artifacts via presigned URLs and ``curl`` (no AWS CLI on the builder)."""
+    """Download staged artifacts via presigned URLs and ``curl`` (no AWS CLI on the builder).
+
+    ``curl -o`` creates new files without the execute bit, unlike ``scp``. Restore ``+x`` for
+    ``*.sh`` trees so recipe scripts that must be directly executed (e.g. systemd ``ExecStart``)
+    still work after async staging.
+    """
     src = copy_item["source"]
     dest = copy_item["dest"]
     recursive = copy_item.get("recursive", False)
@@ -441,15 +446,21 @@ def _async_shell_for_copy_step(
             lines.append(
                 f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(target)}"
             )
+        lines.append(
+            f"find {shlex.quote(dest_base)} -type f -name '*.sh' -exec chmod +x {{}} +"
+        )
         return "\n".join(lines) + "\n"
     url = generate_presigned_get_object_url(
         bucket, key_or_prefix, region=region, profile=profile
     )
-    return (
-        "set -eu\n"
-        f"install -d -m 0755 $(dirname {shlex.quote(dest)})\n"
-        f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(dest)}\n"
-    )
+    lines = [
+        "set -eu",
+        f"install -d -m 0755 $(dirname {shlex.quote(dest)})",
+        f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(dest)}",
+    ]
+    if dest.endswith(".sh"):
+        lines.append(f"chmod +x {shlex.quote(dest)}")
+    return "\n".join(lines) + "\n"
 
 
 def _async_shell_for_run_step(
