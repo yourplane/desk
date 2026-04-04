@@ -67,16 +67,19 @@ def route_sync_group() -> None:
 @click.option("--local-port-end", type=click.IntRange(1, 65535), default=None)
 @click.option(
     "--stack-name",
-    default="desk",
-    show_default=True,
-    help="CloudFormation stack name when auto-resolving DESK_DATA_BUCKET.",
+    default=None,
+    metavar="NAME",
+    help=(
+        "CloudFormation stack that exports DeskDataBucketName. "
+        "If omitted, tries desk-web then desk (web app stack first, then VPC stack name)."
+    ),
 )
 def route_sync_pull(
     wait: bool,
     wait_timeout: int,
     local_port_start: int | None,
     local_port_end: int | None,
-    stack_name: str,
+    stack_name: str | None,
 ) -> None:
     """Pull web routes from S3 and sync local SSM port forwards to match."""
     aws = get_desk_settings().aws_settings
@@ -86,7 +89,9 @@ def route_sync_pull(
     if not os.environ.get("DESK_DATA_BUCKET"):
         try:
             os.environ["DESK_DATA_BUCKET"] = get_desk_data_bucket(
-                stack_name=stack_name, region=region, profile=profile
+                stack_name=stack_name,
+                region=region,
+                profile=profile,
             )
         except RuntimeError as exc:
             raise click.ClickException(str(exc)) from exc

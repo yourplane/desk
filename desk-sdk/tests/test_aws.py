@@ -180,6 +180,72 @@ def test_get_desk_data_bucket_missing_output(mock_session: MagicMock) -> None:
 
 
 @patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_auto_prefers_desk_web(mock_session: MagicMock) -> None:
+    """When stack_name is None, desk-web is queried first."""
+    mock_cf = MagicMock()
+
+    def describe_stacks(StackName: str, **_kwargs: object) -> dict:
+        if StackName == "desk-web":
+            return {
+                "Stacks": [
+                    {
+                        "Outputs": [
+                            {"OutputKey": "DeskDataBucketName", "OutputValue": "app-data-bucket"},
+                        ],
+                    },
+                ],
+            }
+        raise AssertionError(f"unexpected stack {StackName!r}")
+
+    mock_cf.describe_stacks.side_effect = describe_stacks
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    result = get_desk_data_bucket(stack_name=None)
+    assert result == "app-data-bucket"
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_auto_falls_back_to_second_stack(mock_session: MagicMock) -> None:
+    """When desk-web has no DeskDataBucketName, the second candidate stack is used."""
+    mock_cf = MagicMock()
+
+    def describe_stacks(StackName: str, **_kwargs: object) -> dict:
+        if StackName == "desk-web":
+            return {"Stacks": [{"Outputs": []}]}
+        if StackName == "desk":
+            return {
+                "Stacks": [
+                    {
+                        "Outputs": [
+                            {"OutputKey": "DeskDataBucketName", "OutputValue": "second-stack-bucket"},
+                        ],
+                    },
+                ],
+            }
+        raise AssertionError(f"unexpected stack {StackName!r}")
+
+    mock_cf.describe_stacks.side_effect = describe_stacks
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    result = get_desk_data_bucket(stack_name=None)
+    assert result == "second-stack-bucket"
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_auto_raises_when_all_candidates_fail(mock_session: MagicMock) -> None:
+    """When no candidate stack exports DeskDataBucketName, raise a combined error."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.return_value = {"Stacks": [{"Outputs": []}]}
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    with pytest.raises(RuntimeError, match="Could not resolve DeskDataBucketName"):
+        get_desk_data_bucket(stack_name=None)
+
+
+@patch("desk.aws.boto3.Session")
 def test_get_latest_ubuntu_ami_success(mock_session: MagicMock) -> None:
     """get_latest_ubuntu_ami returns newest AMI ID."""
     mock_ec2 = MagicMock()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 import boto3
 
@@ -109,20 +110,20 @@ def get_desk_copy_bucket(
     return bucket
 
 
-def get_desk_data_bucket(
-    stack_name: str = "desk",
-    region: str | None = None,
-    profile: str | None = None,
+# Stacks to probe for ``DeskDataBucketName`` when no stack name is passed.
+# The VPC template (often deployed as ``desk``) exposes DeskCopyBucketName only; the web app
+# stack from ``cloudformation/main.yaml`` (default deploy name ``desk-web``) exports the data bucket.
+_DESK_DATA_BUCKET_STACK_CANDIDATES = ("desk-web", "desk")
+
+
+def _get_desk_data_bucket_from_stack(
+    stack_name: str,
+    *,
+    cf: Any,
+    resolved_region: str | None,
+    profile: str | None,
 ) -> str:
-    """Return the desk data S3 bucket name from the desk stack output.
-
-    Used for ``DESK_DATA_BUCKET`` (web routes registry, saved commands, etc.) when the
-    environment variable is unset. Raises RuntimeError if the stack or output is missing.
-    """
-    session = boto3.Session(region_name=region, profile_name=profile)
-    cf = session.client("cloudformation")
-    resolved_region = session.region_name
-
+    """Return DeskDataBucketName from a single stack or raise RuntimeError."""
     try:
         response = cf.describe_stacks(StackName=stack_name)
     except ClientError as e:
@@ -149,6 +150,50 @@ def get_desk_data_bucket(
             "Deploy desk infrastructure with a DataBucket, or set DESK_DATA_BUCKET."
         )
     return bucket
+
+
+def get_desk_data_bucket(
+    stack_name: str | None = None,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Return the desk data S3 bucket name from CloudFormation stack output ``DeskDataBucketName``.
+
+    Used for ``DESK_DATA_BUCKET`` (web routes registry, saved commands, etc.) when the
+    environment variable is unset.
+
+    If *stack_name* is ``None``, tries stacks in order: ``desk-web`` (web app / SAM stack), then
+    ``desk``. If *stack_name* is set, only that stack is queried (same behavior as ``desk copy``'s
+    ``--stack`` for a single stack).
+
+    Raises RuntimeError if the bucket cannot be resolved.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    cf = session.client("cloudformation")
+    resolved_region = session.region_name
+
+    if stack_name is not None:
+        return _get_desk_data_bucket_from_stack(
+            stack_name, cf=cf, resolved_region=resolved_region, profile=profile
+        )
+
+    last_exc: RuntimeError | None = None
+    for name in _DESK_DATA_BUCKET_STACK_CANDIDATES:
+        try:
+            return _get_desk_data_bucket_from_stack(
+                name, cf=cf, resolved_region=resolved_region, profile=profile
+            )
+        except RuntimeError as exc:
+            last_exc = exc
+            continue
+
+    assert last_exc is not None
+    tried = ", ".join(_DESK_DATA_BUCKET_STACK_CANDIDATES)
+    raise RuntimeError(
+        f"Could not resolve DeskDataBucketName (tried stacks: {tried}).\n"
+        f"Last error: {last_exc}\n"
+        "Set DESK_DATA_BUCKET, or pass --stack-name to the stack that exports DeskDataBucketName."
+    ) from last_exc
 
 
 def get_latest_ubuntu_ami(
