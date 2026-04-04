@@ -122,6 +122,21 @@ def _http_site_address(listen: str) -> str:
     return f"http://{listen}"
 
 
+def _http_site_block_address(listen: str) -> str:
+    """Site line for the Caddyfile opening block.
+
+    For ``127.0.0.1:<port>``, include ``localhost`` and ``[::1]`` with the same port so
+    ``curl http://localhost:8780/...`` matches (Host: localhost) when it resolves to IPv6,
+    not only ``curl http://127.0.0.1:8780/...``.
+    """
+    site = _http_site_address(listen)
+    m = re.fullmatch(r"http://127\.0\.0\.1:(\d+)", site)
+    if m:
+        port = m.group(1)
+        return f"http://127.0.0.1:{port}, http://localhost:{port}, http://[::1]:{port}"
+    return site
+
+
 def _reverse_proxy_block_lines(upstream: str) -> list[str]:
     """Shared reverse_proxy options for dev servers (Vite) and SSM port-forwarding.
 
@@ -146,7 +161,7 @@ def _active_routes() -> list[dict]:
 
 def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     admin = _admin_address()
-    site = _http_site_address(listen)
+    site = _http_site_block_address(listen)
     lines: list[str] = [
         "{",
         f"    admin {admin}",
