@@ -199,6 +199,64 @@ def _terminate_route_pid(pid: int, timeout_seconds: float = 5.0) -> bool:
     return not _pid_alive(pid)
 
 
+def _resolve_instance_id(workstation: str, region: str | None, profile: str | None) -> str:
+    """Resolve workstation name to EC2 instance id (raises ValueError if unknown)."""
+    return resolve_workstation(workstation, region=region, profile=profile)
+
+
+def _ensure_instance_ssm_ready(
+    instance_id: str,
+    *,
+    wait: bool,
+    wait_timeout: int,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Require SSM agent ready, optionally waiting (same behavior as ``route add``)."""
+    if not is_ssm_ready(instance_id, region=region, profile=profile):
+        if not wait:
+            raise click.ClickException(
+                f"Instance {instance_id} is not SSM-ready. Retry with --wait or once it is online."
+            )
+        if not wait_for_ssm_ready(instance_id, region=region, profile=profile, timeout=wait_timeout):
+            raise click.ClickException(
+                f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
+            )
+
+
+def _new_route_record(
+    *,
+    workstation: str,
+    remote_port: int,
+    instance_id: str,
+    routes_for_local_port: list[dict[str, Any]],
+    port_range_start: int,
+    port_range_end: int,
+    region: str | None,
+    profile: str | None,
+) -> dict[str, Any]:
+    """Pick a local port, start the SSM forward, return a route dict (same as ``route add``)."""
+    local_port = _pick_local_port(routes_for_local_port, port_range_start, port_range_end)
+    pid, log_path = _start_forward_process(
+        instance_id=instance_id,
+        workstation=workstation,
+        remote_port=remote_port,
+        local_port=local_port,
+        region=region,
+        profile=profile,
+    )
+    return {
+        "workstation": workstation,
+        "instance_id": instance_id,
+        "remote_port": remote_port,
+        "local_port": local_port,
+        "pid": pid,
+        "created_at": int(time.time()),
+        "bind_host": "127.0.0.1",
+        "log_path": log_path,
+    }
+
+
 @click.group("route")
 def route_group() -> None:
     """Manage persistent SSM port forwarding routes."""
@@ -245,43 +303,32 @@ def route_add(
         )
 
     try:
-        instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        instance_id = _resolve_instance_id(workstation, region, profile)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
 
-    if not is_ssm_ready(instance_id, region=region, profile=profile):
-        if not wait:
-            raise click.ClickException(
-                f"Instance {instance_id} is not SSM-ready. Retry with --wait or once it is online."
-            )
-        if not wait_for_ssm_ready(instance_id, region=region, profile=profile, timeout=wait_timeout):
-            raise click.ClickException(
-                f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
-            )
-
-    local_port = _pick_local_port(routes, start, end)
-    pid, log_path = _start_forward_process(
-        instance_id=instance_id,
-        workstation=workstation,
-        remote_port=port,
-        local_port=local_port,
+    _ensure_instance_ssm_ready(
+        instance_id,
+        wait=wait,
+        wait_timeout=wait_timeout,
         region=region,
         profile=profile,
     )
-    route = {
-        "workstation": workstation,
-        "instance_id": instance_id,
-        "remote_port": port,
-        "local_port": local_port,
-        "pid": pid,
-        "created_at": int(time.time()),
-        "bind_host": "127.0.0.1",
-        "log_path": log_path,
-    }
+
+    route = _new_route_record(
+        workstation=workstation,
+        remote_port=port,
+        instance_id=instance_id,
+        routes_for_local_port=routes,
+        port_range_start=start,
+        port_range_end=end,
+        region=region,
+        profile=profile,
+    )
     routes.append(route)
     _save_routes(routes)
     _notify_web_router_after_route_change()
-    click.echo(f"Added route {workstation}:{port} -> 127.0.0.1:{local_port} (pid {pid})")
+    click.echo(f"Added route {workstation}:{port} -> 127.0.0.1:{route['local_port']} (pid {route['pid']})")
 
 
 @route_group.command("remove")
@@ -367,31 +414,17 @@ def route_refresh(
         port = int(r.get("remote_port", 0) or 0)
 
         try:
-            instance_id = resolve_workstation(ws, region=region, profile=profile)
+            instance_id = _resolve_instance_id(ws, region, profile)
         except ValueError as exc:
             failures.append((ws, port, str(exc)))
             new_routes.append(r)
             continue
 
-        if not is_ssm_ready(instance_id, region=region, profile=profile):
-            if not wait:
-                msg = f"Instance {instance_id} is not SSM-ready. Retry with --wait or once it is online."
-                failures.append((ws, port, msg))
-                new_routes.append(r)
-                continue
-            if not wait_for_ssm_ready(instance_id, region=region, profile=profile, timeout=wait_timeout):
-                msg = f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
-                failures.append((ws, port, msg))
-                new_routes.append(r)
-                continue
-
         try:
-            local_port = _pick_local_port(new_routes, start, end)
-            pid, log_path = _start_forward_process(
-                instance_id=instance_id,
-                workstation=ws,
-                remote_port=port,
-                local_port=local_port,
+            _ensure_instance_ssm_ready(
+                instance_id,
+                wait=wait,
+                wait_timeout=wait_timeout,
                 region=region,
                 profile=profile,
             )
@@ -400,19 +433,25 @@ def route_refresh(
             new_routes.append(r)
             continue
 
-        route = {
-            "workstation": ws,
-            "instance_id": instance_id,
-            "remote_port": port,
-            "local_port": local_port,
-            "pid": pid,
-            "created_at": int(time.time()),
-            "bind_host": "127.0.0.1",
-            "log_path": log_path,
-        }
+        try:
+            route = _new_route_record(
+                workstation=ws,
+                remote_port=port,
+                instance_id=instance_id,
+                routes_for_local_port=new_routes,
+                port_range_start=start,
+                port_range_end=end,
+                region=region,
+                profile=profile,
+            )
+        except click.ClickException as exc:
+            failures.append((ws, port, str(exc)))
+            new_routes.append(r)
+            continue
+
         new_routes.append(route)
         refreshed += 1
-        click.echo(f"Refreshed route {ws}:{port} -> 127.0.0.1:{local_port} (pid {pid})")
+        click.echo(f"Refreshed route {ws}:{port} -> 127.0.0.1:{route['local_port']} (pid {route['pid']})")
 
     if refreshed:
         _save_routes(new_routes)
