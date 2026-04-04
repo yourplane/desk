@@ -20,6 +20,7 @@ from desk.aws import (
     get_latest_ami_by_name_prefix,
     get_latest_ubuntu_ami,
     get_running_workstations_using_key,
+    get_ssm_command,
     is_ssm_ready,
     list_amis,
     list_ec2_key_pairs,
@@ -851,3 +852,37 @@ def test_list_amis_all_owned(mock_session: MagicMock) -> None:
     assert result[0].image_id == "ami-any"
     assert result[0].source_instance is None
     mock_ec2.describe_images.assert_called_once_with(Owners=["self"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_ssm_command_uses_list_commands(mock_session: MagicMock) -> None:
+    """get_ssm_command uses list_commands(CommandId=) when get_command is unavailable."""
+    mock_ssm = MagicMock()
+    mock_ssm.list_commands.return_value = {
+        "Commands": [
+            {
+                "CommandId": "cid-1",
+                "DocumentName": "AWS-RunShellScript",
+                "Comment": "desk-ami-build:test:0:run",
+                "Parameters": {"commands": ["echo hi"]},
+            }
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ssm
+
+    cmd = get_ssm_command("cid-1", region="us-east-1", profile=None)
+
+    assert cmd["DocumentName"] == "AWS-RunShellScript"
+    assert cmd["Parameters"]["commands"] == ["echo hi"]
+    mock_ssm.list_commands.assert_called_once_with(CommandId="cid-1", MaxResults=1)
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_ssm_command_empty_raises(mock_session: MagicMock) -> None:
+    """get_ssm_command raises when list_commands returns no rows."""
+    mock_ssm = MagicMock()
+    mock_ssm.list_commands.return_value = {"Commands": []}
+    mock_session.return_value.client.return_value = mock_ssm
+
+    with pytest.raises(RuntimeError, match="No SSM command found"):
+        get_ssm_command("missing", region="us-east-1", profile=None)

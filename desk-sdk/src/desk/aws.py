@@ -616,7 +616,7 @@ def send_ssm_command(
     Send a command to an instance via SSM. Returns the command ID.
 
     Optional ``comment`` is stored on the command (max 100 chars per AWS) for
-    correlation in ``list_commands`` / ``get_command``.
+    correlation in ``list_commands``.
     """
     session = boto3.Session(region_name=region, profile_name=profile)
     ssm = session.client("ssm")
@@ -643,11 +643,17 @@ def get_ssm_command(
     region: str | None = None,
     profile: str | None = None,
 ) -> dict:
-    """Return the SSM ``Command`` object from ``get_command`` (includes Comment, Parameters)."""
+    """Return the SSM ``Command`` object (Comment, Parameters, DocumentName, …).
+
+    Uses ``list_commands(CommandId=…)`` because some boto3 builds omit ``get_command``.
+    """
     session = boto3.Session(region_name=region, profile_name=profile)
     ssm = session.client("ssm")
-    resp = ssm.get_command(CommandId=command_id)
-    return resp["Command"]
+    resp = ssm.list_commands(CommandId=command_id, MaxResults=1)
+    commands = resp.get("Commands") or []
+    if not commands:
+        raise RuntimeError(f"No SSM command found for command_id={command_id!r}.")
+    return commands[0]
 
 
 def list_command_invocations_for_instance(

@@ -468,7 +468,7 @@ def _map_invocation_to_step_index(
 ) -> int | None:
     try:
         cmd_doc = get_ssm_command(command_id, region=region, profile=profile)
-    except ClientError:
+    except (ClientError, RuntimeError):
         return None
     if cmd_doc.get("DocumentName") != "AWS-RunShellScript":
         return None
