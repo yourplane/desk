@@ -173,6 +173,12 @@ def _start_forward_process(
     return proc.pid, log_path
 
 
+def _notify_web_router_after_route_change() -> None:
+    from desk_cli.commands.web_router import refresh_web_router_after_route_change
+
+    refresh_web_router_after_route_change()
+
+
 def _terminate_route_pid(pid: int, timeout_seconds: float = 5.0) -> bool:
     if not _pid_alive(pid):
         return False
@@ -274,6 +280,7 @@ def route_add(
     }
     routes.append(route)
     _save_routes(routes)
+    _notify_web_router_after_route_change()
     click.echo(f"Added route {workstation}:{port} -> 127.0.0.1:{local_port} (pid {pid})")
 
 
@@ -295,6 +302,7 @@ def route_remove(workstation: str, port: int) -> None:
 
     updated = [r for r in routes if not (r.get("workstation") == workstation and r.get("remote_port") == port)]
     _save_routes(updated)
+    _notify_web_router_after_route_change()
     if was_active:
         click.echo(f"Removed route {workstation}:{port}.")
     else:
