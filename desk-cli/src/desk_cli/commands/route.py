@@ -309,6 +309,122 @@ def route_remove(workstation: str, port: int) -> None:
         click.echo(f"Removed stale route {workstation}:{port}.")
 
 
+@route_group.command("clear")
+def route_clear() -> None:
+    """Remove stale routes (dead port-forward processes) from local state."""
+    routes = _load_routes()
+    active = [r for r in routes if _route_status(r) == "active"]
+    removed = len(routes) - len(active)
+    if removed == 0:
+        click.echo("No stale routes.")
+        return
+    _save_routes(active)
+    _notify_web_router_after_route_change()
+    click.echo(f"Removed {removed} stale route(s).")
+
+
+@route_group.command("refresh")
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait for instance to be SSM-ready if not already.",
+)
+@click.option(
+    "--wait-timeout",
+    default=300,
+    show_default=True,
+    help="Seconds to wait for SSM before failing (per stale route).",
+)
+@click.option("--local-port-start", type=click.IntRange(1, 65535), default=None, help="Local port range start.")
+@click.option("--local-port-end", type=click.IntRange(1, 65535), default=None, help="Local port range end.")
+def route_refresh(
+    wait: bool,
+    wait_timeout: int,
+    local_port_start: int | None,
+    local_port_end: int | None,
+) -> None:
+    """Restart SSM port forwards for routes whose process has exited (stale)."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+    start, end = _parse_port_range(local_port_start, local_port_end)
+    routes = _load_routes()
+    if not any(_route_status(r) == "stale" for r in routes):
+        click.echo("No stale routes.")
+        return
+
+    new_routes: list[dict[str, Any]] = []
+    failures: list[tuple[str, int, str]] = []
+    refreshed = 0
+
+    for r in routes:
+        if _route_status(r) == "active":
+            new_routes.append(r)
+            continue
+
+        ws = str(r.get("workstation", ""))
+        port = int(r.get("remote_port", 0) or 0)
+
+        try:
+            instance_id = resolve_workstation(ws, region=region, profile=profile)
+        except ValueError as exc:
+            failures.append((ws, port, str(exc)))
+            new_routes.append(r)
+            continue
+
+        if not is_ssm_ready(instance_id, region=region, profile=profile):
+            if not wait:
+                msg = f"Instance {instance_id} is not SSM-ready. Retry with --wait or once it is online."
+                failures.append((ws, port, msg))
+                new_routes.append(r)
+                continue
+            if not wait_for_ssm_ready(instance_id, region=region, profile=profile, timeout=wait_timeout):
+                msg = f"Instance {instance_id} did not become SSM-ready within {wait_timeout}s."
+                failures.append((ws, port, msg))
+                new_routes.append(r)
+                continue
+
+        try:
+            local_port = _pick_local_port(new_routes, start, end)
+            pid, log_path = _start_forward_process(
+                instance_id=instance_id,
+                workstation=ws,
+                remote_port=port,
+                local_port=local_port,
+                region=region,
+                profile=profile,
+            )
+        except click.ClickException as exc:
+            failures.append((ws, port, str(exc)))
+            new_routes.append(r)
+            continue
+
+        route = {
+            "workstation": ws,
+            "instance_id": instance_id,
+            "remote_port": port,
+            "local_port": local_port,
+            "pid": pid,
+            "created_at": int(time.time()),
+            "bind_host": "127.0.0.1",
+            "log_path": log_path,
+        }
+        new_routes.append(route)
+        refreshed += 1
+        click.echo(f"Refreshed route {ws}:{port} -> 127.0.0.1:{local_port} (pid {pid})")
+
+    if refreshed:
+        _save_routes(new_routes)
+        _notify_web_router_after_route_change()
+
+    for ws, port, msg in failures:
+        click.echo(click.style(f"Failed to refresh {ws}:{port}: {msg}", fg="red"), err=True)
+
+    if failures:
+        raise click.ClickException(f"Failed to refresh {len(failures)} route(s).")
+
+
 @route_group.command("list")
 def route_list() -> None:
     """List configured routes and process status."""

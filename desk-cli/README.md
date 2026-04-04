@@ -36,3 +36,6 @@ If something still blocks requests (e.g. Vite host checks), preserve `Host` is a
 - **Two Caddy processes:** If behavior is inconsistent, check `ps aux | grep caddy` — a system service may be using a different config than desk’s instance.
 
 If `/health` works but routed paths 404, **`desk route list`** may show **stale** forwards (dead PID), or run **`desk web-router sync`**. The Caddyfile only includes **active** routes.
+
+- **`desk route clear`** — Deletes stale route rows from local state (no live process to stop). Updates the web-router config when anything was removed.
+- **`desk route refresh`** — Starts new SSM port forwards for stale routes (same options as `desk route add` for wait timing and local port range). If one route fails (e.g. workstation name no longer resolves), it continues with the others and exits non-zero if any failed; successfully refreshed routes are saved.
