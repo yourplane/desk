@@ -347,24 +347,17 @@ def test_desk_ami_build_missing_config() -> None:
     assert "No such file" in result.stderr or "nonexistent" in result.stderr.lower()
 
 
-@patch("desk_cli.commands.ami.terminate_instance")
-@patch("desk_cli.commands.ami.wait_for_ami_available", return_value=True)
-@patch("desk_cli.commands.ami.create_ami", return_value="ami-12345")
-@patch("desk_cli.commands.ami.wait_for_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.resolve_workstation", return_value="i-builder")
-@patch("desk_cli.commands.ami.create_workstation")
-@patch("desk_cli.commands.ami.get_latest_ubuntu_ami", return_value="ami-ubuntu")
+@patch("desk_cli.commands.ami._drive_ami_build_run_loop")
+@patch(
+    "desk_cli.commands.ami._stage_ami_build_to_s3",
+    return_value=("20260101-010101-abcdef01", "test-bucket", "ami-builds/20260101-010101-abcdef01/"),
+)
 def test_ami_build_uses_sdk_instead_of_nested_desk_process(
-    _mock_latest: object,
-    mock_create_ws: object,
-    _mock_resolve: object,
-    _mock_wait_ssm: object,
-    _mock_create_ami: object,
-    _mock_wait_ami: object,
-    _mock_terminate: object,
+    mock_stage: object,
+    mock_drive: object,
     tmp_path,
 ) -> None:
-    """AMI build should call SDK helpers directly."""
+    """AMI build run stages to S3 and drives the async step loop (no nested desk process)."""
     import json
 
     config_path = tmp_path / "ami-config.json"
@@ -374,7 +367,10 @@ def test_ami_build_uses_sdk_instead_of_nested_desk_process(
     result = runner.invoke(cli, ["ami", "build", "run", str(config_path)])
 
     assert result.exit_code == 0
-    mock_create_ws.assert_called_once()
+    mock_stage.assert_called_once()
+    mock_drive.assert_called_once_with(
+        "20260101-010101-abcdef01", stack="desk", no_wait=False
+    )
 
 
 def test_desk_ami_build_invalid_config(tmp_path: object) -> None:
@@ -645,6 +641,7 @@ def test_ami_build_step_evaluates_recipe_once(
         steps=({"run": "echo hello"},),
         blocked=False,
         blocked_step_index=None,
+        blocked_command_id=None,
         last_error=None,
         in_progress_step_index=None,
         in_progress_command_id=None,
@@ -813,6 +810,7 @@ def test_ami_build_step_retry_after_failure(
         steps=({"run": "echo hi"},),
         blocked=True,
         blocked_step_index=0,
+        blocked_command_id="cmd-failed-1",
         last_error="status='Failed'",
         in_progress_step_index=None,
         in_progress_command_id=None,
@@ -856,6 +854,7 @@ def test_ami_build_step_retry_requires_failed_step(
         steps=({"run": "echo hi"},),
         blocked=False,
         blocked_step_index=None,
+        blocked_command_id=None,
         last_error=None,
         in_progress_step_index=None,
         in_progress_command_id=None,
@@ -928,6 +927,7 @@ def test_ami_build_step_after_recipe_calls_create_ami(
         steps=({"run": "echo hi"},),
         blocked=False,
         blocked_step_index=None,
+        blocked_command_id=None,
         last_error=None,
         in_progress_step_index=None,
         in_progress_command_id=None,
@@ -982,6 +982,7 @@ def test_ami_build_step_terminates_builder_when_ami_available(
         steps=({"run": "echo hi"},),
         blocked=False,
         blocked_step_index=None,
+        blocked_command_id=None,
         last_error=None,
         in_progress_step_index=None,
         in_progress_command_id=None,
@@ -1029,6 +1030,7 @@ def test_ami_build_status_shows_post_recipe_ami_pending(
         steps=({"run": "echo hi"},),
         blocked=False,
         blocked_step_index=None,
+        blocked_command_id=None,
         last_error=None,
         in_progress_step_index=None,
         in_progress_command_id=None,
