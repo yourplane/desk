@@ -20,7 +20,7 @@ Copy `config.example` to `~/.config/desk/config.ini` (or set `DESK_CONFIG`).
 Many dev servers (bundlers, API gateways, etc.) issue requests to **root paths** (`/foo`, WebSocket upgrades on `/`, …) instead of under `/<workstation>/<port>/`. The generated Caddyfile adds **fallback** rules:
 
 - **One active route:** every path except `/health` is proxied to that upstream (so root-absolute URLs and WebSockets reach the same process as the prefixed app).
-- **Several active routes:** each fallback requires a **`Referer`** header containing that route’s URL prefix (the page you opened), and excludes other routes’ `/prefix` paths so traffic goes to the right port-forward.
+- **Several active routes:** each fallback matches a **`Referer`** containing that route’s URL prefix **or** a short-lived **`desk_route`** cookie (set when you load the prefixed app). The cookie is needed because ES-module requests (e.g. from `/@vite/client`) often send `Referer: …/@vite/…`, not the document URL, so Referer alone is not enough for `/node_modules/…` and similar paths.
 
 If something still blocks requests (e.g. Vite host checks), preserve `Host` is already set; you may still need `server.allowedHosts: true` (or similar) in the dev server config.
 

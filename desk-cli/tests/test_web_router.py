@@ -196,6 +196,51 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert pid_file.read_text().strip() == "4242"
 
 
+@patch("desk_cli.commands.web_router._start_caddy_background", return_value=4242)
+@patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
+@patch("desk_cli.commands.web_router._systemd_active", return_value=False)
+def test_desk_web_router_start_multi_route_sets_route_cookie_and_cookie_fallback(
+    _mock_sysd: object,
+    _mock_which: object,
+    _mock_bg: object,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Multiple routes: strip_prefix responses set desk_route cookie; fallback has Referer + Cookie matchers."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    routes_dir = tmp_path / "routes"
+    routes_dir.mkdir(parents=True)
+    (routes_dir / "routes.json").write_text(
+        json.dumps(
+            [
+                {
+                    "workstation": "dev",
+                    "remote_port": 5001,
+                    "local_port": 45001,
+                    "pid": 111,
+                },
+                {
+                    "workstation": "dev",
+                    "remote_port": 5002,
+                    "local_port": 45002,
+                    "pid": 112,
+                },
+            ]
+        )
+    )
+
+    runner = CliRunner()
+    with patch("desk_cli.commands.route._pid_alive", return_value=True):
+        result = runner.invoke(cli, ["web-router", "start"])
+
+    assert result.exit_code == 0
+    text = (tmp_path / "web-router" / "Caddyfile").read_text()
+    assert "header_down +Set-Cookie" in text
+    assert "desk_route=dev_5001" in text or "desk_route=dev_5002" in text
+    assert "desk_root_fallback_ck_dev_5001" in text
+    assert "header Cookie *desk_route=dev_5001*" in text
+
+
 @patch("desk_cli.commands.web_router._which_caddy", return_value=None)
 def test_desk_web_router_start_requires_caddy(_mock: object, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))

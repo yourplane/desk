@@ -137,21 +137,39 @@ def _http_site_block_address(listen: str) -> str:
     return site
 
 
-def _reverse_proxy_block_lines(upstream: str) -> list[str]:
+# Set on HTML/asset responses from strip_prefix routes so root-absolute follow-up requests
+# (ESM imports from /@vite/client, etc.) can be routed when Referer is not the document URL.
+_ROUTE_COOKIE_NAME = "desk_route"
+
+
+def _reverse_proxy_block_lines(upstream: str, *, route_cookie: str | None = None) -> list[str]:
     """Shared reverse_proxy options for dev servers and SSM port-forwarding.
 
     Caddy's default is to set Host to the upstream address; that breaks many dev servers’
     host checks and URL generation when clients connect via desk route (e.g. Host: localhost:45001).
+
+    When ``route_cookie`` is set (multi-route), append ``Set-Cookie`` so later requests to ``/…``
+    without the desk prefix still hit the right upstream.
     """
-    return [
+    lines = [
         f"        reverse_proxy {upstream} {{",
         "            flush_interval -1",
         "            header_up Host {http.request.host}",
-        "            transport http {",
-        "                versions 1.1",
-        "            }",
-        "        }",
     ]
+    if route_cookie is not None:
+        lines.append(
+            f'            header_down +Set-Cookie "{_ROUTE_COOKIE_NAME}={route_cookie}; Path=/; '
+            f'Max-Age=86400; SameSite=Lax"'
+        )
+    lines.extend(
+        [
+            "            transport http {",
+            "                versions 1.1",
+            "            }",
+            "        }",
+        ]
+    )
+    return lines
 
 
 def _matcher_safe_name(workstation: str, remote_port: int) -> str:
@@ -159,17 +177,30 @@ def _matcher_safe_name(workstation: str, remote_port: int) -> str:
     return safe or "route"
 
 
-def _append_referer_fallback_blocks(lines: list[str], route_entries: list[tuple[str, str, str]]) -> None:
+def _append_root_fallback_blocks(lines: list[str], route_entries: list[tuple[str, str, str]]) -> None:
     """Proxy root-absolute URLs and WebSockets for apps that use ``/…`` instead of under the desk prefix.
 
     route_entries: (path_prefix, upstream host:port, safe name per route).
 
-    One route: everything except ``/health`` goes to that upstream. Several routes: each matcher
-    requires ``Referer`` to contain this route's prefix and excludes other routes' ``/prefix`` paths.
+    One route: everything except ``/health`` goes to that upstream.
+
+    Several routes: match ``Referer`` containing the desk prefix *or* cookie ``desk_route=<safe>``
+    (set on strip_prefix responses). The latter covers ESM requests whose Referer is ``/@vite/…``
+    instead of the document URL.
     """
     if not route_entries:
         return
     all_prefixes = [p for p, _, _ in route_entries]
+
+    def _excludes_others(i: int) -> list[str]:
+        out: list[str] = ["        not path /health"]
+        for j, other in enumerate(all_prefixes):
+            if j == i:
+                continue
+            out.append(f"        not path {other}")
+            out.append(f"        not path {other}/*")
+        return out
+
     if len(route_entries) == 1:
         _prefix, upstream, safe = route_entries[0]
         lines.append(
@@ -185,19 +216,21 @@ def _append_referer_fallback_blocks(lines: list[str], route_entries: list[tuple[
         return
 
     lines.append(
-        "    # Multiple routes: use Referer (page under a desk prefix) for non-prefixed paths."
+        "    # Multiple routes: Referer or desk_route cookie (see strip_prefix) for non-prefixed paths."
     )
     for i, (prefix, upstream, safe) in enumerate(route_entries):
-        lines.append(f"    @desk_root_fallback_{safe} {{")
-        lines.append("        not path /health")
-        for j, other in enumerate(all_prefixes):
-            if j == i:
-                continue
-            lines.append(f"        not path {other}")
-            lines.append(f"        not path {other}/*")
+        lines.append(f"    @desk_root_fallback_ref_{safe} {{")
+        lines.extend(_excludes_others(i))
         lines.append(f"        header Referer *{prefix}*")
         lines.append("    }")
-        lines.append(f"    handle @desk_root_fallback_{safe} {{")
+        lines.append(f"    handle @desk_root_fallback_ref_{safe} {{")
+        lines.extend(_reverse_proxy_block_lines(upstream))
+        lines.append("    }")
+        lines.append(f"    @desk_root_fallback_ck_{safe} {{")
+        lines.extend(_excludes_others(i))
+        lines.append(f"        header Cookie *{_ROUTE_COOKIE_NAME}={safe}*")
+        lines.append("    }")
+        lines.append(f"    handle @desk_root_fallback_ck_{safe} {{")
         lines.extend(_reverse_proxy_block_lines(upstream))
         lines.append("    }")
         lines.append("")
@@ -238,6 +271,9 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
             continue
         safe = _matcher_safe_name(str(ws), remote)
         route_entries.append((prefix, f"{bind}:{local}", safe))
+
+    multi_route = len(route_entries) > 1
+    for prefix, upstream, safe in route_entries:
         # Exact /prefix -> trailing slash (handle_path /prefix alone matches ONLY exact /prefix in JSON).
         lines.append(f"    handle {prefix} {{")
         lines.append(f"        redir {prefix}/ 308")
@@ -246,11 +282,15 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         lines.append(f"    @{matcher} path {prefix} {prefix}/*")
         lines.append(f"    handle @{matcher} {{")
         lines.append(f"        uri strip_prefix {prefix}")
-        lines.extend(_reverse_proxy_block_lines(f"{bind}:{local}"))
+        lines.extend(
+            _reverse_proxy_block_lines(
+                upstream, route_cookie=safe if multi_route else None
+            )
+        )
         lines.append("    }")
         lines.append("")
 
-    _append_referer_fallback_blocks(lines, route_entries)
+    _append_root_fallback_blocks(lines, route_entries)
 
     lines.append("    handle /health {")
     lines.append('        respond "ok" 200')
