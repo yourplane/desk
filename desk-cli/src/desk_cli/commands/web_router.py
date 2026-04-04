@@ -154,6 +154,80 @@ def _reverse_proxy_block_lines(upstream: str) -> list[str]:
     ]
 
 
+def _matcher_safe_name(workstation: str, remote_port: int) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9]", "_", f"{workstation}_{remote_port}").strip("_")
+    return safe or "route"
+
+
+def _append_vite_root_pass_through(
+    lines: list[str],
+    *,
+    upstream: str,
+    safe: str,
+    referer_prefix: str | None,
+) -> None:
+    """Proxy Vite root-absolute paths. With several desk routes, Referer picks the upstream."""
+    ref = f"        header Referer *{referer_prefix}*" if referer_prefix else None
+    lines.append(f"    @desk_vite_paths_{safe} {{")
+    lines.append("        path /@vite/* /@id/* /@fs/* /src/* /node_modules/*")
+    if ref:
+        lines.append(ref)
+    lines.append("    }")
+    lines.append(f"    handle @desk_vite_paths_{safe} {{")
+    lines.extend(_reverse_proxy_block_lines(upstream))
+    lines.append("    }")
+    lines.append(f"    @desk_vite_react_{safe} {{")
+    lines.append("        path_regexp ^/@react-refresh($|\\?)")
+    if ref:
+        lines.append(ref)
+    lines.append("    }")
+    lines.append(f"    handle @desk_vite_react_{safe} {{")
+    lines.extend(_reverse_proxy_block_lines(upstream))
+    lines.append("    }")
+
+
+def _append_vite_hmr_websocket(
+    lines: list[str],
+    *,
+    upstream: str,
+    safe: str,
+    referer_prefix: str | None,
+) -> None:
+    """Vite HMR uses ws(s)://<router>/?token=… on path /. Proxy the upgrade to the dev server."""
+    lines.append(f"    @desk_hmr_{safe} {{")
+    lines.append("        path /")
+    lines.append("        header Connection *Upgrade*")
+    lines.append("        header Upgrade websocket")
+    if referer_prefix is not None:
+        lines.append(f"        header Referer *{referer_prefix}*")
+    lines.append("    }")
+    lines.append(f"    handle @desk_hmr_{safe} {{")
+    lines.extend(_reverse_proxy_block_lines(upstream))
+    lines.append("    }")
+
+
+def _append_vite_dev_server_blocks(lines: list[str], route_entries: list[tuple[str, str, str]]) -> None:
+    """route_entries: (path_prefix, upstream host:port, safe name per route)."""
+    if not route_entries:
+        return
+    if len(route_entries) == 1:
+        _prefix, upstream, safe = route_entries[0]
+        lines.append(
+            "    # Root-absolute dev paths (Vite) and HMR WebSocket on /?token= (single upstream)."
+        )
+        _append_vite_root_pass_through(lines, upstream=upstream, safe=safe, referer_prefix=None)
+        _append_vite_hmr_websocket(lines, upstream=upstream, safe=safe, referer_prefix=None)
+        lines.append("")
+        return
+    lines.append(
+        "    # Several routes share / @ /@vite/…; Referer (page URL) selects the upstream."
+    )
+    for _prefix, upstream, safe in route_entries:
+        _append_vite_root_pass_through(lines, upstream=upstream, safe=safe, referer_prefix=_prefix)
+        _append_vite_hmr_websocket(lines, upstream=upstream, safe=safe, referer_prefix=_prefix)
+        lines.append("")
+
+
 def _active_routes() -> list[dict]:
     routes = _load_routes()
     return [r for r in routes if _route_status(r) == "active"]
@@ -175,7 +249,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         "    }",
         "",
     ]
-    proxied_upstream: list[tuple[str, int]] = []
+    route_entries: list[tuple[str, str, str]] = []
     for route in routes:
         ws = route.get("workstation", "")
         remote = int(route.get("remote_port", 0) or 0)
@@ -187,12 +261,12 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
             prefix = _path_prefix(ws, remote)
         except click.ClickException:
             continue
-        proxied_upstream.append((bind, local))
+        safe = _matcher_safe_name(str(ws), remote)
+        route_entries.append((prefix, f"{bind}:{local}", safe))
         # Exact /prefix -> trailing slash (handle_path /prefix alone matches ONLY exact /prefix in JSON).
         lines.append(f"    handle {prefix} {{")
         lines.append(f"        redir {prefix}/ 308")
         lines.append("    }")
-        safe = re.sub(r"[^a-zA-Z0-9]", "_", f"{ws}_{remote}").strip("_") or "route"
         matcher = f"desk_route_{safe}"
         lines.append(f"    @{matcher} path {prefix} {prefix}/*")
         lines.append(f"    handle @{matcher} {{")
@@ -201,27 +275,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         lines.append("    }")
         lines.append("")
 
-    # Vite (and similar dev servers) emit root-absolute URLs (/src/..., /@vite/...). With a single
-    # active route, forward those to the same upstream so the page is not blank.
-    if len(proxied_upstream) == 1:
-        b, loc = proxied_upstream[0]
-        up = f"{b}:{loc}"
-        lines.append("    # Single active route: root-absolute dev asset paths (e.g. Vite).")
-        for pattern in (
-            "/@vite/*",
-            "/@id/*",
-            "/@fs/*",
-            "/src/*",
-            "/node_modules/*",
-        ):
-            lines.append(f"    handle {pattern} {{")
-            lines.extend(_reverse_proxy_block_lines(up))
-            lines.append("    }")
-        lines.append("    @desk_web_router_react_refresh path_regexp ^/@react-refresh($|\\?)")
-        lines.append("    handle @desk_web_router_react_refresh {")
-        lines.extend(_reverse_proxy_block_lines(up))
-        lines.append("    }")
-        lines.append("")
+    _append_vite_dev_server_blocks(lines, route_entries)
 
     lines.append("    handle /health {")
     lines.append('        respond "ok" 200')
