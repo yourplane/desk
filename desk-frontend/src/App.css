@@ -401,6 +401,47 @@
   border-bottom-color: var(--accent);
 }
 
+.workstations-subnav {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  border-bottom: 2px solid var(--border);
+}
+
+.workstations-subnav-tab {
+  padding: 0.45rem 0.85rem;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.workstations-subnav-tab:hover {
+  color: var(--text);
+}
+
+.workstations-subnav-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.workstations-tab-panel {
+  min-height: 2rem;
+}
+
+.web-routes-tab-intro {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 .reaper-description {
   margin: 0 0 1rem;
   color: var(--text-muted);

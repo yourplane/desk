@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  addWebRoute,
   createWorkstation,
-  fetchWebRoutesAll,
   listInstances,
-  removeWebRoute,
   setAutoStop,
   startInstance,
   stopInstance,
   killInstance,
   type Instance,
 } from '../api/client'
-import { isAuthEnabled, logout } from '../auth'
+import { logout } from '../auth'
+import { instanceKey, stateColor } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
@@ -51,16 +49,6 @@ function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: 
   }
 }
 
-function stateColor(state: string): string {
-  switch (state) {
-    case 'running': return 'var(--state-running)'
-    case 'pending': return 'var(--state-pending)'
-    case 'stopped': return 'var(--state-stopped)'
-    case 'stopping': return 'var(--state-pending)'
-    default: return 'var(--state-default)'
-  }
-}
-
 function buildDurationFromTotalMinutes(totalMinutes: number): string {
   const clamped = Math.max(1, Math.floor(totalMinutes))
   const hours = Math.floor(clamped / 60)
@@ -68,10 +56,6 @@ function buildDurationFromTotalMinutes(totalMinutes: number): string {
   if (hours > 0 && minutes > 0) return `${hours}h${minutes}m`
   if (hours > 0) return `${hours}h`
   return `${minutes}m`
-}
-
-function instanceKey(inst: Instance): string {
-  return inst.name && inst.name !== '-' ? inst.name : inst.instance_id
 }
 
 function toDatetimeLocalValue(isoUtc: string | null): string {
@@ -98,9 +82,6 @@ export function InstanceList() {
   const [createInstanceType, setCreateInstanceType] = useState('t3.medium')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
-  const [webRoutesByName, setWebRoutesByName] = useState<Record<string, number[]>>({})
-  const [webRoutesBusy, setWebRoutesBusy] = useState<string | null>(null)
-  const [portDraftByKey, setPortDraftByKey] = useState<Record<string, string>>({})
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const loadInFlightRef = useRef(false)
   const actingRef = useRef<string | null>(null)
@@ -115,15 +96,8 @@ export function InstanceList() {
       setError(null)
     }
     try {
-      const [list, webRes] = await Promise.all([
-        listInstances(),
-        fetchWebRoutesAll().catch((e) => {
-          console.error('fetchWebRoutesAll failed:', e)
-          return { routes: {} as Record<string, number[]> }
-        }),
-      ])
+      const list = await listInstances()
       setInstances(list)
-      setWebRoutesByName(webRes.routes ?? {})
       setRefreshError(null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -292,39 +266,6 @@ export function InstanceList() {
     }
   }
 
-  const onAddWebRoute = async (key: string) => {
-    const raw = (portDraftByKey[key] ?? '').trim()
-    const port = parseInt(raw, 10)
-    if (Number.isNaN(port) || port < 1 || port > 65535) {
-      setError('Enter a valid port (1–65535).')
-      return
-    }
-    setWebRoutesBusy(key)
-    setError(null)
-    try {
-      const result = await addWebRoute(key, port)
-      setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
-      setPortDraftByKey((prev) => ({ ...prev, [key]: '' }))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setWebRoutesBusy(null)
-    }
-  }
-
-  const onRemoveWebRoute = async (key: string, port: number) => {
-    setWebRoutesBusy(key)
-    setError(null)
-    try {
-      const result = await removeWebRoute(key, port)
-      setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setWebRoutesBusy(null)
-    }
-  }
-
   useEffect(() => {
     if (openAutoStopFor === null) return
     const handleClickOutside = (e: MouseEvent) => {
@@ -335,19 +276,6 @@ export function InstanceList() {
     document.addEventListener('click', handleClickOutside)
     return () => document.removeEventListener('click', handleClickOutside)
   }, [openAutoStopFor])
-
-  const pageHeader = (
-    <div className="page-header">
-      <h1 className="page-title">Workstations</h1>
-      {isAuthEnabled() && (
-        <div className="page-header-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => logout()}>
-            Log out
-          </button>
-        </div>
-      )}
-    </div>
-  )
 
   const createSection = (
     <div className="create-section">
@@ -399,19 +327,13 @@ export function InstanceList() {
   )
 
   if (loading) {
-    return (
-      <div className="instance-list">
-        {pageHeader}
-        <p className="loading">Loading instances…</p>
-      </div>
-    )
+    return <p className="loading">Loading instances…</p>
   }
 
   if (error) {
     const isAuthError = /session expired|invalid|log in again/i.test(error)
     return (
-      <div className="instance-list">
-        {pageHeader}
+      <>
         <p className="error-message" role="alert">{error}</p>
         {isAuthError && (
           <button type="button" className="btn btn-start" onClick={() => logout()}>
@@ -419,13 +341,12 @@ export function InstanceList() {
           </button>
         )}
         {createSection}
-      </div>
+      </>
     )
   }
 
   return (
-    <div className="instance-list">
-      {pageHeader}
+    <>
       {refreshError && (
         <p className="refresh-error" role="status">{refreshError}</p>
       )}
@@ -436,21 +357,17 @@ export function InstanceList() {
               <th>Name</th>
               <th>Status</th>
               <th>Auto-stop</th>
-              <th>Web routes</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {instances.length === 0 ? (
               <tr>
-                <td colSpan={5} className="empty">No workstations found.</td>
+                <td colSpan={4} className="empty">No workstations found.</td>
               </tr>
             ) : (
               instances.map((inst) => {
                 const key = instanceKey(inst)
-                const ports = webRoutesByName[key] ?? []
-                const routeBusy = webRoutesBusy === key
-                const canEditWebRoutes = inst.state !== 'terminated' && inst.state !== 'shutting-down'
                 return (
                 <tr key={inst.instance_id}>
                   <td className="name">{key}</td>
@@ -552,60 +469,6 @@ export function InstanceList() {
                       )
                     })()}
                   </td>
-                  <td className="web-routes-cell">
-                    {canEditWebRoutes ? (
-                      <div className="web-routes-editor">
-                        <div className="web-routes-chips">
-                          {ports.map((p) => (
-                            <span key={p} className="port-chip">
-                              <span className="port-chip-label">{p}</span>
-                              <button
-                                type="button"
-                                className="port-chip-remove"
-                                disabled={routeBusy || acting !== null}
-                                onClick={() => onRemoveWebRoute(key, p)}
-                                title={`Remove port ${p}`}
-                              >
-                                ×
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                        <div className="web-routes-add">
-                          <input
-                            type="number"
-                            className="web-routes-port-input"
-                            min={1}
-                            max={65535}
-                            placeholder="Port"
-                            value={portDraftByKey[key] ?? ''}
-                            disabled={routeBusy || acting !== null}
-                            onChange={(e) =>
-                              setPortDraftByKey((prev) => ({ ...prev, [key]: e.target.value }))
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                void onAddWebRoute(key)
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-web-route-add"
-                            disabled={routeBusy || acting !== null}
-                            onClick={() => void onAddWebRoute(key)}
-                          >
-                            {routeBusy ? '…' : 'Add'}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="web-routes-readonly">
-                        {ports.length > 0 ? ports.join(', ') : '—'}
-                      </span>
-                    )}
-                  </td>
                   <td className="actions">
                     {inst.state === 'stopped' && (
                       <button
@@ -646,6 +509,6 @@ export function InstanceList() {
         </table>
       </div>
       {createSection}
-    </div>
+    </>
   )
 }
