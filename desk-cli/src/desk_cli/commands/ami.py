@@ -8,11 +8,13 @@ import os
 import re
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 import boto3
 import click
+from botocore.exceptions import ClientError
 
 from desk.aws import (
     create_ami,
@@ -21,6 +23,7 @@ from desk.aws import (
     get_desk_copy_bucket,
     get_instance_state,
     get_latest_ubuntu_ami,
+    is_ssm_ready,
     list_amis,
     resolve_workstation,
     terminate_instance,
@@ -36,6 +39,8 @@ from desk.config import get_desk_settings
 
 AMI_BUILDS_PREFIX = "ami-builds/"
 AMI_BUILD_ARCHIVE_PREFIX = "ami-build-archive/"
+# Written by `desk ami build step` after the builder instance is launched.
+BUILDER_INSTANCE_KEY = "builder-instance.json"
 
 
 @click.group("ami")
@@ -181,6 +186,270 @@ def _normalize_build_id_arg(arg: str) -> str:
     return s.rstrip("/")
 
 
+@dataclass(frozen=True)
+class AsyncAmiBuildSnapshot:
+    """AWS-derived state for `desk ami build status` / `step` (no extra local state)."""
+
+    build_id: str
+    bucket: str
+    s3_prefix: str
+    config: dict[str, Any]
+    recorded_instance_id: str | None
+    ec2_state: str | None
+    ec2_missing: bool
+    ssm_ready: bool | None
+
+
+def _read_s3_object_json(
+    s3: Any,
+    bucket: str,
+    key: str,
+) -> dict[str, Any] | None:
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "NoSuchKey":
+            return None
+        raise
+    raw = json.loads(obj["Body"].read())
+    if not isinstance(raw, dict):
+        raise click.ClickException(f"S3 object {key} must be a JSON object.")
+    return raw
+
+
+def _put_s3_object_json(
+    s3: Any,
+    bucket: str,
+    key: str,
+    payload: dict[str, Any],
+) -> None:
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=json.dumps(payload, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def _workstation_name_for_async_build(build_id: str) -> str:
+    """Deterministic workstation Name tag for the async AMI builder instance."""
+    bid = _normalize_build_id_arg(build_id)
+    base = bid.lower()
+    base = re.sub(r"[^a-z0-9-]+", "-", base).strip("-") or "build"
+    base = base[:220]
+    return f"ami-build-async-{base}"
+
+
+def _safe_get_instance_state(
+    instance_id: str,
+    *,
+    region: str | None,
+    profile: str | None,
+) -> str | None:
+    try:
+        return get_instance_state(instance_id, region=region, profile=profile)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code == "InvalidInstanceID.NotFound":
+            return None
+        raise
+
+
+def _resolve_async_ami_build_snapshot(build_id: str, *, stack: str) -> AsyncAmiBuildSnapshot:
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+    bid = _normalize_build_id_arg(build_id)
+    if not bid:
+        raise click.ClickException("Build id is empty.")
+
+    try:
+        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    prefix = f"{AMI_BUILDS_PREFIX}{bid}/"
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+
+    cfg_key = f"{prefix}config.json"
+    config = _read_s3_object_json(s3, bucket, cfg_key)
+    if config is None:
+        raise click.ClickException(
+            f"No staged AMI build found for id {bid!r} "
+            f"(missing {AMI_BUILDS_PREFIX}{bid}/config.json)."
+        )
+
+    builder_key = f"{prefix}{BUILDER_INSTANCE_KEY}"
+    builder_doc = _read_s3_object_json(s3, bucket, builder_key)
+    recorded_id: str | None = None
+    if builder_doc is not None:
+        iid = builder_doc.get("instance_id")
+        if iid is None:
+            recorded_id = None
+        elif not isinstance(iid, str):
+            raise click.ClickException(
+                f"{BUILDER_INSTANCE_KEY} must contain a string 'instance_id'."
+            )
+        elif not iid.strip():
+            raise click.ClickException(
+                f"{BUILDER_INSTANCE_KEY} 'instance_id' must be non-empty."
+            )
+        else:
+            recorded_id = iid.strip()
+
+    ec2_missing = False
+    ec2_state: str | None = None
+    ssm_ready: bool | None = None
+
+    if recorded_id:
+        ec2_state = _safe_get_instance_state(recorded_id, region=region, profile=profile)
+        if ec2_state is None:
+            ec2_missing = True
+        elif ec2_state in ("running", "pending"):
+            ssm_ready = is_ssm_ready(recorded_id, region=region, profile=profile)
+        elif ec2_state in ("stopped", "stopping", "shutting-down"):
+            ssm_ready = False
+        elif ec2_state == "terminated":
+            ssm_ready = None
+
+    return AsyncAmiBuildSnapshot(
+        build_id=bid,
+        bucket=bucket,
+        s3_prefix=prefix,
+        config=config,
+        recorded_instance_id=recorded_id,
+        ec2_state=ec2_state,
+        ec2_missing=ec2_missing,
+        ssm_ready=ssm_ready,
+    )
+
+
+def _print_async_ami_build_status(snap: AsyncAmiBuildSnapshot) -> None:
+    """Human-readable status for async AMI build (also used at the start of `step`)."""
+    ami_name = snap.config.get("ami_name", "-")
+    click.echo(f"AMI build (async): {snap.build_id}")
+    click.echo(f"  Staged config: present (ami_name={ami_name!r})")
+    click.echo(f"  s3://{snap.bucket}/{snap.s3_prefix}")
+
+    if not snap.recorded_instance_id:
+        click.echo("  Builder instance id (S3): (not recorded yet)")
+        click.echo("  EC2: (no instance recorded for this build)")
+        click.echo("  SSM ready: n/a")
+        click.echo()
+        click.echo(
+            "Next: `desk ami build step` will create the builder instance, "
+            f"then write {BUILDER_INSTANCE_KEY} to the build prefix in S3."
+        )
+        return
+
+    click.echo(f"  Builder instance id (S3): {snap.recorded_instance_id}")
+
+    if snap.ec2_missing:
+        click.echo("  EC2: instance not found (no longer visible to DescribeInstances)")
+        click.echo("  SSM ready: n/a")
+        click.echo()
+        click.echo(
+            "The builder instance for this build was created earlier but is no longer "
+            "present in EC2. `desk ami build step` will not launch a replacement automatically."
+        )
+        return
+
+    assert snap.ec2_state is not None
+    click.echo(f"  EC2 state: {snap.ec2_state}")
+
+    if snap.ec2_state == "terminated":
+        click.echo("  SSM ready: n/a")
+        click.echo()
+        click.echo(
+            "The builder instance for this build has terminated. "
+            "`desk ami build step` will not launch a replacement automatically."
+        )
+        return
+
+    if snap.ssm_ready is None:
+        click.echo("  SSM ready: n/a")
+    else:
+        click.echo(f"  SSM ready: {'yes' if snap.ssm_ready else 'no'}")
+
+    click.echo()
+    if snap.ec2_state in ("running", "pending") and snap.ssm_ready is True:
+        click.echo(
+            "Nothing to do for this phase: the builder instance exists and SSM is ready. "
+            "Recipe execution is not implemented yet."
+        )
+    elif snap.ec2_state in ("running", "pending") and snap.ssm_ready is False:
+        click.echo(
+            "Waiting for SSM on the builder instance. "
+            "Run `desk ami build status` or `step` again later (no long waits in this command)."
+        )
+    elif snap.ec2_state in ("stopped", "stopping", "shutting-down"):
+        click.echo(
+            "The builder instance is not in a running state; fix the instance or terminate "
+            "and archive the build."
+        )
+
+
+def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot) -> None:
+    """Perform at most one quick action for `desk ami build step` (after status output)."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+
+    if snap.recorded_instance_id:
+        if snap.ec2_missing or snap.ec2_state == "terminated":
+            raise click.ClickException(
+                "Refusing to create a new builder instance: this build already recorded "
+                f"{snap.recorded_instance_id!r}, and that instance is no longer usable. "
+                "Use `desk ami build cancel` or investigate in AWS."
+            )
+        if snap.ec2_state in ("running", "pending") and snap.ssm_ready is True:
+            click.echo()
+            click.secho("No step taken (already done for this phase).", fg="green")
+            return
+        if snap.ec2_state in ("running", "pending") and snap.ssm_ready is False:
+            click.echo()
+            click.echo("(No step taken: waiting for SSM.)")
+            return
+        if snap.ec2_state in ("stopped", "stopping", "shutting-down"):
+            click.echo()
+            click.echo("(No step taken: instance not running.)")
+            return
+        raise click.ClickException(
+            f"Unexpected builder state (ec2_state={snap.ec2_state!r}, "
+            f"ec2_missing={snap.ec2_missing})."
+        )
+
+    instance_type = snap.config.get("instance_type", "t3.medium")
+    workstation_name = _workstation_name_for_async_build(snap.build_id)
+    builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
+    click.echo()
+    click.echo(f"Creating builder instance {workstation_name!r}...")
+    try:
+        instance_id, _shutdown = create_workstation(
+            workstation_name,
+            instance_type,
+            ami_id=builder_ami,
+            shutdown_after="0",
+            region=region,
+            profile=profile,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    key = f"{snap.s3_prefix}{BUILDER_INSTANCE_KEY}"
+    _put_s3_object_json(
+        s3,
+        snap.bucket,
+        key,
+        {"instance_id": instance_id},
+    )
+    click.echo(f"Recorded {instance_id} in s3://{snap.bucket}/{key}")
+    click.secho("Step complete: builder instance created and id written to S3.", fg="green")
+
+
 def _validate_build_recipe_config(config: dict[str, Any], config_path: str) -> None:
     if "base_ami" in config:
         raise click.ClickException(
@@ -202,6 +471,39 @@ def _validate_build_recipe_config(config: dict[str, Any], config_path: str) -> N
 def ami_build_group() -> None:
     """Stage AMI build recipes in S3 and run the builder pipeline."""
     pass
+
+
+@ami_build_group.command("status")
+@click.argument("build_id")
+@click.option(
+    "--stack",
+    default="desk",
+    show_default=True,
+    help="CloudFormation stack name for desk (used to resolve S3 bucket).",
+)
+def ami_build_status(build_id: str, stack: str) -> None:
+    """Show async AMI build progress from S3 + EC2 + SSM (quick checks only; does not wait)."""
+    snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
+    _print_async_ami_build_status(snap)
+
+
+@ami_build_group.command("step")
+@click.argument("build_id")
+@click.option(
+    "--stack",
+    default="desk",
+    show_default=True,
+    help="CloudFormation stack name for desk (used to resolve S3 bucket).",
+)
+def ami_build_step(build_id: str, stack: str) -> None:
+    """Advance the async AMI build by one quick action, or no-op if there is nothing to do.
+
+    Prints the same summary as `desk ami build status`, then creates the builder instance
+    (recording its id in S3) when needed. Does not block waiting for SSM.
+    """
+    snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
+    _print_async_ami_build_status(snap)
+    _run_async_ami_build_step(snap)
 
 
 @ami_build_group.command("run")

@@ -1,11 +1,13 @@
 """CLI tests."""
 
+import io
 import json
 import re
 import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
+from botocore.exceptions import ClientError
 from click.testing import CliRunner
 
 from desk.config import AwsSettings, DeskSettings
@@ -323,6 +325,8 @@ def test_desk_ami_build_help() -> None:
     output = _output(result)
     assert "run" in output
     assert "create" in output
+    assert "status" in output
+    assert "step" in output
 
 
 def test_desk_ami_build_run_help() -> None:
@@ -460,6 +464,94 @@ def test_ami_build_list_active(_mock_bucket: object, mock_session: object) -> No
     assert result.exit_code == 0
     assert "b1" in result.output
     assert "n" in result.output
+
+
+def _s3_get_for_async_build(
+    *,
+    has_builder_record: bool,
+    instance_id: str | None = None,
+) -> MagicMock:
+    """Return a mock S3 client get_object that serves config.json and optional builder-instance.json."""
+
+    def get_object(Bucket: object, Key: str) -> dict:
+        if Key.endswith("config.json"):
+            return {
+                "Body": io.BytesIO(
+                    json.dumps({"ami_name": "my-ami", "instance_type": "t3.medium"}).encode()
+                )
+            }
+        if Key.endswith("builder-instance.json"):
+            if not has_builder_record:
+                raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "n"}}, "GetObject")
+            assert instance_id is not None
+            return {
+                "Body": io.BytesIO(json.dumps({"instance_id": instance_id}).encode()),
+            }
+        raise AssertionError(Key)
+
+    s3 = MagicMock()
+    s3.get_object.side_effect = get_object
+    return s3
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_no_builder_record(_mock_bucket: object, mock_session: object) -> None:
+    """ami build status shows next step when builder-instance.json is absent."""
+    s3 = _s3_get_for_async_build(has_builder_record=False)
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "not recorded" in result.output.lower() or "not recorded yet" in result.output.lower()
+    assert "builder-instance.json" in result.output
+
+
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=False)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_running_not_ssm(
+    _mock_bucket: object, mock_session: object, _mock_state: object, _mock_ssm: object
+) -> None:
+    """ami build status reports SSM not ready when EC2 is running."""
+    s3 = _s3_get_for_async_build(has_builder_record=True, instance_id="i-abc")
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "SSM" in result.output
+    assert "no" in result.output.lower() or "not ready" in result.output.lower()
+
+
+@patch("desk_cli.commands.ami._put_s3_object_json")
+@patch("desk_cli.commands.ami.create_workstation", return_value=("i-new", None))
+@patch("desk_cli.commands.ami.get_latest_ubuntu_ami", return_value="ami-ubuntu")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_creates_and_records_instance(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_ubuntu: object,
+    mock_create: object,
+    mock_put: object,
+) -> None:
+    """ami build step creates workstation and writes builder-instance.json to S3."""
+    s3 = _s3_get_for_async_build(has_builder_record=False)
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once()
+    mock_put.assert_called_once()
+    args, kwargs = mock_put.call_args
+    assert "builder-instance.json" in args[2]
 
 
 @patch("desk_cli.commands.ami.boto3.Session")
