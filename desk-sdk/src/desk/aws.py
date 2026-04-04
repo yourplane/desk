@@ -673,6 +673,45 @@ def list_command_invocations_for_instance(
     return out
 
 
+def generate_presigned_get_object_url(
+    bucket: str,
+    key: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+    expires_in: int = 7200,
+) -> str:
+    """Return a presigned HTTPS URL for ``GetObject`` (for e.g. ``curl`` on a workstation)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expires_in,
+    )
+
+
+def list_s3_object_keys_under_prefix(
+    bucket: str,
+    prefix: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[str]:
+    """List object keys under ``prefix`` (paginated); omits keys that look like empty dir markers."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    out: list[str] = []
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents") or []:
+            k = obj["Key"]
+            if k.endswith("/"):
+                continue
+            out.append(k)
+    return sorted(out)
+
+
 def add_temporary_ssh_key(
     instance_id: str,
     user: str,

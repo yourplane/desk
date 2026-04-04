@@ -597,21 +597,23 @@ def test_ami_build_step_starts_recipe_run(
     assert "cmd-ssm-1" in result.output
 
 
+@patch("desk_cli.commands.ami.generate_presigned_get_object_url", return_value="https://example.com/presigned")
 @patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-copy")
 @patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
 @patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.ami.get_instance_state", return_value="running")
 @patch("desk_cli.commands.ami.boto3.Session")
 @patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
-def test_ami_build_step_copy_installs_aws_cli_before_s3(
+def test_ami_build_step_copy_uses_curl_presigned_url(
     _mock_bucket: object,
     mock_session: object,
     _mock_state: object,
     _mock_ssm: object,
     _mock_list: object,
     mock_send: object,
+    _mock_presign: object,
 ) -> None:
-    """Copy steps wrap aws s3 with apt-get install awscli when the builder has no aws CLI."""
+    """Copy steps download via curl and a presigned URL (no AWS CLI on the builder)."""
     s3 = _s3_get_for_async_build(
         has_builder_record=True,
         instance_id="i-abc",
@@ -635,8 +637,96 @@ def test_ami_build_step_copy_installs_aws_cli_before_s3(
     mock_send.assert_called_once()
     _args, _kwargs = mock_send.call_args
     script = _args[1]
-    assert "apt-get install -y awscli" in script
-    assert "aws s3 cp" in script
+    assert "curl -fsSL" in script
+    assert "https://example.com/presigned" in script
+    assert "aws s3" not in script
+
+
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-retry")
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_retry_after_failure(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+    mock_send: object,
+) -> None:
+    """--retry re-sends SSM for the failed step index."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=True,
+        blocked_step_index=0,
+        last_error="status='Failed'",
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=False,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1", "--retry"])
+
+    assert result.exit_code == 0
+    assert "Retrying recipe step 0" in result.output
+    mock_send.assert_called_once()
+
+
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_retry_requires_failed_step(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+) -> None:
+    """--retry errors when there is no failed step."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=0,
+        recipe_complete=False,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1", "--retry"])
+
+    assert result.exit_code != 0
+    assert "Nothing to retry" in result.output
 
 
 @patch("desk_cli.commands.ami._put_s3_object_json")

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from botocore.exceptions import ClientError
 from desk.aws import (
     create_ami,
     create_workstation,
+    generate_presigned_get_object_url,
     get_ami_state,
     get_command_invocation,
     get_desk_copy_bucket,
@@ -28,6 +30,7 @@ from desk.aws import (
     is_ssm_ready,
     list_amis,
     list_command_invocations_for_instance,
+    list_s3_object_keys_under_prefix,
     resolve_workstation,
     send_ssm_command,
     terminate_instance,
@@ -36,7 +39,6 @@ from desk.aws import (
     wait_for_ssm_ready,
 )
 from desk_cli import __version__
-from desk_cli.commands.copy import shell_command_s3_to_workstation
 from desk_cli.commands.run import run_script_on_instance
 from desk_cli.commands.scp import scp_transfer
 from desk.config import get_desk_settings
@@ -376,37 +378,51 @@ def _staged_s3_object_key(src: str) -> str:
     return s[4:].lstrip("/")
 
 
-def _wrap_async_builder_shell_needing_aws(inner_command: str) -> str:
-    """Stock Ubuntu builder AMIs may not include ``aws``; install ``awscli`` before ``aws s3`` usage."""
-    return (
-        "set -eu\n"
-        "export DEBIAN_FRONTEND=noninteractive\n"
-        "if ! command -v aws >/dev/null 2>&1; then\n"
-        "  apt-get update -qq\n"
-        "  apt-get install -y awscli\n"
-        "fi\n"
-        f"{inner_command}\n"
-    )
-
-
 def _async_shell_for_copy_step(
     copy_item: dict[str, Any],
     *,
     bucket: str,
     region: str | None,
+    profile: str | None,
 ) -> str:
+    """Download staged artifacts via presigned URLs and ``curl`` (no AWS CLI on the builder)."""
     src = copy_item["source"]
     dest = copy_item["dest"]
     recursive = copy_item.get("recursive", False)
-    key = _staged_s3_object_key(src)
-    inner = shell_command_s3_to_workstation(
-        bucket,
-        key,
-        dest,
-        recursive=recursive,
-        region=region,
+    key_or_prefix = _staged_s3_object_key(src)
+    if recursive:
+        prefix = key_or_prefix.rstrip("/") + "/"
+        keys = list_s3_object_keys_under_prefix(
+            bucket, prefix, region=region, profile=profile
+        )
+        if not keys:
+            raise click.ClickException(
+                f"No objects found under s3://{bucket}/{prefix} (recursive copy)."
+            )
+        lines: list[str] = ["set -eu"]
+        dest_base = dest.rstrip("/")
+        for k in keys:
+            rel = k[len(prefix) :] if k.startswith(prefix) else os.path.basename(k)
+            rel = rel.lstrip("/")
+            target = f"{dest_base}/{rel}" if rel else dest_base
+            url = generate_presigned_get_object_url(
+                bucket, k, region=region, profile=profile
+            )
+            lines.append(
+                f"install -d -m 0755 $(dirname {shlex.quote(target)})"
+            )
+            lines.append(
+                f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(target)}"
+            )
+        return "\n".join(lines) + "\n"
+    url = generate_presigned_get_object_url(
+        bucket, key_or_prefix, region=region, profile=profile
     )
-    return _wrap_async_builder_shell_needing_aws(inner)
+    return (
+        "set -eu\n"
+        f"install -d -m 0755 $(dirname {shlex.quote(dest)})\n"
+        f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(dest)}\n"
+    )
 
 
 def _async_shell_for_run_step(
@@ -415,17 +431,20 @@ def _async_shell_for_run_step(
     *,
     bucket: str,
     region: str | None,
+    profile: str | None,
 ) -> str:
     rv = run_value.strip()
     if rv.startswith("s3:/"):
         key = _staged_s3_object_key(rv)
-        region_str = region or "us-east-1"
         tmp = f"/tmp/desk-ami-run-{step_index}.sh"
-        inner = (
-            f"aws s3 cp s3://{bucket}/{key} {tmp!r} --region {region_str!r} "
-            f"&& bash {tmp}"
+        url = generate_presigned_get_object_url(
+            bucket, key, region=region, profile=profile
         )
-        return _wrap_async_builder_shell_needing_aws(inner)
+        return (
+            "set -eu\n"
+            f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(tmp)}\n"
+            f"bash {shlex.quote(tmp)}\n"
+        )
     return rv
 
 
@@ -435,12 +454,15 @@ def _expected_async_shell_for_step(
     *,
     bucket: str,
     region: str | None,
+    profile: str | None,
 ) -> str:
     if "run" in step:
         return _async_shell_for_run_step(
-            step["run"], step_index, bucket=bucket, region=region
+            step["run"], step_index, bucket=bucket, region=region, profile=profile
         )
-    return _async_shell_for_copy_step(step["copy"], bucket=bucket, region=region)
+    return _async_shell_for_copy_step(
+        step["copy"], bucket=bucket, region=region, profile=profile
+    )
 
 
 @dataclass(frozen=True)
@@ -497,9 +519,12 @@ def _map_invocation_to_step_index(
         return parsed[0]
     norm = _normalize_shell_for_compare(shell)
     for i, step in enumerate(steps):
-        expected = _expected_async_shell_for_step(
-            step, i, bucket=bucket, region=region
-        )
+        try:
+            expected = _expected_async_shell_for_step(
+                step, i, bucket=bucket, region=region, profile=profile
+            )
+        except click.ClickException:
+            continue
         if norm == _normalize_shell_for_compare(expected):
             return i
     return None
@@ -748,7 +773,7 @@ def _print_async_ami_build_status(snap: AsyncAmiBuildSnapshot) -> None:
         )
 
 
-def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot) -> None:
+def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot, *, retry: bool = False) -> None:
     """Perform at most one quick action for `desk ami build step` (after status output)."""
     aws = get_desk_settings().aws_settings
     region = aws.region
@@ -771,11 +796,55 @@ def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot) -> None:
                 region=region,
                 profile=profile,
             )
+            if retry:
+                if ev.recipe_complete:
+                    raise click.ClickException(
+                        "Nothing to retry: all recipe steps already completed successfully."
+                    )
+                if ev.in_progress_step_index is not None:
+                    raise click.ClickException(
+                        f"Cannot use --retry while step {ev.in_progress_step_index} "
+                        "is still in progress on SSM."
+                    )
+                if not ev.blocked or ev.blocked_step_index is None:
+                    raise click.ClickException(
+                        "Nothing to retry: there is no failed step (see `desk ami build status`)."
+                    )
+                steps = _get_build_steps(snap.config)
+                step = steps[ev.blocked_step_index]
+                kind = "run" if "run" in step else "copy"
+                shell = _expected_async_shell_for_step(
+                    step,
+                    ev.blocked_step_index,
+                    bucket=snap.bucket,
+                    region=region,
+                    profile=profile,
+                )
+                comment = _ami_build_comment_tag(snap.build_id, ev.blocked_step_index, kind)
+                command_id = send_ssm_command(
+                    snap.recorded_instance_id,
+                    shell,
+                    region=region,
+                    profile=profile,
+                    timeout_seconds=7200,
+                    comment=comment,
+                )
+                click.echo()
+                click.echo(
+                    f"Retrying recipe step {ev.blocked_step_index} ({kind}): "
+                    f"SSM command_id={command_id}"
+                )
+                click.secho(
+                    "Step initiated (not waiting for completion). Check `desk ami build status`.",
+                    fg="green",
+                )
+                return
             if ev.blocked:
                 click.echo()
                 click.echo(
                     "Recipe step failed. Run `desk ami build cancel` to archive this build, "
-                    "then fix the recipe and stage a new build."
+                    "or `desk ami build step --retry` to re-send the failed step, "
+                    "then fix the recipe and stage a new build if needed."
                 )
                 if ev.last_error:
                     click.echo(f"Last error: {ev.last_error}")
@@ -805,6 +874,7 @@ def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot) -> None:
                 ev.next_step_index,
                 bucket=snap.bucket,
                 region=region,
+                profile=profile,
             )
             comment = _ami_build_comment_tag(snap.build_id, ev.next_step_index, kind)
             command_id = send_ssm_command(
@@ -902,8 +972,8 @@ def ami_build_status(build_id: str, stack: str) -> None:
     """Show async AMI build progress from S3, EC2, and SSM Run Command history (quick; does not wait).
 
     Recipe progress is derived from SSM commands on the builder instance (Comment tag and/or
-    command body match). After a step fails, archive with `desk ami build cancel` before
-    staging a new build.
+    command body match). After a step fails, use `desk ami build step --retry` or archive with
+    `desk ami build cancel` before staging a new build.
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
     _print_async_ami_build_status(snap)
@@ -917,18 +987,23 @@ def ami_build_status(build_id: str, stack: str) -> None:
     show_default=True,
     help="CloudFormation stack name for desk (used to resolve S3 bucket).",
 )
-def ami_build_step(build_id: str, stack: str) -> None:
+@click.option(
+    "--retry",
+    is_flag=True,
+    help="After a failed recipe step, re-send that step's SSM command (new presigned URLs).",
+)
+def ami_build_step(build_id: str, stack: str, retry: bool) -> None:
     """Advance the async AMI build by one quick action, or no-op if there is nothing to do.
 
     Prints the same summary as `desk ami build status`, then creates the builder instance
     (recording its id in S3) when needed. When SSM is ready, starts at most one recipe
     ``run``/``copy`` step via SSM and returns immediately after ``SendCommand`` (does not
-    wait for the remote command). Skips if a prior step failed (use ``cancel``) or a step
-    is still in progress on SSM. Final AMI registration is not performed here.
+    wait for the remote command). Skips if a prior step failed (use ``--retry`` or
+    ``cancel``) or a step is still in progress on SSM. Final AMI registration is not performed here.
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
     _print_async_ami_build_status(snap)
-    _run_async_ami_build_step(snap)
+    _run_async_ami_build_step(snap, retry=retry)
 
 
 @ami_build_group.command("run")
