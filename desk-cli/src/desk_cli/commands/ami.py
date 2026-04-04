@@ -127,6 +127,33 @@ def _get_build_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _truncate_status_text(s: str, max_len: int = 100) -> str:
+    t = " ".join(s.split())
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 3] + "..."
+
+
+def _describe_recipe_step_for_status(step: dict[str, Any]) -> str:
+    """Short human-readable summary of a recipe step for CLI status output."""
+    if "run" in step:
+        rv = step["run"]
+        if not isinstance(rv, str):
+            return "run: (invalid config)"
+        rv = rv.strip()
+        if rv.startswith("s3:/"):
+            return f"run script from {_truncate_status_text(rv)}"
+        return f"run: {_truncate_status_text(rv)}"
+    c = step["copy"]
+    src = str(c.get("source", ""))
+    dst = str(c.get("dest", ""))
+    rec = bool(c.get("recursive", False))
+    extra = " (recursive)" if rec else ""
+    return (
+        f"copy{extra}: {_truncate_status_text(src)} -> {_truncate_status_text(dst)}"
+    )
+
+
 def _builder_name(ami_name: str) -> str:
     """Generate a unique builder instance name from the target AMI name."""
     base = ami_name.lower().strip()
@@ -727,6 +754,7 @@ def _print_async_ami_build_status(snap: AsyncAmiBuildSnapshot) -> None:
             region=aws.region,
             profile=aws.profile,
         )
+        steps = _get_build_steps(snap.config)
         click.echo("  Recipe:")
         click.echo(f"    Steps in config: {ev.total_steps}")
         if ev.recipe_complete:
@@ -735,31 +763,47 @@ def _print_async_ami_build_status(snap: AsyncAmiBuildSnapshot) -> None:
                 "(AMI create / terminate not run by this tool yet)."
             )
             if ev.total_steps > 0:
-                click.echo(f"    Last completed step index: {ev.total_steps - 1}")
-        elif ev.blocked:
+                last = steps[ev.total_steps - 1]
+                click.echo(
+                    f"    Last completed: step {ev.total_steps - 1} — "
+                    f"{_describe_recipe_step_for_status(last)}"
+                )
+        elif ev.blocked and ev.blocked_step_index is not None:
+            bad = steps[ev.blocked_step_index]
             click.echo(
-                f"    State: failed at step {ev.blocked_step_index} "
-                "(run `desk ami build cancel` before staging a new build)."
+                f"    State: failed at step {ev.blocked_step_index} — "
+                f"{_describe_recipe_step_for_status(bad)}"
+            )
+            click.echo(
+                "    Hint: `desk ami build step --retry` or `desk ami build cancel`."
             )
             if ev.last_error:
                 click.echo(f"    Last error: {ev.last_error}")
         elif ev.in_progress_step_index is not None:
+            cur = steps[ev.in_progress_step_index]
             click.echo(
-                f"    State: step {ev.in_progress_step_index} in progress "
-                f"(SSM command_id={ev.in_progress_command_id!r})."
+                f"    State: step {ev.in_progress_step_index} in progress — "
+                f"{_describe_recipe_step_for_status(cur)}"
             )
+            click.echo(f"    SSM command_id: {ev.in_progress_command_id!r}")
             if ev.in_progress_step_index > 0:
+                prev = steps[ev.in_progress_step_index - 1]
                 click.echo(
-                    f"    Last completed step index: {ev.in_progress_step_index - 1}"
+                    f"    Last completed: step {ev.in_progress_step_index - 1} — "
+                    f"{_describe_recipe_step_for_status(prev)}"
                 )
         elif ev.next_step_index is not None:
+            nxt = steps[ev.next_step_index]
             click.echo(
-                f"    State: ready to start step index {ev.next_step_index} "
-                "(`desk ami build step`)."
+                f"    Next: step {ev.next_step_index} — "
+                f"{_describe_recipe_step_for_status(nxt)}"
             )
+            click.echo("    (`desk ami build step` to start it.)")
             if ev.next_step_index > 0:
+                prev = steps[ev.next_step_index - 1]
                 click.echo(
-                    f"    Last completed step index: {ev.next_step_index - 1}"
+                    f"    Last completed: step {ev.next_step_index - 1} — "
+                    f"{_describe_recipe_step_for_status(prev)}"
                 )
     elif snap.ec2_state in ("running", "pending") and snap.ssm_ready is False:
         click.echo(

@@ -560,7 +560,8 @@ def test_ami_build_status_recipe_ssm_ready(
     assert result.exit_code == 0
     assert "Recipe:" in result.output
     assert "Steps in config: 2" in result.output
-    assert "ready to start step index 0" in result.output
+    assert "Next: step 0" in result.output
+    assert "echo hi" in result.output
 
 
 @patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
