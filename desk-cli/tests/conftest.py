@@ -9,6 +9,19 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _block_host_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Avoid using the machine's real AWS identity during tests (e.g. EC2 instance role).
+
+    Without this, a missed mock on boto3 can create real resources when tests run on EC2.
+    """
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_desk_profile_override() -> None:
     """Clear root ``--profile`` (desk profile) override between CLI tests."""
     from desk.config import reset_desk_profile_override
