@@ -252,6 +252,26 @@ def _copy_workstation_s3(
     )
 
 
+def shell_command_s3_to_workstation(
+    bucket: str,
+    key: str,
+    remote_path: str,
+    *,
+    recursive: bool,
+    region: str | None,
+) -> str:
+    """Shell line(s) for ``aws s3 cp``/``sync`` from desk bucket key to a path on the instance.
+
+    Matches :func:`_copy_workstation_s3` (S3 → workstation) without resolving the workstation
+    or waiting for the command — used by async AMI build to send a single SSM command.
+    """
+    region_str = region or "us-east-1"
+    s3_uri = f"s3://{bucket}/{key.rstrip('/')}"
+    if recursive:
+        return f"aws s3 sync {s3_uri}/ {remote_path!r} --region {region_str!r}"
+    return f"aws s3 cp {s3_uri} {remote_path!r} --region {region_str!r}"
+
+
 def _dispatch_copy(
     src_loc: Location,
     dest_loc: Location,

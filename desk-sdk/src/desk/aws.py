@@ -610,23 +610,106 @@ def send_ssm_command(
     region: str | None = None,
     profile: str | None = None,
     timeout_seconds: int = 3600,
+    comment: str | None = None,
 ) -> str:
     """
     Send a command to an instance via SSM. Returns the command ID.
+
+    Optional ``comment`` is stored on the command (max 100 chars per AWS) for
+    correlation in ``list_commands``.
     """
     session = boto3.Session(region_name=region, profile_name=profile)
     ssm = session.client("ssm")
 
-    response = ssm.send_command(
-        InstanceIds=[instance_id],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": [command]},
-        TimeoutSeconds=timeout_seconds,
-    )
+    send_kw: dict = {
+        "InstanceIds": [instance_id],
+        "DocumentName": "AWS-RunShellScript",
+        "Parameters": {"commands": [command]},
+        "TimeoutSeconds": timeout_seconds,
+    }
+    if comment is not None:
+        send_kw["Comment"] = comment[:100]
+
+    response = ssm.send_command(**send_kw)
 
     command_id = response["Command"]["CommandId"]
     log.debug("send_ssm_command instance_id=%s command_id=%s", instance_id, command_id)
     return command_id
+
+
+def get_ssm_command(
+    command_id: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> dict:
+    """Return the SSM ``Command`` object (Comment, Parameters, DocumentName, …).
+
+    Uses ``list_commands(CommandId=…)`` because some boto3 builds omit ``get_command``.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+    resp = ssm.list_commands(CommandId=command_id, MaxResults=1)
+    commands = resp.get("Commands") or []
+    if not commands:
+        raise RuntimeError(f"No SSM command found for command_id={command_id!r}.")
+    return commands[0]
+
+
+def list_command_invocations_for_instance(
+    instance_id: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[dict]:
+    """Return all command invocations for an instance (paginated), oldest first."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+    out: list[dict] = []
+    paginator = ssm.get_paginator("list_command_invocations")
+    for page in paginator.paginate(InstanceId=instance_id):
+        out.extend(page.get("CommandInvocations") or [])
+    out.sort(key=lambda x: x.get("RequestedDateTime") or "")
+    return out
+
+
+def generate_presigned_get_object_url(
+    bucket: str,
+    key: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+    expires_in: int = 7200,
+) -> str:
+    """Return a presigned HTTPS URL for ``GetObject`` (for e.g. ``curl`` on a workstation)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expires_in,
+    )
+
+
+def list_s3_object_keys_under_prefix(
+    bucket: str,
+    prefix: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[str]:
+    """List object keys under ``prefix`` (paginated); omits keys that look like empty dir markers."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    out: list[str] = []
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents") or []:
+            k = obj["Key"]
+            if k.endswith("/"):
+                continue
+            out.append(k)
+    return sorted(out)
 
 
 def add_temporary_ssh_key(
