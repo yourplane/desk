@@ -237,18 +237,18 @@ def test_run_workstation_success(mock_session: MagicMock) -> None:
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_latest_ubuntu_ami")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_success(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_ubuntu_ami: MagicMock,
     mock_run: MagicMock,
 ) -> None:
     """create_workstation validates name, resolves VPC/AMI, and launches."""
     mock_list.return_value = []
-    mock_ami_prefix.return_value = None
+    mock_settings.return_value = MagicMock(ami_prefix=None)
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
         private_subnet_ids=["subnet-a"],
@@ -274,18 +274,18 @@ def test_create_workstation_success(
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_latest_ami_by_name_prefix")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_uses_ami_prefix(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_ami_by_prefix: MagicMock,
     mock_run: MagicMock,
 ) -> None:
     """create_workstation resolves AMI via configured prefix when available."""
     mock_list.return_value = []
-    mock_ami_prefix.return_value = "default-desk-ami"
+    mock_settings.return_value = MagicMock(ami_prefix="default-desk-ami")
     mock_ami_by_prefix.return_value = "ami-custom"
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
@@ -303,17 +303,17 @@ def test_create_workstation_uses_ami_prefix(
 
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_explicit_ami(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_run: MagicMock,
 ) -> None:
     """create_workstation skips AMI resolution when ami_id is provided."""
     mock_list.return_value = []
-    mock_ami_prefix.return_value = "default-desk-ami"
+    mock_settings.return_value = MagicMock(ami_prefix="default-desk-ami")
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
         private_subnet_ids=["subnet-a"],
@@ -353,11 +353,11 @@ def test_create_workstation_rejects_duplicate_stopped(mock_list: MagicMock) -> N
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_latest_ubuntu_ami")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_allows_terminated_duplicate(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_ubuntu_ami: MagicMock,
     mock_run: MagicMock,
@@ -366,7 +366,7 @@ def test_create_workstation_allows_terminated_duplicate(
     mock_list.return_value = [
         Workstation(instance_id="i-old", name="my-ws", state="terminated"),
     ]
-    mock_ami_prefix.return_value = None
+    mock_settings.return_value = MagicMock(ami_prefix=None)
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
         private_subnet_ids=["subnet-a"],

@@ -3,152 +3,35 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 
 import click
 
 from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
 
 log = get_logger("scp")
 
 
-def _remote_workstation_from_path(path: str) -> str | None:
-    """If path looks like 'workstation_name:remote_path', return the workstation name; else None.
-
-    Avoids treating Windows paths (C:\\...) or relative paths with colons as workstation refs.
-    """
-    if ":" not in path or path.startswith(":"):
-        return None
-    prefix, suffix = path.split(":", 1)
-    # Workstation name: no slash, and remote path typically starts with / or ~
-    if not prefix or "/" in prefix or "\\" in prefix:
-        return None
-    if suffix.startswith("/") or suffix.startswith("~"):
-        return prefix
-    # e.g. host:relative/path - still treat as workstation:path
-    if prefix and len(prefix) <= 64 and not prefix.endswith("."):
-        return prefix
-    return None
-
-
-def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) -> str:
-    """Parse an SCP path, expanding workstation references.
-
-    Supports formats:
-    - Local path: /path/to/file or ./file or relative/path
-    - Remote path with workstation: workstation:/remote/path or workstation:relative/path
-    - Remote path with colon: :/remote/path (uses default workstation)
-
-    Returns the path formatted for scp (local paths unchanged, remote as user@instance_id:path).
-    """
-    if path.startswith(":"):
-        # :/path means remote on the default workstation
-        remote_path = path[1:]
-        return f"{user}@{instance_id}:{remote_path}"
-
-    if ":" in path:
-        prefix, suffix = path.split(":", 1)
-        if prefix == workstation or prefix == "":
-            return f"{user}@{instance_id}:{suffix}"
-        # workstation name in path overrides default (caller must resolve that workstation)
-        if _remote_workstation_from_path(path):
-            return f"{user}@{instance_id}:{suffix}"
-
-    # Local path - return as-is
-    return path
-
-
-@click.command("scp")
-@click.argument("workstation")
-@click.argument("source")
-@click.argument("destination")
-@click.option(
-    "--user",
-    "-u",
-    default="ubuntu",
-    show_default=True,
-    help="SSH username on the instance.",
-)
-@click.option(
-    "--identity",
-    "-i",
-    "identity_file",
-    default=None,
-    help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
-)
-@click.option(
-    "--region",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
-    "--wait/--no-wait",
-    default=True,
-    show_default=True,
-    help="Wait for instance to be ready if SSM agent not yet connected.",
-)
-@click.option(
-    "--wait-timeout",
-    default=300,
-    show_default=True,
-    help="Seconds to wait for SSM before failing.",
-)
-@click.option(
-    "--recursive",
-    "-r",
-    "recursive",
-    is_flag=True,
-    default=False,
-    help="Recursively copy directories.",
-)
-def scp(
+def scp_transfer(
     workstation: str,
     source: str,
     destination: str,
+    *,
     user: str,
     identity_file: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     recursive: bool,
+    region: str | None,
+    profile: str | None,
+    replace_process: bool = True,
 ) -> None:
-    """Copy files to/from a workstation via SCP over SSM tunnel.
-
-    Use workstation:path or :path to refer to remote paths on the workstation.
-    Local paths are specified without a prefix.
-
-    \b
-    Examples:
-      desk scp main ./local-file.txt :~/remote-file.txt      # Upload to home dir
-      desk scp main :~/remote-file.txt ./local-file.txt     # Download from home dir
-      desk scp main -r ./local-dir :~/remote-dir            # Upload directory recursively
-      desk scp main :/etc/hosts ./hosts                     # Download from remote path
-    """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
-
-    log.debug(
-        "scp source=%s dest=%s workstation=%s region=%s profile=%s",
-        source,
-        destination,
-        workstation,
-        region,
-        profile,
-    )
-
+    """Execute a full SCP transfer using desk's SSM-backed SSH path."""
     key_path = identity_file or get_default_private_key_path()
     if not key_path:
         raise click.ClickException(
@@ -248,9 +131,148 @@ def scp(
     scp_args.extend([scp_source, scp_dest])
 
     log.info("exec scp source=%s dest=%s", scp_source, scp_dest)
-    # Replace our process with scp for proper terminal handling
-    try:
-        os.execvp("scp", scp_args)
-    except OSError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(127)
+    if replace_process:
+        # Replace our process with scp for proper terminal handling
+        try:
+            os.execvp("scp", scp_args)
+        except OSError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(127)
+    result = subprocess.run(scp_args, check=False, capture_output=False)
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"scp failed ({result.returncode}) for {source} -> {destination}"
+        )
+
+
+def _remote_workstation_from_path(path: str) -> str | None:
+    """If path looks like 'workstation_name:remote_path', return the workstation name; else None.
+
+    Avoids treating Windows paths (C:\\...) or relative paths with colons as workstation refs.
+    """
+    if ":" not in path or path.startswith(":"):
+        return None
+    prefix, suffix = path.split(":", 1)
+    # Workstation name: no slash, and remote path typically starts with / or ~
+    if not prefix or "/" in prefix or "\\" in prefix:
+        return None
+    if suffix.startswith("/") or suffix.startswith("~"):
+        return prefix
+    # e.g. host:relative/path - still treat as workstation:path
+    if prefix and len(prefix) <= 64 and not prefix.endswith("."):
+        return prefix
+    return None
+
+
+def _parse_scp_path(path: str, workstation: str, user: str, instance_id: str) -> str:
+    """Parse an SCP path, expanding workstation references.
+
+    Supports formats:
+    - Local path: /path/to/file or ./file or relative/path
+    - Remote path with workstation: workstation:/remote/path or workstation:relative/path
+    - Remote path with colon: :/remote/path (uses default workstation)
+
+    Returns the path formatted for scp (local paths unchanged, remote as user@instance_id:path).
+    """
+    if path.startswith(":"):
+        # :/path means remote on the default workstation
+        remote_path = path[1:]
+        return f"{user}@{instance_id}:{remote_path}"
+
+    if ":" in path:
+        prefix, suffix = path.split(":", 1)
+        if prefix == workstation or prefix == "":
+            return f"{user}@{instance_id}:{suffix}"
+        # workstation name in path overrides default (caller must resolve that workstation)
+        if _remote_workstation_from_path(path):
+            return f"{user}@{instance_id}:{suffix}"
+
+    # Local path - return as-is
+    return path
+
+
+@click.command("scp")
+@click.argument("workstation")
+@click.argument("source")
+@click.argument("destination")
+@click.option(
+    "--user",
+    "-u",
+    default="ubuntu",
+    show_default=True,
+    help="SSH username on the instance.",
+)
+@click.option(
+    "--identity",
+    "-i",
+    "identity_file",
+    default=None,
+    help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
+)
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait for instance to be ready if SSM agent not yet connected.",
+)
+@click.option(
+    "--wait-timeout",
+    default=300,
+    show_default=True,
+    help="Seconds to wait for SSM before failing.",
+)
+@click.option(
+    "--recursive",
+    "-r",
+    "recursive",
+    is_flag=True,
+    default=False,
+    help="Recursively copy directories.",
+)
+def scp(
+    workstation: str,
+    source: str,
+    destination: str,
+    user: str,
+    identity_file: str | None,
+    wait: bool,
+    wait_timeout: int,
+    recursive: bool,
+) -> None:
+    """Copy files to/from a workstation via SCP over SSM tunnel.
+
+    Use workstation:path or :path to refer to remote paths on the workstation.
+    Local paths are specified without a prefix.
+
+    \b
+    Examples:
+      desk scp main ./local-file.txt :~/remote-file.txt      # Upload to home dir
+      desk scp main :~/remote-file.txt ./local-file.txt     # Download from home dir
+      desk scp main -r ./local-dir :~/remote-dir            # Upload directory recursively
+      desk scp main :/etc/hosts ./hosts                     # Download from remote path
+    """
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+
+    log.debug(
+        "scp source=%s dest=%s workstation=%s region=%s profile=%s",
+        source,
+        destination,
+        workstation,
+        region,
+        profile,
+    )
+    scp_transfer(
+        workstation,
+        source,
+        destination,
+        user=user,
+        identity_file=identity_file,
+        wait=wait,
+        wait_timeout=wait_timeout,
+        recursive=recursive,
+        region=region,
+        profile=profile,
+        replace_process=True,
+    )

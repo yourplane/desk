@@ -10,7 +10,7 @@ from typing import Callable
 import click
 
 from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
 
@@ -26,6 +26,7 @@ def get_connection_argv(
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
+    forward_agent: bool = False,
     remote_command: str | None = None,
     key_timeout: int = 300,
     verbose_callback: Callable[[str, float | None], None] | None = None,
@@ -42,8 +43,9 @@ def get_connection_argv(
         if verbose_callback:
             verbose_callback(msg, elapsed)
 
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = region or aws.region
+    profile = profile or aws.profile
 
     log.debug("get_connection_argv workstation=%s region=%s profile=%s", workstation, region, profile)
 
@@ -147,6 +149,9 @@ def get_connection_argv(
     for fwd in forwards:
         ssh_args[1:1] = ["-L", fwd]
 
+    if forward_agent:
+        ssh_args[1:1] = ["-A"]
+
     if remote_command:
         ssh_args.insert(-1, "-t")  # Force TTY so remote command (e.g. screen) gets a terminal
         ssh_args.append(remote_command)
@@ -171,20 +176,6 @@ def get_connection_argv(
     help="Path to SSH private key (default: ~/.ssh/id_ed25519 or id_rsa).",
 )
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--wait/--no-wait",
     default=True,
     show_default=True,
@@ -204,6 +195,14 @@ def get_connection_argv(
     help="Port forward in SSH -L format: [local_port:]remote_host:remote_port. Can be repeated.",
 )
 @click.option(
+    "-A",
+    "--forward-agent",
+    "forward_agent",
+    is_flag=True,
+    default=False,
+    help="Forward authentication agent to the remote machine (same as ssh -A).",
+)
+@click.option(
     "--key-timeout",
     default=300,
     show_default=True,
@@ -213,11 +212,10 @@ def connect(
     workstation: str,
     user: str,
     identity_file: str | None,
-    region: str | None,
-    profile: str | None,
     wait: bool,
     wait_timeout: int,
     forwards: tuple[str, ...],
+    forward_agent: bool,
     key_timeout: int,
 ) -> None:
     """Connect to a workstation via SSH over SSM tunnel.
@@ -227,7 +225,12 @@ def connect(
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
     Requires the Session Manager plugin and SSH client to be installed.
+
+    AWS region and credential profile come from the environment or desk config.
     """
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
     ssh_args = get_connection_argv(
         workstation=workstation,
         user=user,
@@ -237,6 +240,7 @@ def connect(
         wait=wait,
         wait_timeout=wait_timeout,
         forwards=forwards,
+        forward_agent=forward_agent,
         remote_command=None,
         key_timeout=key_timeout,
     )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from desk.aws import create_workstation
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 @click.command("create")
@@ -24,20 +24,6 @@ from desk.config import get_default_profile, get_default_region
     help="AMI ID. Default: latest AMI matching config ami_prefix, or latest Ubuntu 24.04 LTS.",
 )
 @click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
-@click.option(
     "--shutdown",
     "shutdown_after",
     type=str,
@@ -49,8 +35,6 @@ def create(
     workstation: str,
     instance_type: str,
     ami: str | None,
-    region: str | None,
-    profile: str | None,
     shutdown_after: str,
 ) -> None:
     """Create a new workstation instance.
@@ -60,9 +44,12 @@ def create(
     desk discovery (Type=workstation).
 
     Requires the desk CloudFormation stack to be deployed first.
+
+    AWS region and credential profile come from the environment or desk config.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     click.echo(f"Launching instance '{workstation}' ({instance_type})...")
     try:
