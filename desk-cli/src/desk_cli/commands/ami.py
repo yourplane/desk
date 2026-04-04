@@ -430,7 +430,7 @@ def _run_async_ami_build_step(snap: AsyncAmiBuildSnapshot) -> None:
             workstation_name,
             instance_type,
             ami_id=builder_ami,
-            shutdown_after="0",
+            shutdown_after="4h",
             region=region,
             profile=profile,
         )
@@ -562,7 +562,7 @@ def ami_build_run(
             workstation_name,
             instance_type,
             ami_id=builder_ami,
-            shutdown_after="0",
+            shutdown_after="4h",
             region=region,
             profile=profile,
         )

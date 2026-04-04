@@ -549,6 +549,8 @@ def test_ami_build_step_creates_and_records_instance(
 
     assert result.exit_code == 0
     mock_create.assert_called_once()
+    _args, kwargs = mock_create.call_args
+    assert kwargs.get("shutdown_after") == "4h"
     mock_put.assert_called_once()
     args, kwargs = mock_put.call_args
     assert "builder-instance.json" in args[2]
