@@ -330,7 +330,7 @@ export async function deleteSavedCommand(id: string): Promise<{ deleted: boolean
   return res.json()
 }
 
-// ---- Web routes (S3-backed port registry; not wired to actual routing) ----
+// ---- Web routes (S3-backed port registry) ----
 
 export interface WebRoutesMapResponse {
   routes: Record<string, number[]>
