@@ -19,6 +19,7 @@ from desk_cli.commands import (
     list_,
     reap,
     route,
+    route_sync,
     run,
     scp,
     start,
@@ -57,6 +58,7 @@ cli.add_command(kill.kill, "kill")
 cli.add_command(list_.list_cmd, "list")
 cli.add_command(reap.reap, "reap")
 cli.add_command(route.route_group, "route")
+cli.add_command(route_sync.route_sync_group, "route-sync")
 cli.add_command(web_router.web_router_group, "web-router")
 cli.add_command(run.run, "run")
 cli.add_command(scp.scp, "scp")

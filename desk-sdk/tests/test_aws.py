@@ -15,6 +15,7 @@ from desk.aws import (
     delete_key_pair,
     get_ami_state,
     get_desk_copy_bucket,
+    get_desk_data_bucket,
     get_desk_vpc_outputs,
     get_instance_state,
     get_latest_ami_by_name_prefix,
@@ -129,6 +130,53 @@ def test_get_desk_copy_bucket_missing_output(mock_session: MagicMock) -> None:
 
     with pytest.raises(RuntimeError, match="no DeskCopyBucketName output"):
         get_desk_copy_bucket(stack_name="desk")
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_success(mock_session: MagicMock) -> None:
+    """get_desk_data_bucket returns bucket name from stack output."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.return_value = {
+        "Stacks": [
+            {
+                "Outputs": [
+                    {"OutputKey": "DeskDataBucketName", "OutputValue": "desk-123-us-east-1-data"},
+                ],
+            },
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    result = get_desk_data_bucket(stack_name="desk")
+    assert result == "desk-123-us-east-1-data"
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_stack_not_found(mock_session: MagicMock) -> None:
+    """get_desk_data_bucket raises when stack does not exist."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.side_effect = ClientError(
+        {"Error": {"Code": "ValidationError", "Message": "Stack does not exist"}},
+        "DescribeStacks",
+    )
+    mock_session.return_value.client.return_value = mock_cf
+
+    with pytest.raises(RuntimeError, match="Stack 'desk' not found"):
+        get_desk_data_bucket(stack_name="desk")
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_missing_output(mock_session: MagicMock) -> None:
+    """get_desk_data_bucket raises when DeskDataBucketName output is missing."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.return_value = {
+        "Stacks": [{"Outputs": [{"OutputKey": "VpcId", "OutputValue": "vpc-123"}]}],
+    }
+    mock_session.return_value.client.return_value = mock_cf
+
+    with pytest.raises(RuntimeError, match="no DeskDataBucketName output"):
+        get_desk_data_bucket(stack_name="desk")
 
 
 @patch("desk.aws.boto3.Session")

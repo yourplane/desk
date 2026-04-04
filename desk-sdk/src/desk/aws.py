@@ -109,6 +109,48 @@ def get_desk_copy_bucket(
     return bucket
 
 
+def get_desk_data_bucket(
+    stack_name: str = "desk",
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Return the desk data S3 bucket name from the desk stack output.
+
+    Used for ``DESK_DATA_BUCKET`` (web routes registry, saved commands, etc.) when the
+    environment variable is unset. Raises RuntimeError if the stack or output is missing.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    cf = session.client("cloudformation")
+    resolved_region = session.region_name
+
+    try:
+        response = cf.describe_stacks(StackName=stack_name)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ValidationError":
+            region_hint = f" (region: {resolved_region})" if resolved_region else ""
+            profile_hint = f" (profile: {profile})" if profile else ""
+            raise RuntimeError(
+                f"Stack '{stack_name}' not found{region_hint}{profile_hint}.\n\n"
+                "Possible causes:\n"
+                "  • Wrong region  – try --region or set AWS_REGION\n"
+                "  • Wrong profile – try --profile or set AWS_PROFILE\n"
+                "  • Stack not deployed in this account\n\n"
+                f"Verify:  aws cloudformation describe-stacks --stack-name {stack_name} --region <region>\n"
+                f"Or set DESK_DATA_BUCKET to your desk data bucket name."
+            ) from e
+        raise
+
+    stack = response["Stacks"][0]
+    outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
+    bucket = outputs.get("DeskDataBucketName", "").strip()
+    if not bucket:
+        raise RuntimeError(
+            f"Stack '{stack_name}' has no DeskDataBucketName output. "
+            "Deploy desk infrastructure with a DataBucket, or set DESK_DATA_BUCKET."
+        )
+    return bucket
+
+
 def get_latest_ubuntu_ami(
     version: str = "24.04",
     architecture: str = "x86_64",
