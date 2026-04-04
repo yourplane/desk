@@ -522,6 +522,7 @@ def _s3_get_for_async_build(
     has_builder_record: bool,
     instance_id: str | None = None,
     config: dict | None = None,
+    ami_result: dict | None | str = "missing",
 ) -> MagicMock:
     """Return a mock S3 client get_object that serves config.json and optional builder-instance.json."""
 
@@ -543,6 +544,11 @@ def _s3_get_for_async_build(
             return {
                 "Body": io.BytesIO(json.dumps({"instance_id": instance_id}).encode()),
             }
+        if Key.endswith("ami-result.json"):
+            if ami_result == "missing":
+                raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "n"}}, "GetObject")
+            assert isinstance(ami_result, dict)
+            return {"Body": io.BytesIO(json.dumps(ami_result).encode())}
         raise AssertionError(Key)
 
     s3 = MagicMock()
@@ -896,6 +902,154 @@ def test_ami_build_step_creates_and_records_instance(
     mock_put.assert_called_once()
     args, kwargs = mock_put.call_args
     assert "builder-instance.json" in args[2]
+
+
+@patch("desk_cli.commands.ami.create_ami", return_value="ami-reg1")
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_after_recipe_calls_create_ami(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+    mock_create_ami: object,
+) -> None:
+    """After all recipe steps succeed, step registers an AMI and writes ami-result.json."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=True,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_create_ami.assert_called_once()
+    assert mock_create_ami.call_args[0][0] == "i-abc"
+    _kwargs = mock_create_ami.call_args[1]
+    assert _kwargs["name"] == "my-ami-b1"
+    assert _kwargs["no_reboot"] is False
+    put_calls = [c for c in s3.put_object.call_args_list if "ami-result.json" in str(c)]
+    assert len(put_calls) == 1
+    body = put_calls[0][1]["Body"]
+    assert json.loads(body.decode()) == {"image_id": "ami-reg1"}
+
+
+@patch("desk_cli.commands.ami.terminate_instance")
+@patch("desk_cli.commands.ami.get_ami_state", return_value="available")
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_terminates_builder_when_ami_available(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+    _mock_ami_state: object,
+    mock_terminate: object,
+) -> None:
+    """When the AMI is available, step terminates the builder (completion is inferred from AWS + S3)."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=True,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+        ami_result={"image_id": "ami-reg1"},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_terminate.assert_called_once_with("i-abc", region=None, profile=None)
+    put_calls = [c for c in s3.put_object.call_args_list if "ami-result.json" in str(c)]
+    assert len(put_calls) == 0
+
+
+@patch("desk_cli.commands.ami._maybe_evaluate_async_recipe")
+@patch("desk_cli.commands.ami.get_ami_state", return_value="pending")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_shows_post_recipe_ami_pending(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    _mock_ami_state: object,
+    mock_maybe_recipe: object,
+) -> None:
+    """status shows post-recipe AMI section when an image id is recorded."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_maybe_recipe.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=True,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+        ami_result={"image_id": "ami-reg1"},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "Post-recipe (AMI):" in result.output
+    assert "ami-reg1" in result.output
+    assert "pending" in result.output
 
 
 @patch("desk_cli.commands.ami.boto3.Session")
