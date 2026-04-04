@@ -2,34 +2,40 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
+import boto3
 import click
 
 from desk.aws import (
     create_ami,
     create_workstation,
     get_ami_state,
+    get_desk_copy_bucket,
     get_instance_state,
     get_latest_ubuntu_ami,
-    is_ssm_ready,
     list_amis,
     resolve_workstation,
-    stop_instance,
     terminate_instance,
     wait_for_ami_available,
     wait_for_instance_state,
     wait_for_ssm_ready,
 )
+from desk_cli import __version__
 from desk_cli.commands.run import run_script_on_instance
 from desk_cli.commands.scp import scp_transfer
 from desk.config import get_desk_settings
+
+
+AMI_BUILDS_PREFIX = "ami-builds/"
+AMI_BUILD_ARCHIVE_PREFIX = "ami-build-archive/"
 
 
 @click.group("ami")
@@ -127,74 +133,78 @@ def _versioned_ami_name(ami_name: str) -> str:
     return f"{base}-{timestamp}"
 
 
-@ami_group.command("list")
-@click.option(
-    "--output",
-    "-o",
-    type=click.Choice(["table", "plain"]),
-    default="table",
-    show_default=True,
-    help="Output format.",
-)
-@click.option(
-    "--all",
-    "show_all",
-    is_flag=True,
-    help="Show all owned AMIs, not only desk-created ones.",
-)
-def ami_list(
-    output: str,
-    show_all: bool,
-) -> None:
-    """List AMIs created from desk workstations.
+def _resolve_copy_source(src: str, config_dir: str) -> str:
+    if not os.path.isabs(src):
+        src = os.path.normpath(os.path.join(config_dir, src))
+    return src
 
-    By default shows only AMIs created with 'desk ami create'. Use --all to show
-    all AMIs you own in this region.
-    """
-    aws = get_desk_settings().aws_settings
-    region = aws.region
-    profile = aws.profile
 
-    amis = list_amis(region=region, profile=profile, managed_only=not show_all)
+def _resolve_run_for_build(cmd: str, config_dir: str) -> tuple[str, bool]:
+    """Return (resolved path or original cmd, True if local script file)."""
+    if not os.path.isabs(cmd) and ("/" in cmd or cmd.endswith(".sh")):
+        candidate = os.path.normpath(os.path.join(config_dir, cmd))
+        if os.path.isfile(candidate):
+            return candidate, True
+    return cmd, False
 
-    if not amis:
-        click.echo("No AMIs found.")
-        return
 
-    if output == "plain":
-        for a in amis:
-            source = a.source_instance or "-"
-            click.echo(f"{a.image_id}\t{a.name}\t{a.state}\t{a.creation_date}\t{source}")
-        return
+def _artifact_rel_path(local_path: str, config_dir: str) -> str:
+    """Relative path under the staging tree (forward slashes)."""
+    config_dir = os.path.abspath(config_dir)
+    local_path = os.path.abspath(local_path)
+    try:
+        rel = os.path.relpath(local_path, config_dir)
+        if not rel.startswith(".."):
+            return rel.replace(os.sep, "/")
+    except ValueError:
+        pass
+    digest = hashlib.sha256(local_path.encode()).hexdigest()[:16]
+    base = os.path.basename(local_path.rstrip("/")) or "artifact"
+    return f"__outside_config__/{digest}/{base}"
 
-    # Table format
-    max_id = max(len(a.image_id) for a in amis)
-    max_name = max(len(a.name) for a in amis)
-    max_state = max(len(a.state) for a in amis)
-    max_date = max(len(a.creation_date) for a in amis)
-    max_source = max(len(a.source_instance or "-") for a in amis)
-    max_id = max(max_id, 9)  # "IMAGE ID"
-    max_name = max(max_name, 4)
-    max_state = max(max_state, 5)
-    max_date = max(max_date, 7)
-    max_source = max(max_source, 7)
 
-    header = (
-        f"{'IMAGE ID':<{max_id}}  {'NAME':<{max_name}}  "
-        f"{'STATE':<{max_state}}  {'CREATED':<{max_date}}  SOURCE"
-    )
-    click.echo(header)
-    click.echo("-" * len(header))
+def _s3_uri_for_key(key: str) -> str:
+    return f"s3:/{key}"
 
-    for a in amis:
-        source = a.source_instance or "-"
-        click.echo(
-            f"{a.image_id:<{max_id}}  {a.name:<{max_name}}  "
-            f"{a.state:<{max_state}}  {a.creation_date:<{max_date}}  {source}"
+
+def _new_build_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{ts}-{secrets.token_hex(4)}"
+
+
+def _normalize_build_id_arg(arg: str) -> str:
+    s = arg.strip().strip("/")
+    for prefix in (AMI_BUILDS_PREFIX, AMI_BUILD_ARCHIVE_PREFIX):
+        if s.startswith(prefix):
+            s = s[len(prefix) :]
+            break
+    return s.rstrip("/")
+
+
+def _validate_build_recipe_config(config: dict[str, Any], config_path: str) -> None:
+    if "base_ami" in config:
+        raise click.ClickException(
+            "Builder always uses latest Ubuntu 24.04; 'base_ami' is not allowed in recipes."
         )
+    ami_name = config.get("ami_name")
+    if not ami_name:
+        raise click.ClickException("Config must specify 'ami_name'.")
+    if "workstation_name" in config:
+        raise click.ClickException(
+            "Config must not specify 'workstation_name'; it is auto-generated from ami_name."
+        )
+    if "key" in config:
+        raise click.ClickException("Config must not specify 'key'.")
+    _ = config_path  # reserved for future path-based checks
 
 
-@ami_group.command("build")
+@ami_group.group("build")
+def ami_build_group() -> None:
+    """Stage AMI build recipes in S3 and run the builder pipeline."""
+    pass
+
+
+@ami_build_group.command("run")
 @click.argument(
     "config_file",
     type=click.Path(exists=True),
@@ -204,7 +214,7 @@ def ami_list(
     is_flag=True,
     help="Do not wait for AMI to become available after creation.",
 )
-def ami_build(
+def ami_build_run(
     config_file: str,
     no_wait: bool,
 ) -> None:
@@ -231,21 +241,11 @@ def ami_build(
     profile = aws.profile
 
     config = _load_build_config(config_file)
-    if "base_ami" in config:
-        raise click.ClickException(
-            "Builder always uses latest Ubuntu 24.04; 'base_ami' is not allowed in recipes."
-        )
+    _validate_build_recipe_config(config, config_file)
     instance_type = config.get("instance_type", "t3.medium")
     steps = _get_build_steps(config)
     ami_name = config.get("ami_name")
-    if not ami_name:
-        raise click.ClickException("Config must specify 'ami_name'.")
-    if "workstation_name" in config:
-        raise click.ClickException(
-            "Config must not specify 'workstation_name'; it is auto-generated from ami_name."
-        )
-    if "key" in config:
-        raise click.ClickException("Config must not specify 'key'.")
+    assert ami_name  # validated above
     workstation_name = _builder_name(ami_name)
 
     click.echo(f"Building AMI from config: {config_file}")
@@ -364,6 +364,326 @@ def ami_build(
     click.echo("Terminating builder instance...")
     terminate_instance(instance_id, region=region, profile=profile)
     click.secho("AMI build complete.", fg="green", bold=True)
+
+
+@ami_build_group.command("create")
+@click.argument(
+    "config_file",
+    type=click.Path(exists=True),
+)
+@click.option(
+    "--stack",
+    default="desk",
+    show_default=True,
+    help="CloudFormation stack name for desk (used to resolve S3 bucket).",
+)
+def ami_build_create(config_file: str, stack: str) -> None:
+    """Upload an AMI build recipe and local artifacts to a dedicated folder in the desk S3 bucket.
+
+    Writes a normalized config (steps only) whose copy/run paths reference s3:/ keys under
+    ami-builds/<build-id>/.
+    """
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+
+    config = _load_build_config(config_file)
+    _validate_build_recipe_config(config, config_file)
+    steps = _get_build_steps(config)
+    ami_name = config.get("ami_name")
+    assert ami_name
+    config_dir = os.path.dirname(os.path.abspath(config_file))
+
+    try:
+        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    build_id = _new_build_id()
+    prefix = f"{AMI_BUILDS_PREFIX}{build_id}/"
+
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+
+    normalized_steps: list[dict[str, Any]] = []
+
+    for i, step in enumerate(steps):
+        if "run" in step:
+            cmd = step["run"]
+            resolved, is_file = _resolve_run_for_build(cmd, config_dir)
+            if is_file:
+                rel = _artifact_rel_path(resolved, config_dir)
+                key = f"{prefix}files/run/{i}/{rel}"
+                s3.upload_file(resolved, bucket, key)
+                normalized_steps.append({"run": _s3_uri_for_key(key)})
+            else:
+                normalized_steps.append({"run": cmd})
+        else:
+            item = dict(step["copy"])
+            src = item["source"]
+            recursive = item.get("recursive", False)
+            resolved = _resolve_copy_source(src, config_dir)
+            if not os.path.exists(resolved):
+                raise click.ClickException(
+                    f"Copy step {i}: source path does not exist: {resolved}"
+                )
+            if os.path.isdir(resolved):
+                if not recursive:
+                    raise click.ClickException(
+                        f"Copy step {i}: source is a directory; set \"recursive\": true."
+                    )
+                base_prefix = f"{prefix}files/copy/{i}/"
+                for root, _dirs, files in os.walk(resolved):
+                    for f in files:
+                        full = os.path.join(root, f)
+                        rel = os.path.relpath(full, resolved).replace(os.sep, "/")
+                        key = f"{base_prefix}{rel}"
+                        s3.upload_file(full, bucket, key)
+                item["source"] = _s3_uri_for_key(base_prefix.rstrip("/") + "/")
+            else:
+                rel = _artifact_rel_path(resolved, config_dir)
+                key = f"{prefix}files/copy/{i}/{rel}"
+                s3.upload_file(resolved, bucket, key)
+                item["source"] = _s3_uri_for_key(key)
+            normalized_steps.append({"copy": item})
+
+    out_config: dict[str, Any] = {
+        "ami_name": ami_name,
+        "instance_type": config.get("instance_type", "t3.medium"),
+        "steps": normalized_steps,
+    }
+
+    config_key = f"{prefix}config.json"
+    manifest_key = f"{prefix}manifest.json"
+    manifest = {
+        "build_id": build_id,
+        "ami_name": ami_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "original_config_path": os.path.abspath(config_file),
+        "desk_version": __version__,
+    }
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=config_key,
+        Body=json.dumps(out_config, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+    s3.put_object(
+        Bucket=bucket,
+        Key=manifest_key,
+        Body=json.dumps(manifest, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    click.echo(f"Staged AMI build {build_id}")
+    click.echo(f"  s3:/{prefix}")
+    click.echo(f"  Bucket: s3://{bucket}/{prefix}")
+
+
+@ami_build_group.command("list")
+@click.option(
+    "--archived",
+    is_flag=True,
+    help="List archived builds instead of active staged builds.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["table", "plain"]),
+    default="table",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--stack",
+    default="desk",
+    show_default=True,
+    help="CloudFormation stack name for desk (used to resolve S3 bucket).",
+)
+def ami_build_list_staged(
+    archived: bool,
+    output: str,
+    stack: str,
+) -> None:
+    """List staged AMI builds (active under ami-builds/, or archived under ami-build-archive/)."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+
+    try:
+        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    base = AMI_BUILD_ARCHIVE_PREFIX if archived else AMI_BUILDS_PREFIX
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+
+    resp = s3.list_objects_v2(Bucket=bucket, Prefix=base, Delimiter="/")
+    prefixes = [p["Prefix"] for p in resp.get("CommonPrefixes") or []]
+    builds: list[tuple[str, dict[str, Any] | None]] = []
+    for p in sorted(prefixes):
+        bid = p[len(base) :].rstrip("/")
+        if not bid:
+            continue
+        manifest_key = f"{p}manifest.json"
+        man: dict[str, Any] | None = None
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=manifest_key)
+            man = json.loads(obj["Body"].read())
+        except Exception:
+            pass
+        builds.append((bid, man))
+
+    if not builds:
+        click.echo("No AMI builds found.")
+        return
+
+    if output == "plain":
+        for bid, man in builds:
+            name = (man or {}).get("ami_name", "-")
+            created = (man or {}).get("created_at", "-")
+            click.echo(f"{bid}\t{name}\t{created}")
+        return
+
+    max_id = max(len(b[0]) for b in builds)
+    max_name = max(len((b[1] or {}).get("ami_name") or "-") for b in builds)
+    max_created = max(len((b[1] or {}).get("created_at") or "-") for b in builds)
+    max_id = max(max_id, len("BUILD ID"))
+    max_name = max(max_name, len("AMI NAME"))
+    max_created = max(max_created, len("CREATED (UTC)"))
+
+    header = (
+        f"{'BUILD ID':<{max_id}}  {'AMI NAME':<{max_name}}  {'CREATED (UTC)':<{max_created}}"
+    )
+    click.echo(header)
+    click.echo("-" * len(header))
+    for bid, man in builds:
+        name = (man or {}).get("ami_name", "-")
+        created = (man or {}).get("created_at", "-")
+        click.echo(f"{bid:<{max_id}}  {name:<{max_name}}  {created:<{max_created}}")
+
+
+@ami_build_group.command("cancel")
+@click.argument("build_id")
+@click.option(
+    "--stack",
+    default="desk",
+    show_default=True,
+    help="CloudFormation stack name for desk (used to resolve S3 bucket).",
+)
+def ami_build_cancel(build_id: str, stack: str) -> None:
+    """Move a staged AMI build from ami-builds/ to ami-build-archive/ in the desk bucket."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+
+    bid = _normalize_build_id_arg(build_id)
+    if not bid:
+        raise click.ClickException("Build id is empty.")
+
+    try:
+        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    src_prefix = f"{AMI_BUILDS_PREFIX}{bid}/"
+    dest_prefix = f"{AMI_BUILD_ARCHIVE_PREFIX}{bid}/"
+
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+
+    paginator = s3.get_paginator("list_objects_v2")
+    pages = list(paginator.paginate(Bucket=bucket, Prefix=src_prefix))
+    keys: list[str] = []
+    for page in pages:
+        for obj in page.get("Contents") or []:
+            keys.append(obj["Key"])
+
+    if not keys:
+        raise click.ClickException(
+            f"No active staged build found for id {bid!r} under {AMI_BUILDS_PREFIX}"
+        )
+
+    for key in keys:
+        suffix = key[len(src_prefix) :]
+        new_key = f"{dest_prefix}{suffix}"
+        s3.copy_object(
+            Bucket=bucket,
+            Key=new_key,
+            CopySource={"Bucket": bucket, "Key": key},
+        )
+        s3.delete_object(Bucket=bucket, Key=key)
+
+    click.echo(f"Archived AMI build {bid} to s3:/{dest_prefix}")
+
+
+@ami_group.command("list")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["table", "plain"]),
+    default="table",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Show all owned AMIs, not only desk-created ones.",
+)
+def ami_list(
+    output: str,
+    show_all: bool,
+) -> None:
+    """List AMIs created from desk workstations.
+
+    By default shows only AMIs created with 'desk ami create'. Use --all to show
+    all AMIs you own in this region.
+    """
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+
+    amis = list_amis(region=region, profile=profile, managed_only=not show_all)
+
+    if not amis:
+        click.echo("No AMIs found.")
+        return
+
+    if output == "plain":
+        for a in amis:
+            source = a.source_instance or "-"
+            click.echo(f"{a.image_id}\t{a.name}\t{a.state}\t{a.creation_date}\t{source}")
+        return
+
+    # Table format
+    max_id = max(len(a.image_id) for a in amis)
+    max_name = max(len(a.name) for a in amis)
+    max_state = max(len(a.state) for a in amis)
+    max_date = max(len(a.creation_date) for a in amis)
+    max_source = max(len(a.source_instance or "-") for a in amis)
+    max_id = max(max_id, 9)  # "IMAGE ID"
+    max_name = max(max_name, 4)
+    max_state = max(max_state, 5)
+    max_date = max(max_date, 7)
+    max_source = max(max_source, 7)
+
+    header = (
+        f"{'IMAGE ID':<{max_id}}  {'NAME':<{max_name}}  "
+        f"{'STATE':<{max_state}}  {'CREATED':<{max_date}}  SOURCE"
+    )
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for a in amis:
+        source = a.source_instance or "-"
+        click.echo(
+            f"{a.image_id:<{max_id}}  {a.name:<{max_name}}  "
+            f"{a.state:<{max_state}}  {a.creation_date:<{max_date}}  {source}"
+        )
 
 
 @ami_group.command("create")

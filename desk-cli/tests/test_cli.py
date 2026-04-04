@@ -1,9 +1,10 @@
 """CLI tests."""
 
+import json
 import re
 import subprocess
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
@@ -320,14 +321,23 @@ def test_desk_ami_build_help() -> None:
     result = _run_desk("ami", "build", "--help")
     assert result.returncode == 0
     output = _output(result)
+    assert "run" in output
+    assert "create" in output
+
+
+def test_desk_ami_build_run_help() -> None:
+    """desk ami build run --help succeeds."""
+    result = _run_desk("ami", "build", "run", "--help")
+    assert result.returncode == 0
+    output = _output(result)
     assert "CONFIG_FILE" in output
     assert "copy" in output
     assert "desk create" in output or "create" in output
 
 
 def test_desk_ami_build_missing_config() -> None:
-    """desk ami build fails when config file does not exist."""
-    result = _run_desk("ami", "build", "/nonexistent/config.json")
+    """desk ami build run fails when config file does not exist."""
+    result = _run_desk("ami", "build", "run", "/nonexistent/config.json")
     assert result.returncode != 0
     assert "No such file" in result.stderr or "nonexistent" in result.stderr.lower()
 
@@ -356,38 +366,120 @@ def test_ami_build_uses_sdk_instead_of_nested_desk_process(
     config_path.write_text(json.dumps({"ami_name": "my-ami", "steps": []}))
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["ami", "build", str(config_path)])
+    result = runner.invoke(cli, ["ami", "build", "run", str(config_path)])
 
     assert result.exit_code == 0
     mock_create_ws.assert_called_once()
 
 
 def test_desk_ami_build_invalid_config(tmp_path: object) -> None:
-    """desk ami build fails when config is invalid JSON or schema."""
+    """desk ami build run fails when config is invalid JSON or schema."""
     from pathlib import Path
 
     path = Path(tmp_path) / "config.json"
     path.write_text("not json")
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
 
     path.write_text('{"copy": "not a list"}')
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
     out = _output(result)
     assert "config" in out.lower() or "copy" in out.lower() or "run" in out.lower() or "error" in out.lower()
 
     path.write_text('{"copy": [], "run": []}')
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
     out = _output(result)
     assert "ami_name" in out.lower()
 
     path.write_text('{"copy": [], "run": [], "ami_name": "x", "workstation_name": "builder"}')
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
     out = _output(result)
     assert "workstation_name" in out.lower()
+
+
+def test_desk_ami_build_list_help() -> None:
+    """desk ami build list --help mentions archived flag."""
+    result = _run_desk("ami", "build", "list", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "--archived" in output
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.commands.ami._new_build_id", return_value="20260101-010101-abcdef01")
+def test_ami_build_create_uploads(
+    _mock_new_id: object,
+    _mock_bucket: object,
+    mock_session: object,
+    tmp_path: object,
+) -> None:
+    """ami build create uploads artifacts and writes config/manifest to S3."""
+    from pathlib import Path
+
+    p = Path(tmp_path)
+    (p / "hello.txt").write_text("hi")
+    cfg = p / "recipe.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "ami_name": "my-ami",
+                "steps": [{"copy": {"source": "hello.txt", "dest": "/tmp/"}}],
+            }
+        )
+    )
+
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "create", str(cfg)])
+
+    assert result.exit_code == 0
+    s3.upload_file.assert_called()
+    assert s3.put_object.call_count == 2
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_list_active(_mock_bucket: object, mock_session: object) -> None:
+    """ami build list reads manifests under ami-builds/."""
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+    s3.list_objects_v2.return_value = {"CommonPrefixes": [{"Prefix": "ami-builds/b1/"}]}
+    s3.get_object.return_value = {
+        "Body": MagicMock(read=lambda: b'{"ami_name":"n","created_at":"t"}'),
+    }
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "list"])
+
+    assert result.exit_code == 0
+    assert "b1" in result.output
+    assert "n" in result.output
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_cancel_archives(_mock_bucket: object, mock_session: object) -> None:
+    """ami build cancel copies keys to ami-build-archive/ then deletes."""
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+    paginator = MagicMock()
+    paginator.paginate.return_value = [
+        {"Contents": [{"Key": "ami-builds/bid/manifest.json"}]},
+    ]
+    s3.get_paginator.return_value = paginator
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "cancel", "bid"])
+
+    assert result.exit_code == 0
+    s3.copy_object.assert_called_once()
+    s3.delete_object.assert_called_once()
 
 
 def test_desk_ami_create_help() -> None:
