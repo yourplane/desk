@@ -850,7 +850,8 @@ def _run_async_ami_build_step(
 ) -> None:
     """Perform at most one quick action for `desk ami build step` (after status output).
 
-    Pass ``recipe_eval`` from the same evaluation used for `_print_async_ami_build_status`.
+    When the builder is running and SSM-ready, ``recipe_eval`` must be supplied (same object
+    as for `_print_async_ami_build_status`); this function does not re-query AWS for recipe state.
     """
     aws = get_desk_settings().aws_settings
     region = aws.region
@@ -865,11 +866,12 @@ def _run_async_ami_build_step(
             )
         if snap.ec2_state in ("running", "pending") and snap.ssm_ready is True:
             assert snap.recorded_instance_id is not None
-            ev = recipe_eval if recipe_eval is not None else _maybe_evaluate_async_recipe(snap)
-            if ev is None:
+            if recipe_eval is None:
                 raise click.ClickException(
-                    "Internal error: recipe state missing for running builder with SSM ready."
+                    "Internal error: recipe evaluation was not provided for an SSM-ready builder; "
+                    "this is a desk bug."
                 )
+            ev = recipe_eval
             if retry:
                 if ev.recipe_complete:
                     raise click.ClickException(
