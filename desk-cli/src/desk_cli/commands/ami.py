@@ -376,6 +376,19 @@ def _staged_s3_object_key(src: str) -> str:
     return s[4:].lstrip("/")
 
 
+def _wrap_async_builder_shell_needing_aws(inner_command: str) -> str:
+    """Stock Ubuntu builder AMIs may not include ``aws``; install ``awscli`` before ``aws s3`` usage."""
+    return (
+        "set -eu\n"
+        "export DEBIAN_FRONTEND=noninteractive\n"
+        "if ! command -v aws >/dev/null 2>&1; then\n"
+        "  apt-get update -qq\n"
+        "  apt-get install -y awscli\n"
+        "fi\n"
+        f"{inner_command}\n"
+    )
+
+
 def _async_shell_for_copy_step(
     copy_item: dict[str, Any],
     *,
@@ -386,13 +399,14 @@ def _async_shell_for_copy_step(
     dest = copy_item["dest"]
     recursive = copy_item.get("recursive", False)
     key = _staged_s3_object_key(src)
-    return shell_command_s3_to_workstation(
+    inner = shell_command_s3_to_workstation(
         bucket,
         key,
         dest,
         recursive=recursive,
         region=region,
     )
+    return _wrap_async_builder_shell_needing_aws(inner)
 
 
 def _async_shell_for_run_step(
@@ -407,10 +421,11 @@ def _async_shell_for_run_step(
         key = _staged_s3_object_key(rv)
         region_str = region or "us-east-1"
         tmp = f"/tmp/desk-ami-run-{step_index}.sh"
-        return (
+        inner = (
             f"aws s3 cp s3://{bucket}/{key} {tmp!r} --region {region_str!r} "
             f"&& bash {tmp}"
         )
+        return _wrap_async_builder_shell_needing_aws(inner)
     return rv
 
 

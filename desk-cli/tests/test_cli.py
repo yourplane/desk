@@ -597,6 +597,48 @@ def test_ami_build_step_starts_recipe_run(
     assert "cmd-ssm-1" in result.output
 
 
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-copy")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_copy_installs_aws_cli_before_s3(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+) -> None:
+    """Copy steps wrap aws s3 with apt-get install awscli when the builder has no aws CLI."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={
+            "steps": [
+                {
+                    "copy": {
+                        "source": "s3:/ami-builds/b1/files/copy/0/file.sh",
+                        "dest": "/tmp/file.sh",
+                    }
+                },
+            ]
+        },
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_send.assert_called_once()
+    _args, _kwargs = mock_send.call_args
+    script = _args[1]
+    assert "apt-get install -y awscli" in script
+    assert "aws s3 cp" in script
+
+
 @patch("desk_cli.commands.ami._put_s3_object_json")
 @patch("desk_cli.commands.ami.create_workstation", return_value=("i-new", None))
 @patch("desk_cli.commands.ami.get_latest_ubuntu_ami", return_value="ami-ubuntu")
