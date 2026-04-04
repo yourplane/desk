@@ -14,7 +14,7 @@ const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
 export function WebRoutesTab() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [bannerError, setBannerError] = useState<string | null>(null)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [webRoutesByName, setWebRoutesByName] = useState<Record<string, number[]>>({})
   const [webRoutesBusy, setWebRoutesBusy] = useState<string | null>(null)
@@ -29,7 +29,6 @@ export function WebRoutesTab() {
     loadInFlightRef.current = true
     if (!isBackground) {
       setLoading(true)
-      setError(null)
     }
     try {
       const [list, webRes] = await Promise.all([
@@ -42,6 +41,7 @@ export function WebRoutesTab() {
       setInstances(list)
       setWebRoutesByName(webRes.routes ?? {})
       setRefreshError(null)
+      if (!isBackground) setBannerError(null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       const fallback = 'Unable to load workstations. Check the browser console or API logs.'
@@ -49,7 +49,7 @@ export function WebRoutesTab() {
         setRefreshError('Could not refresh. Will retry.')
         console.error('WebRoutesTab poll failed:', e)
       } else {
-        setError(!msg.trim() ? fallback : msg)
+        setBannerError(!msg.trim() ? fallback : msg)
         console.error('WebRoutesTab load failed:', e)
       }
     } finally {
@@ -89,17 +89,17 @@ export function WebRoutesTab() {
     const raw = (portDraftByKey[key] ?? '').trim()
     const port = parseInt(raw, 10)
     if (Number.isNaN(port) || port < 1 || port > 65535) {
-      setError('Enter a valid port (1–65535).')
+      setBannerError('Enter a valid port (1–65535).')
       return
     }
     setWebRoutesBusy(key)
-    setError(null)
+    setBannerError(null)
     try {
       const result = await addWebRoute(key, port)
       setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
       setPortDraftByKey((prev) => ({ ...prev, [key]: '' }))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setBannerError(e instanceof Error ? e.message : String(e))
     } finally {
       setWebRoutesBusy(null)
     }
@@ -107,12 +107,12 @@ export function WebRoutesTab() {
 
   const onRemoveWebRoute = async (key: string, port: number) => {
     setWebRoutesBusy(key)
-    setError(null)
+    setBannerError(null)
     try {
       const result = await removeWebRoute(key, port)
       setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setBannerError(e instanceof Error ? e.message : String(e))
     } finally {
       setWebRoutesBusy(null)
     }
@@ -122,15 +122,21 @@ export function WebRoutesTab() {
     return <p className="loading">Loading web routes…</p>
   }
 
-  if (error) {
-    return <p className="error-message" role="alert">{error}</p>
-  }
-
   return (
     <>
-      <p className="web-routes-tab-intro">
-        Registered ports for routing (stored in S3). This list is not wired to live proxying yet.
-      </p>
+      {bannerError && (
+        <div className="web-routes-banner web-routes-banner--error" role="alert">
+          <span className="web-routes-banner-text">{bannerError}</span>
+          <button
+            type="button"
+            className="web-routes-banner-dismiss"
+            onClick={() => setBannerError(null)}
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {refreshError && (
         <p className="refresh-error" role="status">{refreshError}</p>
       )}

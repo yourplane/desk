@@ -435,11 +435,52 @@
   min-height: 2rem;
 }
 
-.web-routes-tab-intro {
+.web-routes-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
   margin: 0 0 0.75rem;
+  padding: 0.55rem 0.65rem 0.55rem 0.85rem;
+  border-radius: 8px;
   font-size: 0.875rem;
-  color: var(--text-muted);
   line-height: 1.4;
+}
+
+.web-routes-banner--error {
+  background: rgba(243, 139, 168, 0.12);
+  border: 1px solid rgba(243, 139, 168, 0.45);
+  color: var(--danger);
+}
+
+.web-routes-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.web-routes-banner-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.web-routes-banner-dismiss:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .reaper-description {
