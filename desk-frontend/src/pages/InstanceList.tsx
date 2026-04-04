@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { createWorkstation, listInstances, setAutoStop, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
+import {
+  addWebRoute,
+  createWorkstation,
+  fetchWebRoutesAll,
+  listInstances,
+  removeWebRoute,
+  setAutoStop,
+  startInstance,
+  stopInstance,
+  killInstance,
+  type Instance,
+} from '../api/client'
 import { isAuthEnabled, logout } from '../auth'
 
 const POLL_INTERVAL_MS = 10_000
@@ -59,6 +70,10 @@ function buildDurationFromTotalMinutes(totalMinutes: number): string {
   return `${minutes}m`
 }
 
+function instanceKey(inst: Instance): string {
+  return inst.name && inst.name !== '-' ? inst.name : inst.instance_id
+}
+
 function toDatetimeLocalValue(isoUtc: string | null): string {
   const d = isoUtc ? new Date(isoUtc) : null
   const base = d && !Number.isNaN(d.getTime()) ? d : new Date(Date.now() + 2 * 3600_000)
@@ -83,6 +98,9 @@ export function InstanceList() {
   const [createInstanceType, setCreateInstanceType] = useState('t3.medium')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [webRoutesByName, setWebRoutesByName] = useState<Record<string, number[]>>({})
+  const [webRoutesBusy, setWebRoutesBusy] = useState<string | null>(null)
+  const [portDraftByKey, setPortDraftByKey] = useState<Record<string, string>>({})
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const loadInFlightRef = useRef(false)
   const actingRef = useRef<string | null>(null)
@@ -97,8 +115,15 @@ export function InstanceList() {
       setError(null)
     }
     try {
-      const list = await listInstances()
+      const [list, webRes] = await Promise.all([
+        listInstances(),
+        fetchWebRoutesAll().catch((e) => {
+          console.error('fetchWebRoutesAll failed:', e)
+          return { routes: {} as Record<string, number[]> }
+        }),
+      ])
       setInstances(list)
+      setWebRoutesByName(webRes.routes ?? {})
       setRefreshError(null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -267,6 +292,39 @@ export function InstanceList() {
     }
   }
 
+  const onAddWebRoute = async (key: string) => {
+    const raw = (portDraftByKey[key] ?? '').trim()
+    const port = parseInt(raw, 10)
+    if (Number.isNaN(port) || port < 1 || port > 65535) {
+      setError('Enter a valid port (1–65535).')
+      return
+    }
+    setWebRoutesBusy(key)
+    setError(null)
+    try {
+      const result = await addWebRoute(key, port)
+      setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
+      setPortDraftByKey((prev) => ({ ...prev, [key]: '' }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWebRoutesBusy(null)
+    }
+  }
+
+  const onRemoveWebRoute = async (key: string, port: number) => {
+    setWebRoutesBusy(key)
+    setError(null)
+    try {
+      const result = await removeWebRoute(key, port)
+      setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWebRoutesBusy(null)
+    }
+  }
+
   useEffect(() => {
     if (openAutoStopFor === null) return
     const handleClickOutside = (e: MouseEvent) => {
@@ -378,18 +436,24 @@ export function InstanceList() {
               <th>Name</th>
               <th>Status</th>
               <th>Auto-stop</th>
+              <th>Web routes</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {instances.length === 0 ? (
               <tr>
-                <td colSpan={4} className="empty">No workstations found.</td>
+                <td colSpan={5} className="empty">No workstations found.</td>
               </tr>
             ) : (
-              instances.map((inst) => (
+              instances.map((inst) => {
+                const key = instanceKey(inst)
+                const ports = webRoutesByName[key] ?? []
+                const routeBusy = webRoutesBusy === key
+                const canEditWebRoutes = inst.state !== 'terminated' && inst.state !== 'shutting-down'
+                return (
                 <tr key={inst.instance_id}>
-                  <td className="name">{inst.name && inst.name !== '-' ? inst.name : inst.instance_id}</td>
+                  <td className="name">{key}</td>
                   <td>
                     <span className="state-label" style={{ color: stateColor(inst.state) }}>
                       {inst.state}
@@ -399,8 +463,7 @@ export function InstanceList() {
                     {(() => {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
                       const isRunningOrPending = inst.state === 'running' || inst.state === 'pending'
-                      const nameOrId = inst.name && inst.name !== '-' ? inst.name : inst.instance_id
-                      const menuOpen = openAutoStopFor === nameOrId
+                      const menuOpen = openAutoStopFor === key
                       const busy = acting !== null
                       if (!isRunningOrPending) {
                         return relative ? (
@@ -420,9 +483,9 @@ export function InstanceList() {
                             disabled={busy}
                             onClick={() => {
                               setOpenAutoStopFor((prev) => {
-                                if (prev === nameOrId) return null
+                                if (prev === key) return null
                                 setCustomTime(toDatetimeLocalValue(inst.shutdown_at))
-                                return nameOrId
+                                return key
                               })
                             }}
                             title="Set auto-stop time"
@@ -440,7 +503,7 @@ export function InstanceList() {
                             type="button"
                             className="btn btn-plus2h"
                             disabled={busy}
-                            onClick={() => onPlus2h(nameOrId, inst.shutdown_at)}
+                            onClick={() => onPlus2h(key, inst.shutdown_at)}
                             title="Set auto-stop to 2 hours from now"
                           >
                             +2h
@@ -454,7 +517,7 @@ export function InstanceList() {
                                   type="button"
                                   role="menuitem"
                                   className="shutdown-menu-item"
-                                  onClick={() => onSetAutoStop(nameOrId, value)}
+                                  onClick={() => onSetAutoStop(key, value)}
                                 >
                                   {label}
                                 </button>
@@ -470,7 +533,7 @@ export function InstanceList() {
                                   type="button"
                                   className="btn btn-set-time"
                                   disabled={!customTime}
-                                  onClick={() => onSetAutoStopAt(nameOrId, customTime)}
+                                  onClick={() => onSetAutoStopAt(key, customTime)}
                                 >
                                   Set
                                 </button>
@@ -479,7 +542,7 @@ export function InstanceList() {
                                 type="button"
                                 role="menuitem"
                                 className="shutdown-menu-item shutdown-menu-item--clear"
-                                onClick={() => onClearAutoStop(nameOrId)}
+                                onClick={() => onClearAutoStop(key)}
                               >
                                 Clear auto-stop
                               </button>
@@ -489,15 +552,69 @@ export function InstanceList() {
                       )
                     })()}
                   </td>
+                  <td className="web-routes-cell">
+                    {canEditWebRoutes ? (
+                      <div className="web-routes-editor">
+                        <div className="web-routes-chips">
+                          {ports.map((p) => (
+                            <span key={p} className="port-chip">
+                              <span className="port-chip-label">{p}</span>
+                              <button
+                                type="button"
+                                className="port-chip-remove"
+                                disabled={routeBusy || acting !== null}
+                                onClick={() => onRemoveWebRoute(key, p)}
+                                title={`Remove port ${p}`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="web-routes-add">
+                          <input
+                            type="number"
+                            className="web-routes-port-input"
+                            min={1}
+                            max={65535}
+                            placeholder="Port"
+                            value={portDraftByKey[key] ?? ''}
+                            disabled={routeBusy || acting !== null}
+                            onChange={(e) =>
+                              setPortDraftByKey((prev) => ({ ...prev, [key]: e.target.value }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                void onAddWebRoute(key)
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-web-route-add"
+                            disabled={routeBusy || acting !== null}
+                            onClick={() => void onAddWebRoute(key)}
+                          >
+                            {routeBusy ? '…' : 'Add'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="web-routes-readonly">
+                        {ports.length > 0 ? ports.join(', ') : '—'}
+                      </span>
+                    )}
+                  </td>
                   <td className="actions">
                     {inst.state === 'stopped' && (
                       <button
                         type="button"
                         className="btn btn-start"
                         disabled={acting !== null}
-                        onClick={() => onStart(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
+                        onClick={() => onStart(key)}
                       >
-                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Start'}
+                        {acting === key ? '…' : 'Start'}
                       </button>
                     )}
                     {(inst.state === 'running' || inst.state === 'pending') && (
@@ -505,9 +622,9 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-stop"
                         disabled={acting !== null}
-                        onClick={() => onStop(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
+                        onClick={() => onStop(key)}
                       >
-                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Stop'}
+                        {acting === key ? '…' : 'Stop'}
                       </button>
                     )}
                     {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
@@ -515,14 +632,15 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-kill"
                         disabled={acting !== null}
-                        onClick={() => onKill(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
+                        onClick={() => onKill(key)}
                       >
-                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Kill'}
+                        {acting === key ? '…' : 'Kill'}
                       </button>
                     )}
                   </td>
                 </tr>
-              ))
+                )
+              })
             )}
           </tbody>
         </table>

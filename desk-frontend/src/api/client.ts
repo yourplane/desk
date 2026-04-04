@@ -330,6 +330,68 @@ export async function deleteSavedCommand(id: string): Promise<{ deleted: boolean
   return res.json()
 }
 
+// ---- Web routes (S3-backed port registry; not wired to actual routing) ----
+
+export interface WebRoutesMapResponse {
+  routes: Record<string, number[]>
+}
+
+export async function fetchWebRoutesAll(): Promise<WebRoutesMapResponse> {
+  const res = await fetchWithAuthRetry('/api/web-routes', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export interface WebRouteMutationResult {
+  name: string
+  ports: number[]
+}
+
+export async function addWebRoute(name: string, port: number): Promise<WebRouteMutationResult> {
+  const res = await fetchWithAuthRetry(
+    `/api/workstations/${encodeURIComponent(name)}/web-routes`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port }),
+    },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
+export async function removeWebRoute(name: string, port: number): Promise<WebRouteMutationResult> {
+  const res = await fetchWithAuthRetry(
+    `/api/workstations/${encodeURIComponent(name)}/web-routes/${encodeURIComponent(String(port))}`,
+    { method: 'DELETE', headers: authHeaders() },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export type SetAutoStopResult =
   | { instance_id: string; shutdown_at: string }
   | { instance_id: string; shutdown_cleared: true }
