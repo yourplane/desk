@@ -138,10 +138,10 @@ def _http_site_block_address(listen: str) -> str:
 
 
 def _reverse_proxy_block_lines(upstream: str) -> list[str]:
-    """Shared reverse_proxy options for dev servers (Vite) and SSM port-forwarding.
+    """Shared reverse_proxy options for dev servers and SSM port-forwarding.
 
-    Caddy's default is to set Host to the upstream address; that breaks Vite host checks
-    and URL generation when clients connect via desk route (e.g. Host: localhost:45001).
+    Caddy's default is to set Host to the upstream address; that breaks many dev servers’
+    host checks and URL generation when clients connect via desk route (e.g. Host: localhost:45001).
     """
     return [
         f"        reverse_proxy {upstream} {{",
@@ -159,72 +159,47 @@ def _matcher_safe_name(workstation: str, remote_port: int) -> str:
     return safe or "route"
 
 
-def _append_vite_root_pass_through(
-    lines: list[str],
-    *,
-    upstream: str,
-    safe: str,
-    referer_prefix: str | None,
-) -> None:
-    """Proxy Vite root-absolute paths. With several desk routes, Referer picks the upstream."""
-    ref = f"        header Referer *{referer_prefix}*" if referer_prefix else None
-    lines.append(f"    @desk_vite_paths_{safe} {{")
-    lines.append("        path /@vite/* /@id/* /@fs/* /src/* /node_modules/*")
-    if ref:
-        lines.append(ref)
-    lines.append("    }")
-    lines.append(f"    handle @desk_vite_paths_{safe} {{")
-    lines.extend(_reverse_proxy_block_lines(upstream))
-    lines.append("    }")
-    lines.append(f"    @desk_vite_react_{safe} {{")
-    lines.append("        path_regexp ^/@react-refresh($|\\?)")
-    if ref:
-        lines.append(ref)
-    lines.append("    }")
-    lines.append(f"    handle @desk_vite_react_{safe} {{")
-    lines.extend(_reverse_proxy_block_lines(upstream))
-    lines.append("    }")
+def _append_referer_fallback_blocks(lines: list[str], route_entries: list[tuple[str, str, str]]) -> None:
+    """Proxy root-absolute URLs and WebSockets for apps that use ``/…`` instead of under the desk prefix.
 
+    route_entries: (path_prefix, upstream host:port, safe name per route).
 
-def _append_vite_hmr_websocket(
-    lines: list[str],
-    *,
-    upstream: str,
-    safe: str,
-    referer_prefix: str | None,
-) -> None:
-    """Vite HMR uses ws(s)://<router>/?token=… on path /. Proxy the upgrade to the dev server."""
-    lines.append(f"    @desk_hmr_{safe} {{")
-    lines.append("        path /")
-    lines.append("        header Connection *Upgrade*")
-    lines.append("        header Upgrade websocket")
-    if referer_prefix is not None:
-        lines.append(f"        header Referer *{referer_prefix}*")
-    lines.append("    }")
-    lines.append(f"    handle @desk_hmr_{safe} {{")
-    lines.extend(_reverse_proxy_block_lines(upstream))
-    lines.append("    }")
-
-
-def _append_vite_dev_server_blocks(lines: list[str], route_entries: list[tuple[str, str, str]]) -> None:
-    """route_entries: (path_prefix, upstream host:port, safe name per route)."""
+    One route: everything except ``/health`` goes to that upstream. Several routes: each matcher
+    requires ``Referer`` to contain this route's prefix and excludes other routes' ``/prefix`` paths.
+    """
     if not route_entries:
         return
+    all_prefixes = [p for p, _, _ in route_entries]
     if len(route_entries) == 1:
         _prefix, upstream, safe = route_entries[0]
         lines.append(
-            "    # Root-absolute dev paths (Vite) and HMR WebSocket on /?token= (single upstream)."
+            "    # Single route: proxy all requests except /health (root-absolute URLs, WebSockets, …)."
         )
-        _append_vite_root_pass_through(lines, upstream=upstream, safe=safe, referer_prefix=None)
-        _append_vite_hmr_websocket(lines, upstream=upstream, safe=safe, referer_prefix=None)
+        lines.append(f"    @desk_root_fallback_{safe} {{")
+        lines.append("        not path /health")
+        lines.append("    }")
+        lines.append(f"    handle @desk_root_fallback_{safe} {{")
+        lines.extend(_reverse_proxy_block_lines(upstream))
+        lines.append("    }")
         lines.append("")
         return
+
     lines.append(
-        "    # Several routes share / @ /@vite/…; Referer (page URL) selects the upstream."
+        "    # Multiple routes: use Referer (page under a desk prefix) for non-prefixed paths."
     )
-    for _prefix, upstream, safe in route_entries:
-        _append_vite_root_pass_through(lines, upstream=upstream, safe=safe, referer_prefix=_prefix)
-        _append_vite_hmr_websocket(lines, upstream=upstream, safe=safe, referer_prefix=_prefix)
+    for i, (prefix, upstream, safe) in enumerate(route_entries):
+        lines.append(f"    @desk_root_fallback_{safe} {{")
+        lines.append("        not path /health")
+        for j, other in enumerate(all_prefixes):
+            if j == i:
+                continue
+            lines.append(f"        not path {other}")
+            lines.append(f"        not path {other}/*")
+        lines.append(f"        header Referer *{prefix}*")
+        lines.append("    }")
+        lines.append(f"    handle @desk_root_fallback_{safe} {{")
+        lines.extend(_reverse_proxy_block_lines(upstream))
+        lines.append("    }")
         lines.append("")
 
 
@@ -275,7 +250,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         lines.append("    }")
         lines.append("")
 
-    _append_vite_dev_server_blocks(lines, route_entries)
+    _append_referer_fallback_blocks(lines, route_entries)
 
     lines.append("    handle /health {")
     lines.append('        respond "ok" 200')

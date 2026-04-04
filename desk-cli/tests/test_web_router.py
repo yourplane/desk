@@ -187,7 +187,8 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert "admin 127.0.0.1:29789" in text
     assert "uri strip_prefix /dev/5001" in text
     assert "@desk_route_" in text
-    assert "/@vite/*" in text
+    assert "desk_root_fallback_" in text
+    assert "not path /health" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
     assert "header_up Host {http.request.host}" in text
     assert "versions 1.1" in text
