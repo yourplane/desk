@@ -20,6 +20,8 @@ import click
 from botocore.exceptions import ClientError
 
 from desk.aws import (
+    AMI_BUILD_STATUS_TESTED,
+    AMI_BUILD_STATUS_UNTESTED,
     create_ami,
     create_workstation,
     generate_presigned_get_object_url,
@@ -34,6 +36,7 @@ from desk.aws import (
     list_command_invocations_for_instance,
     resolve_workstation,
     send_ssm_command,
+    tag_ami_build_status,
     terminate_instance,
     wait_for_ami_available,
     wait_for_instance_state,
@@ -46,10 +49,13 @@ AMI_BUILDS_PREFIX = "ami-builds/"
 AMI_BUILD_ARCHIVE_PREFIX = "ami-build-archive/"
 # Written by `desk ami build step` after the builder instance is launched.
 BUILDER_INSTANCE_KEY = "builder-instance.json"
+# Written after the test instance is launched (from the registered AMI).
+TEST_INSTANCE_KEY = "test-instance.json"
 # Post-recipe AMI registration progress (image id, completion flag).
 AMI_RESULT_KEY = "ami-result.json"
-# SSM Run Command Comment prefix to map invocations to recipe steps (≤100 chars; see _ami_build_comment_tag).
+# SSM Run Command Comment prefix to map invocations to recipe steps (≤100 chars; see _ami_recipe_comment_tag).
 AMI_BUILD_COMMENT_PREFIX = "desk-ami-build:"
+AMI_TEST_COMMENT_PREFIX = "desk-ami-test:"
 # Single tar object per copy step under files/copy/<i>/ (async AMI staging).
 AMI_COPY_BUNDLE_NAME = "bundle.tar"
 
@@ -60,40 +66,49 @@ def ami_group() -> None:
     pass
 
 
+def _validate_recipe_step_list(steps: Any, label: str) -> None:
+    if not isinstance(steps, list):
+        raise click.ClickException(f"Config {label!r} must be a list.")
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise click.ClickException(
+                f"Config {label}[{i}] must be an object (with 'run' or 'copy')."
+            )
+        if "run" in step and "copy" in step:
+            raise click.ClickException(
+                f"Config {label}[{i}] must have either 'run' or 'copy', not both."
+            )
+        if "run" in step:
+            if not isinstance(step["run"], str):
+                raise click.ClickException(f"Config {label}[{i}].run must be a string.")
+        elif "copy" in step:
+            c = step["copy"]
+            if not isinstance(c, dict) or "source" not in c or "dest" not in c:
+                raise click.ClickException(
+                    f"Config {label}[{i}].copy must be an object with 'source' and 'dest'."
+                )
+        else:
+            raise click.ClickException(
+                f"Config {label}[{i}] must have 'run' or 'copy'."
+            )
+
+
 def _load_build_config(path: str) -> dict[str, Any]:
     """Load and validate ami build config from a JSON file."""
     with open(path) as f:
         data = json.load(f)
     if not isinstance(data, dict):
         raise click.ClickException("Config must be a JSON object.")
-    steps = data.get("steps")
-    if steps is not None:
-        if not isinstance(steps, list):
-            raise click.ClickException("Config 'steps' must be a list.")
-        for i, step in enumerate(steps):
-            if not isinstance(step, dict):
-                raise click.ClickException(
-                    f"Config 'steps[{i}]' must be an object (with 'run' or 'copy')."
-                )
-            if "run" in step and "copy" in step:
-                raise click.ClickException(
-                    f"Config 'steps[{i}]' must have either 'run' or 'copy', not both."
-                )
-            if "run" in step:
-                if not isinstance(step["run"], str):
-                    raise click.ClickException(
-                        f"Config 'steps[{i}].run' must be a string."
-                    )
-            elif "copy" in step:
-                c = step["copy"]
-                if not isinstance(c, dict) or "source" not in c or "dest" not in c:
-                    raise click.ClickException(
-                        f"Config 'steps[{i}].copy' must be an object with 'source' and 'dest'."
-                    )
-            else:
-                raise click.ClickException(
-                    f"Config 'steps[{i}]' must have 'run' or 'copy'."
-                )
+
+    has_build = "build" in data and data.get("build") is not None
+    has_steps = "steps" in data and data.get("steps") is not None
+    if has_build and has_steps:
+        raise click.ClickException("Config must not specify both 'build' and 'steps'; use 'build' only.")
+
+    if has_build:
+        _validate_recipe_step_list(data["build"], "build")
+    elif has_steps:
+        _validate_recipe_step_list(data["steps"], "steps")
     else:
         # Legacy: separate copy and run lists
         copy_list = data.get("copy")
@@ -110,14 +125,20 @@ def _load_build_config(path: str) -> dict[str, Any]:
                 raise click.ClickException(
                     f"Config 'copy[{i}]' must be an object with 'source' and 'dest'."
                 )
+
+    if "test" in data and data.get("test") is not None:
+        _validate_recipe_step_list(data["test"], "test")
+
     return data
 
 
 def _get_build_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return normalized list of steps (each has 'run' or 'copy') from config."""
+    """Return normalized list of build steps (each has 'run' or 'copy') from config."""
+    if "build" in config and config.get("build") is not None:
+        return list(config["build"])
     steps = config.get("steps")
     if steps is not None:
-        return steps
+        return list(steps)
     # Legacy: run_before_copy, then all copies, then all runs
     out: list[dict[str, Any]] = []
     for cmd in config.get("run_before_copy") or []:
@@ -127,6 +148,14 @@ def _get_build_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
     for cmd in config.get("run") or []:
         out.append({"run": cmd})
     return out
+
+
+def _get_test_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Optional post-build test steps (same shape as build steps)."""
+    t = config.get("test")
+    if t is None:
+        return []
+    return list(t)
 
 
 def _truncate_status_text(s: str, max_len: int = 100) -> str:
@@ -236,6 +265,10 @@ class AsyncAmiBuildSnapshot:
     registered_ami_id: str | None
     registered_ami_state: str | None
     async_pipeline_fully_complete: bool
+    test_recorded_instance_id: str | None
+    test_ec2_state: str | None
+    test_ec2_missing: bool
+    test_ssm_ready: bool | None
 
 
 def _read_s3_object_json(
@@ -288,6 +321,28 @@ def _workstation_name_for_staged_build(build_id: str) -> str:
     base = re.sub(r"[^a-z0-9-]+", "-", base).strip("-") or "build"
     base = base[:220]
     return f"ami-build-{base}"
+
+
+def _workstation_name_for_staged_test(build_id: str) -> str:
+    """Deterministic workstation Name tag for the AMI test instance (launched from registered AMI)."""
+    bid = _normalize_build_id_arg(build_id)
+    base = bid.lower()
+    base = re.sub(r"[^a-z0-9-]+", "-", base).strip("-") or "test"
+    base = base[:220]
+    return f"ami-test-{base}"
+
+
+def _needs_post_builder_test_work(snap: AsyncAmiBuildSnapshot) -> bool:
+    """True when the builder is gone but we still need to launch/run the post-AMI test recipe."""
+    if snap.async_pipeline_fully_complete:
+        return False
+    if snap.ami_result and snap.ami_result.get("test_failed"):
+        return False
+    if not _get_test_steps(snap.config):
+        return False
+    if not snap.registered_ami_id or snap.registered_ami_state != "available":
+        return False
+    return True
 
 
 def _move_s3_prefix_within_bucket(
@@ -370,48 +425,64 @@ def _stage_ami_build_to_s3(
     session = boto3.Session(region_name=region, profile_name=profile)
     s3 = session.client("s3")
 
-    normalized_steps: list[dict[str, Any]] = []
-
-    for i, step in enumerate(steps):
-        if "run" in step:
-            cmd = step["run"]
-            resolved, is_file = _resolve_run_for_build(cmd, config_dir)
-            if is_file:
-                rel = _artifact_rel_path(resolved, config_dir)
-                key = f"{prefix}files/run/{i}/{rel}"
-                s3.upload_file(resolved, bucket, key)
-                normalized_steps.append({"run": _s3_uri_for_key(key)})
+    def _upload_step_list(
+        step_list: list[dict[str, Any]],
+        *,
+        label: str,
+        run_prefix: str,
+        copy_prefix: str,
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for i, step in enumerate(step_list):
+            if "run" in step:
+                cmd = step["run"]
+                resolved, is_file = _resolve_run_for_build(cmd, config_dir)
+                if is_file:
+                    rel = _artifact_rel_path(resolved, config_dir)
+                    key = f"{prefix}files/{run_prefix}/{i}/{rel}"
+                    s3.upload_file(resolved, bucket, key)
+                    out.append({"run": _s3_uri_for_key(key)})
+                else:
+                    out.append({"run": cmd})
             else:
-                normalized_steps.append({"run": cmd})
-        else:
-            item = dict(step["copy"])
-            src = item["source"]
-            recursive = item.get("recursive", False)
-            resolved = _resolve_copy_source(src, config_dir)
-            if not os.path.exists(resolved):
-                raise click.ClickException(
-                    f"Copy step {i}: source path does not exist: {resolved}"
-                )
-            if os.path.isdir(resolved):
-                if not recursive:
+                item = dict(step["copy"])
+                src = item["source"]
+                recursive = item.get("recursive", False)
+                resolved = _resolve_copy_source(src, config_dir)
+                if not os.path.exists(resolved):
                     raise click.ClickException(
-                        f"Copy step {i}: source is a directory; set \"recursive\": true."
+                        f"{label} copy step {i}: source path does not exist: {resolved}"
                     )
-            tar_path = _write_ami_copy_tarball(
-                resolved, item["dest"], recursive=recursive
-            )
-            try:
-                key = f"{prefix}files/copy/{i}/{AMI_COPY_BUNDLE_NAME}"
-                s3.upload_file(tar_path, bucket, key)
-            finally:
-                os.unlink(tar_path)
-            item["source"] = _s3_uri_for_key(key)
-            normalized_steps.append({"copy": item})
+                if os.path.isdir(resolved):
+                    if not recursive:
+                        raise click.ClickException(
+                            f"{label} copy step {i}: source is a directory; set \"recursive\": true."
+                        )
+                tar_path = _write_ami_copy_tarball(
+                    resolved, item["dest"], recursive=recursive
+                )
+                try:
+                    key = f"{prefix}files/{copy_prefix}/{i}/{AMI_COPY_BUNDLE_NAME}"
+                    s3.upload_file(tar_path, bucket, key)
+                finally:
+                    os.unlink(tar_path)
+                item["source"] = _s3_uri_for_key(key)
+                out.append({"copy": item})
+        return out
+
+    normalized_build = _upload_step_list(
+        steps, label="Build", run_prefix="run", copy_prefix="copy"
+    )
+    test_steps = _get_test_steps(config)
+    normalized_test = _upload_step_list(
+        test_steps, label="Test", run_prefix="test-run", copy_prefix="test-copy"
+    )
 
     out_config: dict[str, Any] = {
         "ami_name": ami_name,
         "instance_type": config.get("instance_type", "t3.medium"),
-        "steps": normalized_steps,
+        "build": normalized_build,
+        "test": normalized_test,
     }
 
     config_key = f"{prefix}config.json"
@@ -473,11 +544,12 @@ def _print_verbose_recipe_command_io(
     *,
     region: str | None,
     profile: str | None,
+    instance_id_override: str | None = None,
 ) -> None:
     """Print SSM command script and invocation stdout/stderr (for ``status --verbose`` / ``step --verbose``)."""
-    if not snap.recorded_instance_id:
+    iid = instance_id_override or snap.recorded_instance_id
+    if not iid:
         return
-    iid = snap.recorded_instance_id
     cid: str | None = None
     if recipe_eval.blocked and recipe_eval.blocked_command_id:
         cid = recipe_eval.blocked_command_id
@@ -522,12 +594,33 @@ def _drive_ami_build_run_loop(
             return
 
         recipe_eval = _maybe_evaluate_async_recipe(snap)
+        test_eval = _maybe_evaluate_async_test_recipe(snap)
+
+        if snap.ami_result and snap.ami_result.get("test_failed"):
+            _print_async_ami_build_status(
+                snap, recipe_eval=recipe_eval, test_eval=test_eval, verbose=False
+            )
+            raise click.ClickException(
+                "Test phase failed. The test instance was left running. "
+                "Fix in AWS or `desk ami build cancel` before staging a new build."
+            )
 
         if recipe_eval is not None and recipe_eval.blocked:
-            _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=False)
+            _print_async_ami_build_status(
+                snap, recipe_eval=recipe_eval, test_eval=test_eval, verbose=False
+            )
             raise click.ClickException(
                 "Recipe step failed. Run `desk ami build step --retry`, or "
                 "`desk ami build cancel` to archive this build."
+            )
+
+        if test_eval is not None and test_eval.blocked:
+            _print_async_ami_build_status(
+                snap, recipe_eval=recipe_eval, test_eval=test_eval, verbose=False
+            )
+            raise click.ClickException(
+                "Test step failed. The test instance was left running. "
+                "`desk ami build step` will take no further action until you cancel the build."
             )
 
         if (
@@ -544,10 +637,27 @@ def _drive_ami_build_run_loop(
             )
             continue
 
-        _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=False)
+        if (
+            snap.test_recorded_instance_id
+            and test_eval is not None
+            and test_eval.in_progress_step_index is not None
+            and test_eval.in_progress_command_id
+        ):
+            _stream_ssm_invocation_follow(
+                snap.test_recorded_instance_id,
+                test_eval.in_progress_command_id,
+                region=region,
+                profile=profile,
+            )
+            continue
+
+        _print_async_ami_build_status(
+            snap, recipe_eval=recipe_eval, test_eval=test_eval, verbose=False
+        )
         _run_async_ami_build_step(
             snap,
             recipe_eval=recipe_eval,
+            test_eval=test_eval,
             retry=False,
             no_wait=no_wait,
         )
@@ -639,17 +749,55 @@ def _resolve_async_ami_build_snapshot(build_id: str, *, stack: str) -> AsyncAmiB
     result_key = f"{prefix}{AMI_RESULT_KEY}"
     ami_result = _read_s3_object_json(s3, bucket, result_key)
 
+    test_key = f"{prefix}{TEST_INSTANCE_KEY}"
+    test_doc = _read_s3_object_json(s3, bucket, test_key)
+    test_recorded_id: str | None = None
+    if test_doc is not None:
+        tid = test_doc.get("instance_id")
+        if tid is None:
+            test_recorded_id = None
+        elif not isinstance(tid, str):
+            raise click.ClickException(
+                f"{TEST_INSTANCE_KEY} must contain a string 'instance_id'."
+            )
+        elif not tid.strip():
+            raise click.ClickException(
+                f"{TEST_INSTANCE_KEY} 'instance_id' must be non-empty."
+            )
+        else:
+            test_recorded_id = tid.strip()
+
+    test_ec2_missing = False
+    test_ec2_state: str | None = None
+    test_ssm_ready: bool | None = None
+    if test_recorded_id:
+        test_ec2_state = _safe_get_instance_state(
+            test_recorded_id, region=region, profile=profile
+        )
+        if test_ec2_state is None:
+            test_ec2_missing = True
+        elif test_ec2_state in ("running", "pending"):
+            test_ssm_ready = is_ssm_ready(test_recorded_id, region=region, profile=profile)
+        elif test_ec2_state in ("stopped", "stopping", "shutting-down"):
+            test_ssm_ready = False
+        elif test_ec2_state == "terminated":
+            test_ssm_ready = None
+
     reg_image_id = _async_ami_image_id_from_result(ami_result)
     reg_ami_state: str | None = None
     if reg_image_id:
         reg_ami_state = get_ami_state(reg_image_id, region=region, profile=profile)
 
-    # Completion: AMI available and builder gone, or legacy ami-result.json pipeline_complete flag.
+    test_steps_list = _get_test_steps(config)
+    has_test_recipe = len(test_steps_list) > 0
+
+    # Completion: explicit flag, or legacy no-test builds (AMI available, builder gone).
     pipeline_done = False
     if ami_result and ami_result.get("pipeline_complete") is True and reg_image_id:
         pipeline_done = True
     elif (
-        reg_image_id
+        not has_test_recipe
+        and reg_image_id
         and reg_ami_state == "available"
         and (ec2_state == "terminated" or ec2_missing)
     ):
@@ -668,24 +816,38 @@ def _resolve_async_ami_build_snapshot(build_id: str, *, stack: str) -> AsyncAmiB
         registered_ami_id=reg_image_id,
         registered_ami_state=reg_ami_state,
         async_pipeline_fully_complete=pipeline_done,
+        test_recorded_instance_id=test_recorded_id,
+        test_ec2_state=test_ec2_state,
+        test_ec2_missing=test_ec2_missing,
+        test_ssm_ready=test_ssm_ready,
     )
 
 
-def _ami_build_comment_tag(build_id: str, step_index: int, kind: str) -> str:
+def _ami_recipe_comment_tag(build_id: str, step_index: int, kind: str, prefix: str) -> str:
     """SSM Comment value correlating an invocation to a recipe step (AWS max 100 chars)."""
     bid = _normalize_build_id_arg(build_id)
-    base = f"{AMI_BUILD_COMMENT_PREFIX}{bid}:{step_index}:{kind}"
+    base = f"{prefix}{bid}:{step_index}:{kind}"
     if len(base) <= 100:
         return base
     short = hashlib.sha256(bid.encode()).hexdigest()[:12]
-    return f"{AMI_BUILD_COMMENT_PREFIX}{short}:{step_index}:{kind}"
+    return f"{prefix}{short}:{step_index}:{kind}"
 
 
-def _parse_ami_build_comment(comment: str | None, build_id: str) -> tuple[int, str] | None:
-    if not comment or not comment.startswith(AMI_BUILD_COMMENT_PREFIX):
+def _ami_build_comment_tag(build_id: str, step_index: int, kind: str) -> str:
+    return _ami_recipe_comment_tag(build_id, step_index, kind, AMI_BUILD_COMMENT_PREFIX)
+
+
+def _ami_test_comment_tag(build_id: str, step_index: int, kind: str) -> str:
+    return _ami_recipe_comment_tag(build_id, step_index, kind, AMI_TEST_COMMENT_PREFIX)
+
+
+def _parse_ami_recipe_comment(
+    comment: str | None, build_id: str, prefix: str
+) -> tuple[int, str] | None:
+    if not comment or not comment.startswith(prefix):
         return None
     bid = _normalize_build_id_arg(build_id)
-    rest = comment[len(AMI_BUILD_COMMENT_PREFIX) :]
+    rest = comment[len(prefix) :]
     parts = rest.split(":")
     if len(parts) < 3:
         return None
@@ -700,6 +862,14 @@ def _parse_ami_build_comment(comment: str | None, build_id: str) -> tuple[int, s
     if id_part == hashlib.sha256(bid.encode()).hexdigest()[:12]:
         return (step_index, kind)
     return None
+
+
+def _parse_ami_build_comment(comment: str | None, build_id: str) -> tuple[int, str] | None:
+    return _parse_ami_recipe_comment(comment, build_id, AMI_BUILD_COMMENT_PREFIX)
+
+
+def _parse_ami_test_comment(comment: str | None, build_id: str) -> tuple[int, str] | None:
+    return _parse_ami_recipe_comment(comment, build_id, AMI_TEST_COMMENT_PREFIX)
 
 
 def _normalize_shell_for_compare(cmd: str) -> str:
@@ -870,6 +1040,7 @@ def _map_invocation_to_step_index(
     bucket: str,
     region: str | None,
     profile: str | None,
+    comment_prefix: str,
 ) -> int | None:
     try:
         cmd_doc = get_ssm_command(command_id, region=region, profile=profile)
@@ -882,7 +1053,7 @@ def _map_invocation_to_step_index(
     if not commands or not isinstance(commands, list):
         return None
     shell = commands[0] if commands else ""
-    parsed = _parse_ami_build_comment(cmd_doc.get("Comment"), build_id)
+    parsed = _parse_ami_recipe_comment(cmd_doc.get("Comment"), build_id, comment_prefix)
     if parsed is not None:
         return parsed[0]
     norm = _normalize_shell_for_compare(shell)
@@ -902,12 +1073,12 @@ def _evaluate_async_recipe(
     instance_id: str,
     *,
     build_id: str,
-    config: dict[str, Any],
+    steps: list[dict[str, Any]],
     bucket: str,
     region: str | None,
     profile: str | None,
+    comment_prefix: str,
 ) -> AsyncRecipeEval:
-    steps = _get_build_steps(config)
     n = len(steps)
     if n == 0:
         return AsyncRecipeEval(
@@ -939,6 +1110,7 @@ def _evaluate_async_recipe(
             bucket=bucket,
             region=region,
             profile=profile,
+            comment_prefix=comment_prefix,
         )
         if step_i is None:
             continue
@@ -1043,10 +1215,7 @@ def _evaluate_async_recipe(
 
 
 def _maybe_evaluate_async_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval | None:
-    """Load SSM recipe state when the builder can run steps; otherwise return None.
-
-    Used so `ami build step` can evaluate once, print status, and advance using the same data.
-    """
+    """Load SSM build-recipe state when the builder can run steps; otherwise return None."""
     if not snap.recorded_instance_id:
         return None
     if snap.ec2_missing or snap.ec2_state == "terminated":
@@ -1059,19 +1228,45 @@ def _maybe_evaluate_async_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval
     return _evaluate_async_recipe(
         snap.recorded_instance_id,
         build_id=snap.build_id,
-        config=snap.config,
+        steps=_get_build_steps(snap.config),
         bucket=snap.bucket,
         region=aws.region,
         profile=aws.profile,
+        comment_prefix=AMI_BUILD_COMMENT_PREFIX,
+    )
+
+
+def _maybe_evaluate_async_test_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval | None:
+    """Load SSM test-recipe state when the test instance can run steps; otherwise return None."""
+    if not snap.test_recorded_instance_id:
+        return None
+    if snap.test_ec2_missing or snap.test_ec2_state == "terminated":
+        return None
+    if snap.test_ec2_state not in ("running", "pending"):
+        return None
+    if snap.test_ssm_ready is not True:
+        return None
+    steps = _get_test_steps(snap.config)
+    if not steps:
+        return None
+    aws = get_desk_settings().aws_settings
+    return _evaluate_async_recipe(
+        snap.test_recorded_instance_id,
+        build_id=snap.build_id,
+        steps=steps,
+        bucket=snap.bucket,
+        region=aws.region,
+        profile=aws.profile,
+        comment_prefix=AMI_TEST_COMMENT_PREFIX,
     )
 
 
 def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:
-    """Post-recipe AMI registration lines (after recipe steps are done).
+    """Post-build AMI registration lines (after build recipe steps are done).
 
     Uses only fields on ``snap`` (AMI state is resolved once in `_resolve_async_ami_build_snapshot`).
     """
-    click.echo("  Post-recipe (AMI):")
+    click.echo("  Post-build (AMI):")
     image_id = snap.registered_ami_id
 
     if snap.async_pipeline_fully_complete and image_id:
@@ -1081,7 +1276,7 @@ def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:
     if not image_id:
         click.echo(
             "    Next: `desk ami build step` creates the AMI from the builder, then (when the "
-            "AMI is available) terminates the builder."
+            "AMI is available) tags it, terminates the builder, and runs the test phase (if any)."
         )
         return
 
@@ -1090,8 +1285,8 @@ def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:
     click.echo(f"    AMI state (AWS): {st or 'unknown'}")
     if st == "available":
         click.echo(
-            "    Next: `desk ami build step` will terminate the builder instance "
-            "(no long waits in this command)."
+            "    Next: `desk ami build step` will tag the AMI, terminate the builder, then "
+            "launch the test instance (if configured)."
         )
     elif st in ("failed", "error", "deregistered") or st is None:
         click.echo("    AMI creation did not succeed; fix the problem in AWS or `desk ami build cancel`.")
@@ -1101,15 +1296,104 @@ def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:
         )
 
 
+def _print_test_recipe_status_lines(
+    snap: AsyncAmiBuildSnapshot,
+    test_eval: AsyncRecipeEval | None,
+    *,
+    verbose: bool,
+) -> None:
+    """Print test instance and test-recipe progress (after the builder is gone)."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+    steps = _get_test_steps(snap.config)
+    if not steps:
+        return
+    click.echo("  Test phase:")
+    if not snap.test_recorded_instance_id:
+        click.echo("    Test instance id (S3): (not recorded yet)")
+        click.echo(
+            f"    Next: `desk ami build step` will launch a test instance and write {TEST_INSTANCE_KEY}."
+        )
+        return
+    click.echo(f"    Test instance id (S3): {snap.test_recorded_instance_id}")
+    if snap.test_ec2_missing:
+        click.echo("    EC2: test instance not found")
+        return
+    assert snap.test_ec2_state is not None
+    click.echo(f"    EC2 state: {snap.test_ec2_state}")
+    if snap.test_ec2_state == "terminated":
+        click.echo("    SSM ready: n/a")
+        return
+    if snap.test_ssm_ready is None:
+        click.echo("    SSM ready: n/a")
+    else:
+        click.echo(f"    SSM ready: {'yes' if snap.test_ssm_ready else 'no'}")
+    click.echo()
+    if snap.test_ec2_state in ("running", "pending") and snap.test_ssm_ready is True:
+        ev = test_eval if test_eval is not None else _maybe_evaluate_async_test_recipe(snap)
+        if ev is None:
+            return
+        click.echo("  Test recipe:")
+        click.echo(f"    Steps in config: {ev.total_steps}")
+        if ev.recipe_complete:
+            click.echo("    State: all test steps completed successfully.")
+            if ev.total_steps > 0:
+                last = steps[ev.total_steps - 1]
+                click.echo(
+                    f"    Last completed: step {ev.total_steps - 1} — "
+                    f"{_describe_recipe_step_for_status(last)}"
+                )
+        elif ev.blocked and ev.blocked_step_index is not None:
+            bad = steps[ev.blocked_step_index]
+            click.echo(
+                f"    State: failed at test step {ev.blocked_step_index} — "
+                f"{_describe_recipe_step_for_status(bad)}"
+            )
+            if ev.last_error:
+                click.echo(f"    Last error: {ev.last_error}")
+            if verbose and snap.test_recorded_instance_id:
+                _print_verbose_recipe_command_io(
+                    snap,
+                    ev,
+                    region=region,
+                    profile=profile,
+                    instance_id_override=snap.test_recorded_instance_id,
+                )
+        elif ev.in_progress_step_index is not None:
+            cur = steps[ev.in_progress_step_index]
+            click.echo(
+                f"    State: test step {ev.in_progress_step_index} in progress — "
+                f"{_describe_recipe_step_for_status(cur)}"
+            )
+            click.echo(f"    SSM command_id: {ev.in_progress_command_id!r}")
+            if verbose and snap.test_recorded_instance_id:
+                _print_verbose_recipe_command_io(
+                    snap,
+                    ev,
+                    region=region,
+                    profile=profile,
+                    instance_id_override=snap.test_recorded_instance_id,
+                )
+        elif ev.next_step_index is not None:
+            nxt = steps[ev.next_step_index]
+            click.echo(
+                f"    Next: test step {ev.next_step_index} — "
+                f"{_describe_recipe_step_for_status(nxt)}"
+            )
+            click.echo("    (`desk ami build step` to start it.)")
+
+
 def _print_async_ami_build_status(
     snap: AsyncAmiBuildSnapshot,
     *,
     recipe_eval: AsyncRecipeEval | None = None,
+    test_eval: AsyncRecipeEval | None = None,
     verbose: bool = False,
 ) -> None:
     """Human-readable status for staged AMI build (also used at the start of `step`).
 
-    Pass ``recipe_eval`` from `ami build step` so status matches the step logic (single fetch).
+    Pass ``recipe_eval`` / ``test_eval`` from `ami build step` so status matches the step logic.
     """
     aws = get_desk_settings().aws_settings
     region = aws.region
@@ -1139,6 +1423,10 @@ def _print_async_ami_build_status(
         click.echo()
         if snap.async_pipeline_fully_complete:
             _print_async_post_recipe_section(snap)
+        elif snap.ami_result and snap.ami_result.get("test_failed"):
+            click.echo("  Test phase failed earlier; see ami-result.json.")
+        elif _needs_post_builder_test_work(snap) or snap.test_recorded_instance_id:
+            _print_test_recipe_status_lines(snap, test_eval, verbose=verbose)
         else:
             click.echo(
                 "The builder instance for this build was created earlier but is no longer "
@@ -1154,6 +1442,10 @@ def _print_async_ami_build_status(
         click.echo()
         if snap.async_pipeline_fully_complete:
             _print_async_post_recipe_section(snap)
+        elif snap.ami_result and snap.ami_result.get("test_failed"):
+            click.echo("  Test phase failed earlier; see ami-result.json.")
+        elif _needs_post_builder_test_work(snap) or snap.test_recorded_instance_id:
+            _print_test_recipe_status_lines(snap, test_eval, verbose=verbose)
         else:
             click.echo(
                 "The builder instance for this build has terminated. "
@@ -1173,7 +1465,7 @@ def _print_async_ami_build_status(
         if ev is None:
             return
         steps = _get_build_steps(snap.config)
-        click.echo("  Recipe:")
+        click.echo("  Build recipe:")
         click.echo(f"    Steps in config: {ev.total_steps}")
         if ev.recipe_complete:
             click.echo("    State: all steps completed successfully.")
@@ -1242,10 +1534,206 @@ def _print_async_ami_build_status(
             )
 
 
+def _execute_post_builder_test_phase(
+    snap: AsyncAmiBuildSnapshot,
+    *,
+    test_eval: AsyncRecipeEval | None,
+    retry: bool,
+    no_wait: bool,
+) -> None:
+    """After the builder is gone: launch test instance, run test recipe, finish pipeline."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    image_id = snap.registered_ami_id
+    if not image_id:
+        raise click.ClickException("Internal error: expected registered AMI id for test phase.")
+
+    if not snap.test_recorded_instance_id:
+        ws = _workstation_name_for_staged_test(snap.build_id)
+        it = snap.config.get("instance_type", "t3.medium")
+        click.echo()
+        click.echo(f"Creating test instance {ws!r} from AMI {image_id}...")
+        try:
+            instance_id, _shutdown = create_workstation(
+                ws,
+                it,
+                ami_id=image_id,
+                shutdown_after="4h",
+                allow_untested_ami=True,
+                region=region,
+                profile=profile,
+            )
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
+        key = f"{snap.s3_prefix}{TEST_INSTANCE_KEY}"
+        _put_s3_object_json(
+            s3,
+            snap.bucket,
+            key,
+            {"instance_id": instance_id},
+        )
+        click.echo(f"Recorded test instance {instance_id} in s3://{snap.bucket}/{key}")
+        click.secho("Step complete: test instance created.", fg="green")
+        return
+
+    assert snap.test_recorded_instance_id is not None
+    if snap.test_ec2_missing:
+        raise click.ClickException(
+            "Test instance recorded in S3 is no longer visible in EC2. Investigate or `desk ami build cancel`."
+        )
+    if snap.test_ec2_state == "terminated":
+        if snap.async_pipeline_fully_complete:
+            return
+        raise click.ClickException(
+            "Test instance has terminated unexpectedly; investigate or `desk ami build cancel`."
+        )
+
+    if snap.test_ec2_state in ("running", "pending") and snap.test_ssm_ready is True:
+        if test_eval is None:
+            raise click.ClickException(
+                "Internal error: test recipe evaluation was not provided for an SSM-ready test instance."
+            )
+        tev = test_eval
+        steps = _get_test_steps(snap.config)
+        if retry:
+            if tev.recipe_complete:
+                raise click.ClickException(
+                    "Nothing to retry: all test steps already completed successfully."
+                )
+            if tev.in_progress_step_index is not None:
+                raise click.ClickException(
+                    f"Cannot use --retry while test step {tev.in_progress_step_index} "
+                    "is still in progress on SSM."
+                )
+            if not tev.blocked or tev.blocked_step_index is None:
+                raise click.ClickException(
+                    "Nothing to retry: there is no failed test step (see `desk ami build status`)."
+                )
+            step = steps[tev.blocked_step_index]
+            kind = "run" if "run" in step else "copy"
+            shell = _expected_async_shell_for_step(
+                step,
+                tev.blocked_step_index,
+                bucket=snap.bucket,
+                region=region,
+                profile=profile,
+            )
+            comment = _ami_test_comment_tag(snap.build_id, tev.blocked_step_index, kind)
+            command_id = send_ssm_command(
+                snap.test_recorded_instance_id,
+                shell,
+                region=region,
+                profile=profile,
+                timeout_seconds=7200,
+                comment=comment,
+            )
+            click.echo()
+            click.echo(
+                f"Retrying test step {tev.blocked_step_index} ({kind}): SSM command_id={command_id}"
+            )
+            click.secho(
+                "Step initiated (not waiting for completion). Check `desk ami build status`.",
+                fg="green",
+            )
+            return
+        if tev.blocked:
+            _merge_ami_result_s3(
+                s3,
+                snap.bucket,
+                snap.s3_prefix,
+                {"test_failed": True},
+            )
+            click.echo()
+            click.echo(
+                "Test step failed. The test instance was left running. "
+                "`desk ami build step` will take no further actions until you `desk ami build cancel` "
+                "or resolve the failure outside desk."
+            )
+            if tev.last_error:
+                click.echo(f"Last error: {tev.last_error}")
+            return
+        if tev.in_progress_step_index is not None:
+            click.echo()
+            click.echo(
+                f"(No step taken: test step {tev.in_progress_step_index} is still in progress on SSM.)"
+            )
+            return
+        if tev.recipe_complete:
+            tag_ami_build_status(
+                image_id,
+                AMI_BUILD_STATUS_TESTED,
+                region=region,
+                profile=profile,
+            )
+            terminate_instance(snap.test_recorded_instance_id, region=region, profile=profile)
+            _merge_ami_result_s3(
+                s3,
+                snap.bucket,
+                snap.s3_prefix,
+                {"pipeline_complete": True},
+            )
+            click.echo()
+            click.secho(
+                f"Tests passed; tagged AMI {image_id} as tested and terminated test instance "
+                f"{snap.test_recorded_instance_id}.",
+                fg="green",
+            )
+            return
+        if tev.next_step_index is None:
+            click.echo()
+            click.echo("(No step taken.)")
+            return
+        step = steps[tev.next_step_index]
+        kind = "run" if "run" in step else "copy"
+        shell = _expected_async_shell_for_step(
+            step,
+            tev.next_step_index,
+            bucket=snap.bucket,
+            region=region,
+            profile=profile,
+        )
+        comment = _ami_test_comment_tag(snap.build_id, tev.next_step_index, kind)
+        command_id = send_ssm_command(
+            snap.test_recorded_instance_id,
+            shell,
+            region=region,
+            profile=profile,
+            timeout_seconds=7200,
+            comment=comment,
+        )
+        click.echo()
+        click.echo(
+            f"Started test step {tev.next_step_index} ({kind}): SSM command_id={command_id}"
+        )
+        click.secho(
+            "Step initiated (not waiting for completion). Check `desk ami build status`.",
+            fg="green",
+        )
+        return
+
+    if snap.test_ec2_state in ("running", "pending") and snap.test_ssm_ready is False:
+        click.echo()
+        click.echo("(No step taken: waiting for SSM on the test instance.)")
+        return
+    if snap.test_ec2_state in ("stopped", "stopping", "shutting-down"):
+        click.echo()
+        click.echo("(No step taken: test instance is not running.)")
+        return
+    _ = no_wait  # reserved for symmetry with builder phase
+    raise click.ClickException(
+        f"Unexpected test instance state (test_ec2_state={snap.test_ec2_state!r}, "
+        f"test_ec2_missing={snap.test_ec2_missing})."
+    )
+
+
 def _run_async_ami_build_step(
     snap: AsyncAmiBuildSnapshot,
     *,
     recipe_eval: AsyncRecipeEval | None = None,
+    test_eval: AsyncRecipeEval | None = None,
     retry: bool = False,
     no_wait: bool = False,
 ) -> None:
@@ -1258,12 +1746,27 @@ def _run_async_ami_build_step(
     region = aws.region
     profile = aws.profile
 
+    if snap.ami_result and snap.ami_result.get("test_failed"):
+        click.echo()
+        click.echo(
+            "Test phase failed earlier; `desk ami build step` is a no-op until you "
+            "`desk ami build cancel` or fix the situation in AWS."
+        )
+        return
+
     if snap.recorded_instance_id:
         if snap.ec2_missing or snap.ec2_state == "terminated":
             if snap.async_pipeline_fully_complete:
                 click.echo()
                 click.secho("AMI build pipeline already complete.", fg="green")
                 return
+            if _needs_post_builder_test_work(snap):
+                return _execute_post_builder_test_phase(
+                    snap,
+                    test_eval=test_eval,
+                    retry=retry,
+                    no_wait=no_wait,
+                )
             raise click.ClickException(
                 "Refusing to create a new builder instance: this build already recorded "
                 f"{snap.recorded_instance_id!r}, and that instance is no longer usable. "
@@ -1384,12 +1887,31 @@ def _run_async_ami_build_step(
                         and snap.recorded_instance_id
                         and st not in ("failed", "error", "deregistered")
                     ):
-                        _merge_ami_result_s3(
-                            s3,
-                            snap.bucket,
-                            snap.s3_prefix,
-                            {"pipeline_complete": True},
-                        )
+                        tsteps = _get_test_steps(snap.config)
+                        if tsteps:
+                            tag_ami_build_status(
+                                image_id,
+                                AMI_BUILD_STATUS_UNTESTED,
+                                region=region,
+                                profile=profile,
+                            )
+                        else:
+                            tag_ami_build_status(
+                                image_id,
+                                AMI_BUILD_STATUS_TESTED,
+                                region=region,
+                                profile=profile,
+                            )
+                        merge_updates: dict[str, Any] = {}
+                        if not tsteps:
+                            merge_updates["pipeline_complete"] = True
+                        if merge_updates:
+                            _merge_ami_result_s3(
+                                s3,
+                                snap.bucket,
+                                snap.s3_prefix,
+                                merge_updates,
+                            )
                         terminate_instance(
                             snap.recorded_instance_id, region=region, profile=profile
                         )
@@ -1406,7 +1928,29 @@ def _run_async_ami_build_step(
                         "again when it is available.)"
                     )
                     return
+                tsteps = _get_test_steps(snap.config)
+                if tsteps:
+                    tag_ami_build_status(
+                        image_id,
+                        AMI_BUILD_STATUS_UNTESTED,
+                        region=region,
+                        profile=profile,
+                    )
+                else:
+                    tag_ami_build_status(
+                        image_id,
+                        AMI_BUILD_STATUS_TESTED,
+                        region=region,
+                        profile=profile,
+                    )
                 terminate_instance(snap.recorded_instance_id, region=region, profile=profile)
+                if not tsteps:
+                    _merge_ami_result_s3(
+                        s3,
+                        snap.bucket,
+                        snap.s3_prefix,
+                        {"pipeline_complete": True},
+                    )
                 click.echo()
                 click.secho(
                     f"Terminated builder {snap.recorded_instance_id}; AMI {image_id} is available.",
@@ -1540,7 +2084,10 @@ def ami_build_status(build_id: str, stack: str, verbose: bool) -> None:
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
     recipe_eval = _maybe_evaluate_async_recipe(snap)
-    _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=verbose)
+    test_eval = _maybe_evaluate_async_test_recipe(snap)
+    _print_async_ami_build_status(
+        snap, recipe_eval=recipe_eval, test_eval=test_eval, verbose=verbose
+    )
 
 
 @ami_build_group.command("step")
@@ -1575,8 +2122,13 @@ def ami_build_step(build_id: str, stack: str, retry: bool, verbose: bool) -> Non
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
     recipe_eval = _maybe_evaluate_async_recipe(snap)
-    _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=verbose)
-    _run_async_ami_build_step(snap, recipe_eval=recipe_eval, retry=retry)
+    test_eval = _maybe_evaluate_async_test_recipe(snap)
+    _print_async_ami_build_status(
+        snap, recipe_eval=recipe_eval, test_eval=test_eval, verbose=verbose
+    )
+    _run_async_ami_build_step(
+        snap, recipe_eval=recipe_eval, test_eval=test_eval, retry=retry
+    )
 
 
 @ami_build_group.command("run")
@@ -1614,8 +2166,9 @@ def ami_build_run(
     CONFIG_FILE is a JSON file with:
       instance_type (optional): e.g. t3.medium (default: t3.medium).
       The builder always starts from the latest Ubuntu 24.04 LTS AMI.
-      steps: list of steps; each step is {\"run\": \"cmd\"} or {\"copy\": {\"source\": \"...\", \"dest\": \"...\", \"recursive\": optional}}.
-      Alternatively (legacy) copy + run + optional run_before_copy.
+      build: list of build steps; each step is {\"run\": \"cmd\"} or {\"copy\": {\"source\": \"...\", \"dest\": \"...\", \"recursive\": optional}}.
+      test (optional): same shape; runs on a new instance launched from the registered AMI after the builder is terminated.
+      Alternatively use legacy \"steps\" instead of \"build\", or legacy copy + run + optional run_before_copy.
       ami_name: base name for the registered AMI (async builds append the build id for uniqueness).
 
     This command uses the same S3 + SSM pipeline as ``desk ami build create`` / ``step`` (not
@@ -1677,7 +2230,7 @@ def ami_build_run(
 def ami_build_create(config_file: str, stack: str) -> None:
     """Upload an AMI build recipe and local artifacts to a dedicated folder in the desk S3 bucket.
 
-    Writes a normalized config (steps only) whose copy steps stage a ``bundle.tar`` per step
+    Writes a normalized config (``build`` / ``test``) whose copy steps stage a ``bundle.tar`` per step
     (preserving Unix modes) and whose run paths reference s3:/ keys under ami-builds/<build-id>/.
     """
     build_id, bucket, prefix = _stage_ami_build_to_s3(config_file, stack=stack)
