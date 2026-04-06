@@ -1,6 +1,6 @@
 {
   "ami_name": "default-desk-ami",
-  "steps": [
+  "build": [
     {"run": "sudo -u ubuntu mkdir -p /tmp/desk-build"},
     {"copy": {"source": "../aws/install-aws-cli.sh", "dest": "/tmp/desk-build/install-aws-cli.sh"}},
     {"copy": {"source": "../aws/install-session-manager-plugin.sh", "dest": "/tmp/desk-build/install-session-manager-plugin.sh"}},
@@ -23,5 +23,8 @@
     {"run": "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /tmp/desk-build/desk-config.ini /home/ubuntu/.config/desk/config.ini'"},
     {"run": "sudo bash /tmp/desk-build/install-cursor-agent.sh"},
     {"run": "rm -rf /tmp/desk-build"}
+  ],
+  "test": [
+    {"run": "test-default-desk-ami.sh"}
   ]
 }

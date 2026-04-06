@@ -1,0 +1,27 @@
+# Full default AMI build + test (requires AWS and a deployed desk stack).
+name: Default desk AMI build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ami-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync environment
+        run: uv sync
+
+      - name: Run desk AMI build (build + test)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+        run: uv run desk ami build run ami/recipes/default-desk-ami.json
