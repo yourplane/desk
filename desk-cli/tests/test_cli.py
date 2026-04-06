@@ -563,8 +563,8 @@ def test_ami_build_status_no_builder_record(_mock_bucket: object, mock_session: 
     result = runner.invoke(cli, ["ami", "build", "status", "b1"])
 
     assert result.exit_code == 0
-    assert "not recorded" in result.output.lower() or "not recorded yet" in result.output.lower()
-    assert "builder-instance.json" in result.output
+    assert "Launch instance" in result.output
+    assert "desk ami build step" in result.output
 
 
 @patch("desk_cli.commands.ami.is_ssm_ready", return_value=False)
@@ -582,8 +582,8 @@ def test_ami_build_status_running_not_ssm(
     result = runner.invoke(cli, ["ami", "build", "status", "b1"])
 
     assert result.exit_code == 0
-    assert "SSM" in result.output
-    assert "no" in result.output.lower() or "not ready" in result.output.lower()
+    assert "Wait for SSM" in result.output
+    assert "…" in result.output or "poll" in result.output
 
 
 @patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
@@ -611,9 +611,8 @@ def test_ami_build_status_recipe_ssm_ready(
     result = runner.invoke(cli, ["ami", "build", "status", "b1"])
 
     assert result.exit_code == 0
-    assert "Recipe:" in result.output
-    assert "Steps in config: 2" in result.output
-    assert "Next: step 0" in result.output
+    assert "Build Commands" in result.output
+    assert "[1/2]" in result.output
     assert "echo hi" in result.output
 
 
@@ -828,7 +827,7 @@ def test_ami_build_step_retry_after_failure(
     result = runner.invoke(cli, ["ami", "build", "step", "b1", "--retry"])
 
     assert result.exit_code == 0
-    assert "Retrying recipe step 0" in result.output
+    assert "retry step 0" in result.output
     mock_send.assert_called_once()
 
 
@@ -1049,7 +1048,7 @@ def test_ami_build_status_shows_post_recipe_ami_pending(
     result = runner.invoke(cli, ["ami", "build", "status", "b1"])
 
     assert result.exit_code == 0
-    assert "Post-recipe (AMI):" in result.output
+    assert "Wait for AMI" in result.output
     assert "ami-reg1" in result.output
     assert "pending" in result.output
 

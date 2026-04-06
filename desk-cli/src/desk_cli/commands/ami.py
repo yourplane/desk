@@ -8,6 +8,8 @@ import os
 import re
 import secrets
 import shlex
+import shutil
+import sys
 import tarfile
 import tempfile
 import time
@@ -52,6 +54,59 @@ AMI_RESULT_KEY = "ami-result.json"
 AMI_BUILD_COMMENT_PREFIX = "desk-ami-build:"
 # Single tar object per copy step under files/copy/<i>/ (async AMI staging).
 AMI_COPY_BUNDLE_NAME = "bundle.tar"
+
+_SPINNER_FRAMES = ("|", "/", "-", "\\")
+
+# Compact status labels (step_group)
+_GROUP_STAGE = "Stage recipe"
+_GROUP_LAUNCH = "Launch instance"
+_GROUP_WAIT_SSM = "Wait for SSM"
+_GROUP_BUILD = "Build Commands"
+_GROUP_REGISTER = "Register AMI"
+_GROUP_WAIT_AMI = "Wait for AMI"
+_GROUP_TERMINATE = "Terminate builder"
+
+
+def _stdout_is_tty() -> bool:
+    return sys.stdout.isatty()
+
+
+def _compact_line_ok(group: str, details: str) -> None:
+    click.secho(f"✓ {group}  {details}", fg="green")
+
+
+def _compact_line_fail(group: str, details: str) -> None:
+    click.secho(f"✗ {group}  {details}", fg="red")
+
+
+def _compact_line_pending(group: str, details: str) -> None:
+    click.echo(f"○ {group}  {details}")
+
+
+def _compact_line_working(group: str, details: str) -> None:
+    """In-progress snapshot (no animation), e.g. for ``status``."""
+    click.echo(f"… {group}  {details}")
+
+
+def _print_full_invocation_io(
+    instance_id: str,
+    command_id: str,
+    *,
+    region: str | None,
+    profile: str | None,
+) -> None:
+    """Print full stdout and stderr for an SSM invocation (used on failure)."""
+    try:
+        inv = get_command_invocation(
+            command_id, instance_id, region=region, profile=profile
+        )
+    except (ClientError, RuntimeError) as e:
+        click.echo(f"(Could not load SSM invocation output: {e})")
+        return
+    click.echo("Standard output:")
+    click.echo(inv.stdout if inv.stdout else "(empty)")
+    click.echo("Standard error:", err=True)
+    click.echo(inv.stderr if inv.stderr else "(empty)", err=True)
 
 
 @click.group("ami")
@@ -439,34 +494,6 @@ def _stage_ami_build_to_s3(
     return build_id, bucket, prefix
 
 
-def _stream_ssm_invocation_follow(
-    instance_id: str,
-    command_id: str,
-    *,
-    region: str | None,
-    profile: str | None,
-) -> None:
-    """Print stdout/stderr as they grow until the SSM command finishes (cf. ``run_script_on_instance``)."""
-    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
-    last_stdout = 0
-    last_stderr = 0
-    while True:
-        result = get_command_invocation(
-            command_id, instance_id, region=region, profile=profile
-        )
-        if len(result.stdout) > last_stdout:
-            click.echo(result.stdout[last_stdout:], nl=False)
-            last_stdout = len(result.stdout)
-        if len(result.stderr) > last_stderr:
-            click.echo(result.stderr[last_stderr:], nl=False, err=True)
-            last_stderr = len(result.stderr)
-        if result.status in terminal_states:
-            break
-        time.sleep(1)
-    click.echo(err=True)
-    click.echo()
-
-
 def _print_verbose_recipe_command_io(
     snap: AsyncAmiBuildSnapshot,
     recipe_eval: AsyncRecipeEval,
@@ -536,12 +563,23 @@ def _drive_ami_build_run_loop(
             and recipe_eval.in_progress_step_index is not None
             and recipe_eval.in_progress_command_id
         ):
-            _stream_ssm_invocation_follow(
+            steps = _get_build_steps(snap.config)
+            idx = recipe_eval.in_progress_step_index
+            cur = steps[idx]
+            ok = _poll_ssm_invocation_compact(
                 snap.recorded_instance_id,
                 recipe_eval.in_progress_command_id,
+                step_index=idx,
+                total_steps=len(steps),
+                step_detail=_describe_recipe_step_for_status(cur),
                 region=region,
                 profile=profile,
             )
+            if not ok:
+                raise click.ClickException(
+                    "Recipe step failed. Run `desk ami build step --retry`, or "
+                    "`desk ami build cancel` to archive this build."
+                )
             continue
 
         _print_async_ami_build_status(snap, recipe_eval=recipe_eval, verbose=False)
@@ -862,6 +900,55 @@ def _invocation_step_succeeded(status: str, exit_code: int | None) -> bool:
     return status == "Success" and (exit_code is None or exit_code == 0)
 
 
+def _poll_ssm_invocation_compact(
+    instance_id: str,
+    command_id: str,
+    *,
+    step_index: int,
+    total_steps: int,
+    step_detail: str,
+    region: str | None,
+    profile: str | None,
+) -> bool:
+    """Wait for SSM command to finish; compact one-line progress. Returns True if succeeded."""
+    terminal_states = {"Success", "Cancelled", "Failed", "TimedOut", "Cancelling"}
+    spin_i = 0
+    tty = _stdout_is_tty()
+    detail = _truncate_status_text(step_detail, max_len=120)
+    label = f"{_GROUP_BUILD}  [{step_index + 1}/{total_steps}] {detail}"
+    try:
+        while True:
+            result = get_command_invocation(
+                command_id, instance_id, region=region, profile=profile
+            )
+            if result.status in terminal_states:
+                break
+            if tty:
+                fr = _SPINNER_FRAMES[spin_i % len(_SPINNER_FRAMES)]
+                spin_i += 1
+                msg = f"{fr} {label}"
+                w = max(20, shutil.get_terminal_size((80, 20)).columns)
+                pad = msg + " " * max(0, w - len(msg) - 1)
+                click.echo("\r" + pad[:w], nl=False)
+            time.sleep(1)
+    finally:
+        if tty:
+            click.echo()
+
+    inv = get_command_invocation(
+        command_id, instance_id, region=region, profile=profile
+    )
+    if _invocation_step_succeeded(inv.status, inv.exit_code):
+        _compact_line_ok(_GROUP_BUILD, f"[{step_index + 1}/{total_steps}] {detail}")
+        return True
+
+    _compact_line_fail(_GROUP_BUILD, f"[{step_index + 1}/{total_steps}] {detail}")
+    _print_full_invocation_io(
+        instance_id, command_id, region=region, profile=profile
+    )
+    return False
+
+
 def _map_invocation_to_step_index(
     command_id: str,
     *,
@@ -1066,7 +1153,7 @@ def _maybe_evaluate_async_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval
     )
 
 
-def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:
+def _print_async_post_recipe_section_verbose(snap: AsyncAmiBuildSnapshot) -> None:
     """Post-recipe AMI registration lines (after recipe steps are done).
 
     Uses only fields on ``snap`` (AMI state is resolved once in `_resolve_async_ami_build_snapshot`).
@@ -1101,16 +1188,173 @@ def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:
         )
 
 
-def _print_async_ami_build_status(
+def _print_async_post_recipe_compact(snap: AsyncAmiBuildSnapshot) -> None:
+    """One-line post-recipe AMI registration / terminate (compact default output)."""
+    image_id = snap.registered_ami_id
+    iid = snap.recorded_instance_id or "?"
+
+    if snap.async_pipeline_fully_complete and image_id:
+        _compact_line_ok(_GROUP_REGISTER, image_id)
+        _compact_line_ok(_GROUP_TERMINATE, f"complete  ({iid})")
+        return
+
+    if not image_id:
+        _compact_line_pending(_GROUP_REGISTER, "next: `desk ami build step`")
+        return
+
+    st = snap.registered_ami_state
+    if st == "available":
+        _compact_line_ok(_GROUP_WAIT_AMI, f"{image_id}  available")
+        _compact_line_pending(_GROUP_TERMINATE, f"{iid}  (`desk ami build step`)")
+    elif st in ("failed", "error", "deregistered") or st is None:
+        _compact_line_fail(_GROUP_WAIT_AMI, f"{image_id}  state={st!r}")
+    else:
+        _compact_line_working(
+            _GROUP_WAIT_AMI,
+            f"{image_id}  state={st or 'unknown'}",
+        )
+
+
+def _print_async_ami_build_status_compact(
     snap: AsyncAmiBuildSnapshot,
     *,
     recipe_eval: AsyncRecipeEval | None = None,
-    verbose: bool = False,
 ) -> None:
-    """Human-readable status for staged AMI build (also used at the start of `step`).
+    """Concise one-line-per-phase status (default)."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
-    Pass ``recipe_eval`` from `ami build step` so status matches the step logic (single fetch).
-    """
+    ws_name = _workstation_name_for_staged_build(snap.build_id)
+    _compact_line_ok(
+        _GROUP_STAGE,
+        f"{snap.build_id}  s3://{snap.bucket}/{snap.s3_prefix}",
+    )
+
+    if not snap.recorded_instance_id:
+        _compact_line_pending(
+            _GROUP_LAUNCH,
+            f"{ws_name}  (`desk ami build step` creates builder)",
+        )
+        return
+
+    if snap.ec2_missing:
+        _compact_line_fail(_GROUP_LAUNCH, "instance no longer in EC2")
+        if snap.async_pipeline_fully_complete:
+            _print_async_post_recipe_compact(snap)
+        else:
+            click.echo(
+                "  Builder was removed from EC2; step will not launch a replacement automatically."
+            )
+        return
+
+    assert snap.ec2_state is not None
+    _compact_line_ok(_GROUP_LAUNCH, f"{ws_name}  {snap.recorded_instance_id}")
+
+    if snap.ec2_state == "terminated":
+        if snap.async_pipeline_fully_complete:
+            _print_async_post_recipe_compact(snap)
+        else:
+            click.echo(
+                "  Builder terminated; step will not launch a replacement automatically."
+            )
+        return
+
+    if snap.ec2_state in ("running", "pending"):
+        if snap.ssm_ready is True:
+            _compact_line_ok(_GROUP_WAIT_SSM, snap.recorded_instance_id)
+        elif snap.ssm_ready is False:
+            _compact_line_working(
+                _GROUP_WAIT_SSM,
+                f"{snap.recorded_instance_id}  (poll `desk ami build status`)",
+            )
+        else:
+            _compact_line_working(
+                _GROUP_WAIT_SSM,
+                f"{snap.recorded_instance_id}  (n/a)",
+            )
+
+    if snap.ec2_state in ("running", "pending") and snap.ssm_ready is True:
+        assert snap.recorded_instance_id is not None
+        ev = recipe_eval if recipe_eval is not None else _maybe_evaluate_async_recipe(snap)
+        if ev is None:
+            return
+        steps = _get_build_steps(snap.config)
+        n = ev.total_steps
+        if n == 0:
+            _compact_line_ok(_GROUP_BUILD, "(no recipe steps)")
+            _print_async_post_recipe_compact(snap)
+        elif ev.recipe_complete:
+            for i in range(n):
+                _compact_line_ok(
+                    _GROUP_BUILD,
+                    f"[{i + 1}/{n}] {_describe_recipe_step_for_status(steps[i])}",
+                )
+            _print_async_post_recipe_compact(snap)
+        elif ev.blocked and ev.blocked_step_index is not None:
+            bi = ev.blocked_step_index
+            for i in range(bi):
+                _compact_line_ok(
+                    _GROUP_BUILD,
+                    f"[{i + 1}/{n}] {_describe_recipe_step_for_status(steps[i])}",
+                )
+            bad = steps[bi]
+            _compact_line_fail(
+                _GROUP_BUILD,
+                f"[{bi + 1}/{n}] {_describe_recipe_step_for_status(bad)}",
+            )
+            if ev.last_error:
+                click.echo(f"  {ev.last_error}")
+            if ev.blocked_command_id:
+                _print_full_invocation_io(
+                    snap.recorded_instance_id,
+                    ev.blocked_command_id,
+                    region=region,
+                    profile=profile,
+                )
+            click.echo(
+                "  Hint: `desk ami build step --retry` or `desk ami build cancel`.",
+            )
+        elif ev.in_progress_step_index is not None:
+            ii = ev.in_progress_step_index
+            for i in range(ii):
+                _compact_line_ok(
+                    _GROUP_BUILD,
+                    f"[{i + 1}/{n}] {_describe_recipe_step_for_status(steps[i])}",
+                )
+            cur = steps[ii]
+            _compact_line_working(
+                _GROUP_BUILD,
+                f"[{ii + 1}/{n}] {_describe_recipe_step_for_status(cur)}",
+            )
+        elif ev.next_step_index is not None:
+            ni = ev.next_step_index
+            for i in range(ni):
+                _compact_line_ok(
+                    _GROUP_BUILD,
+                    f"[{i + 1}/{n}] {_describe_recipe_step_for_status(steps[i])}",
+                )
+            nxt = steps[ni]
+            _compact_line_pending(
+                _GROUP_BUILD,
+                f"[{ni + 1}/{n}] {_describe_recipe_step_for_status(nxt)}  (`desk ami build step`)",
+            )
+    elif snap.ec2_state in ("stopped", "stopping", "shutting-down"):
+        if snap.async_pipeline_fully_complete:
+            _print_async_post_recipe_compact(snap)
+        else:
+            click.echo(
+                "  Builder not running; fix the instance or archive the build.",
+            )
+
+
+def _print_async_ami_build_status_verbose(
+    snap: AsyncAmiBuildSnapshot,
+    *,
+    recipe_eval: AsyncRecipeEval | None = None,
+    verbose: bool = True,
+) -> None:
+    """Verbose multi-line status (``--verbose``)."""
     aws = get_desk_settings().aws_settings
     region = aws.region
     profile = aws.profile
@@ -1138,7 +1382,7 @@ def _print_async_ami_build_status(
         click.echo("  SSM ready: n/a")
         click.echo()
         if snap.async_pipeline_fully_complete:
-            _print_async_post_recipe_section(snap)
+            _print_async_post_recipe_section_verbose(snap)
         else:
             click.echo(
                 "The builder instance for this build was created earlier but is no longer "
@@ -1153,7 +1397,7 @@ def _print_async_ami_build_status(
         click.echo("  SSM ready: n/a")
         click.echo()
         if snap.async_pipeline_fully_complete:
-            _print_async_post_recipe_section(snap)
+            _print_async_post_recipe_section_verbose(snap)
         else:
             click.echo(
                 "The builder instance for this build has terminated. "
@@ -1184,7 +1428,7 @@ def _print_async_ami_build_status(
                     f"{_describe_recipe_step_for_status(last)}"
                 )
             click.echo()
-            _print_async_post_recipe_section(snap)
+            _print_async_post_recipe_section_verbose(snap)
         elif ev.blocked and ev.blocked_step_index is not None:
             bad = steps[ev.blocked_step_index]
             click.echo(
@@ -1234,12 +1478,29 @@ def _print_async_ami_build_status(
     elif snap.ec2_state in ("stopped", "stopping", "shutting-down"):
         click.echo()
         if snap.async_pipeline_fully_complete:
-            _print_async_post_recipe_section(snap)
+            _print_async_post_recipe_section_verbose(snap)
         else:
             click.echo(
                 "The builder instance is not in a running state; fix the instance or terminate "
                 "and archive the build."
             )
+
+
+def _print_async_ami_build_status(
+    snap: AsyncAmiBuildSnapshot,
+    *,
+    recipe_eval: AsyncRecipeEval | None = None,
+    verbose: bool = False,
+) -> None:
+    """Human-readable status for staged AMI build (also used at the start of `step`).
+
+    Pass ``recipe_eval`` from `ami build step` so status matches the step logic (single fetch).
+    Default is compact one-line phases; ``--verbose`` selects the legacy multi-line view.
+    """
+    if verbose:
+        _print_async_ami_build_status_verbose(snap, recipe_eval=recipe_eval, verbose=True)
+    else:
+        _print_async_ami_build_status_compact(snap, recipe_eval=recipe_eval)
 
 
 def _run_async_ami_build_step(
@@ -1310,30 +1571,22 @@ def _run_async_ami_build_step(
                     timeout_seconds=7200,
                     comment=comment,
                 )
-                click.echo()
-                click.echo(
-                    f"Retrying recipe step {ev.blocked_step_index} ({kind}): "
-                    f"SSM command_id={command_id}"
+                _compact_line_ok(
+                    _GROUP_BUILD,
+                    f"retry step {ev.blocked_step_index} ({kind})  command_id={command_id}",
                 )
-                click.secho(
-                    "Step initiated (not waiting for completion). Check `desk ami build status`.",
-                    fg="green",
-                )
+                click.echo("  (Not waiting; check `desk ami build status`.)")
                 return
             if ev.blocked:
-                click.echo()
-                click.echo(
-                    "Recipe step failed. Run `desk ami build cancel` to archive this build, "
-                    "or `desk ami build step --retry` to re-send the failed step, "
-                    "then fix the recipe and stage a new build if needed."
+                _compact_line_pending(
+                    "Next action",
+                    "`desk ami build step --retry` or `desk ami build cancel` (no step taken)",
                 )
-                if ev.last_error:
-                    click.echo(f"Last error: {ev.last_error}")
                 return
             if ev.in_progress_step_index is not None:
-                click.echo()
-                click.echo(
-                    f"(No step taken: step {ev.in_progress_step_index} is still in progress on SSM.)"
+                _compact_line_pending(
+                    _GROUP_BUILD,
+                    f"step {ev.in_progress_step_index} still in progress on SSM (no step taken)",
                 )
                 return
             if ev.recipe_complete:
@@ -1363,14 +1616,13 @@ def _run_async_ami_build_step(
                         snap.s3_prefix,
                         {"image_id": new_image_id},
                     )
-                    click.echo()
-                    click.echo(
-                        f"Started AMI registration: {new_image_id} (name={reg_name!r})."
+                    _compact_line_ok(
+                        _GROUP_REGISTER,
+                        f"{new_image_id}  name={reg_name!r}",
                     )
-                    click.secho(
-                        "Not waiting for availability. Check `desk ami build status`, then run "
-                        "`desk ami build step` again when the AMI is available to terminate the builder.",
-                        fg="green",
+                    click.echo(
+                        "  (Not waiting for availability; check `desk ami build status`, then `step` "
+                        "when the AMI is available to terminate the builder.)"
                     )
                     return
                 st = snap.registered_ami_state
@@ -1436,18 +1688,14 @@ def _run_async_ami_build_step(
                 timeout_seconds=7200,
                 comment=comment,
             )
-            click.echo()
-            click.echo(
-                f"Started recipe step {ev.next_step_index} ({kind}): SSM command_id={command_id}"
+            _compact_line_ok(
+                _GROUP_BUILD,
+                f"started step {ev.next_step_index} ({kind})  command_id={command_id}",
             )
-            click.secho(
-                "Step initiated (not waiting for completion). Check `desk ami build status`.",
-                fg="green",
-            )
+            click.echo("  (Not waiting; check `desk ami build status`.)")
             return
         if snap.ec2_state in ("running", "pending") and snap.ssm_ready is False:
-            click.echo()
-            click.echo("(No step taken: waiting for SSM.)")
+            _compact_line_pending(_GROUP_WAIT_SSM, "(no step taken; waiting for SSM)")
             return
         if snap.ec2_state in ("stopped", "stopping", "shutting-down"):
             click.echo()
@@ -1467,8 +1715,7 @@ def _run_async_ami_build_step(
     instance_type = snap.config.get("instance_type", "t3.medium")
     workstation_name = _workstation_name_for_staged_build(snap.build_id)
     builder_ami = get_latest_ubuntu_ami(region=region, profile=profile)
-    click.echo()
-    click.echo(f"Creating builder instance {workstation_name!r}...")
+    _compact_line_working(_GROUP_LAUNCH, f"creating {workstation_name!r}…")
     try:
         instance_id, _shutdown = create_workstation(
             workstation_name,
@@ -1490,8 +1737,10 @@ def _run_async_ami_build_step(
         key,
         {"instance_id": instance_id},
     )
-    click.echo(f"Recorded {instance_id} in s3://{snap.bucket}/{key}")
-    click.secho("Step complete: builder instance created and id written to S3.", fg="green")
+    _compact_line_ok(
+        _GROUP_LAUNCH,
+        f"{workstation_name}  {instance_id}  s3://{snap.bucket}/{key}",
+    )
 
 
 def _validate_build_recipe_config(config: dict[str, Any], config_path: str) -> None:
@@ -1529,13 +1778,14 @@ def ami_build_group() -> None:
     "--verbose",
     "-v",
     is_flag=True,
-    help="Include SSM command script and invocation stdout/stderr for the active or failed step.",
+    help="Multi-line status with SSM command script and invocation stdout/stderr for active/failed step.",
 )
 def ami_build_status(build_id: str, stack: str, verbose: bool) -> None:
     """Show staged AMI build progress from S3, EC2, and SSM Run Command history (quick; does not wait).
 
-    Recipe progress is derived from SSM commands on the builder instance (Comment tag and/or
-    command body match). After a step fails, use `desk ami build step --retry` or archive with
+    Default output is one line per phase; use --verbose for the legacy detailed view. Recipe
+    progress is derived from SSM commands on the builder instance (Comment tag and/or command
+    body match). After a step fails, use `desk ami build step --retry` or archive with
     `desk ami build cancel` before staging a new build.
     """
     snap = _resolve_async_ami_build_snapshot(build_id, stack=stack)
@@ -1560,7 +1810,7 @@ def ami_build_status(build_id: str, stack: str, verbose: bool) -> None:
     "--verbose",
     "-v",
     is_flag=True,
-    help="Include SSM command script and invocation stdout/stderr for the active or failed step.",
+    help="Multi-line status with SSM command script and invocation stdout/stderr for active/failed step.",
 )
 def ami_build_step(build_id: str, stack: str, retry: bool, verbose: bool) -> None:
     """Advance the async AMI build by one quick action, or no-op if there is nothing to do.
@@ -1619,9 +1869,9 @@ def ami_build_run(
       ami_name: base name for the registered AMI (async builds append the build id for uniqueness).
 
     This command uses the same S3 + SSM pipeline as ``desk ami build create`` / ``step`` (not
-    direct SCP). Remote command output is streamed from SSM while steps run. On success the staged
-    prefix is moved to ami-build-archive/. On failure the build is left under ami-builds/ for
-    debugging.
+    direct SCP). While recipe steps run, progress is shown as compact lines (spinner on TTYs).
+    On success the staged prefix is moved to ami-build-archive/. On failure the build is left
+    under ami-builds/ for debugging.
 
     Use ``--continue BUILD_ID`` to resume after an interrupt without re-uploading artifacts.
     """
@@ -1636,22 +1886,21 @@ def ami_build_run(
             bid = _normalize_build_id_arg(resume_build_id)
             if not bid:
                 raise click.ClickException("Build id is empty.")
-            click.echo(f"Resuming AMI build {bid}")
-            click.echo(f"  s3:/{AMI_BUILDS_PREFIX}{bid}/")
-            click.echo(f"  Builder name: {_workstation_name_for_staged_build(bid)}")
-            click.echo()
+            ws = _workstation_name_for_staged_build(bid)
+            _compact_line_ok(
+                _GROUP_STAGE,
+                f"resume {bid}  s3://{AMI_BUILDS_PREFIX}{bid}/  builder {ws}",
+            )
             _drive_ami_build_run_loop(bid, stack=stack, no_wait=no_wait)
         else:
             assert config_file is not None
             build_id, bucket, prefix = _stage_ami_build_to_s3(config_file, stack=stack)
             bid = build_id
-            click.echo(f"Staged AMI build {build_id}")
-            click.echo(f"  s3:/{prefix}")
-            click.echo(f"  Bucket: s3://{bucket}/{prefix}")
-            click.echo()
-            click.echo(f"Building AMI from config: {config_file}")
-            click.echo(f"  Builder name: {_workstation_name_for_staged_build(build_id)}")
-            click.echo()
+            ws = _workstation_name_for_staged_build(build_id)
+            _compact_line_ok(
+                _GROUP_STAGE,
+                f"{build_id}  s3://{bucket}/{prefix}  builder {ws}  config {config_file}",
+            )
             _drive_ami_build_run_loop(build_id, stack=stack, no_wait=no_wait)
     except KeyboardInterrupt:
         click.echo()
@@ -1681,9 +1930,7 @@ def ami_build_create(config_file: str, stack: str) -> None:
     (preserving Unix modes) and whose run paths reference s3:/ keys under ami-builds/<build-id>/.
     """
     build_id, bucket, prefix = _stage_ami_build_to_s3(config_file, stack=stack)
-    click.echo(f"Staged AMI build {build_id}")
-    click.echo(f"  s3:/{prefix}")
-    click.echo(f"  Bucket: s3://{bucket}/{prefix}")
+    _compact_line_ok(_GROUP_STAGE, f"{build_id}  s3://{bucket}/{prefix}")
 
 
 @ami_build_group.command("list")
