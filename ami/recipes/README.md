@@ -19,6 +19,6 @@ Requires a deployed desk stack (S3 copy bucket, VPC, etc.), AWS credentials, and
 
 Or use `./ami/recipes/run-default-ami-build.sh` (same as above).
 
-### CI
+### CI (GitHub Actions)
 
-The workflow `.github/workflows/default-desk-ami.yml` runs the same command on `workflow_dispatch` when repository secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_DEFAULT_REGION` are set.
+Copy `default-desk-ami-github-actions.yml` to `.github/workflows/default-desk-ami.yml` in this repo. Trigger **workflow_dispatch** manually; set secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_DEFAULT_REGION`.
