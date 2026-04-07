@@ -22,6 +22,7 @@
     {"run": "sudo -u ubuntu bash -c 'echo \"export PATH=\\\"/home/ubuntu/desk/.venv/bin:/home/ubuntu/desk:/opt/desk-uv-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.bashrc'"},
     {"run": "sudo -u ubuntu bash -c 'grep -q desk/.venv/bin /home/ubuntu/.profile 2>/dev/null || echo \"export PATH=\\\"/home/ubuntu/desk/.venv/bin:/home/ubuntu/desk:/opt/desk-uv-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.profile'"},
     {"run": "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /tmp/desk-build/desk-config.ini /home/ubuntu/.config/desk/config.ini'"},
+    {"run": "sudo install -d -m 0755 /root/.config/desk && sudo cp /home/ubuntu/.config/desk/config.ini /root/.config/desk/config.ini"},
     {"run": "sudo bash /tmp/desk-build/install-cursor-agent.sh"},
     {"run": "rm -rf /tmp/desk-build"}
   ],
