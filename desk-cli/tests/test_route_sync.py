@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -25,6 +25,9 @@ def test_desk_route_sync_help() -> None:
     assert result.exit_code == 0
     assert "Sync local desk routes" in result.output
     assert "pull" in result.output
+    assert "start" in result.output
+    assert "stop" in result.output
+    assert "status" in result.output
 
 
 @patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={})
@@ -147,3 +150,101 @@ def test_route_sync_pull_resolves_bucket_when_env_unset(
     assert result.exit_code == 0
     _mock_bucket.assert_called_once()
     assert os.environ.get("DESK_DATA_BUCKET") == "resolved-bucket"
+
+
+@patch("desk_cli.commands.route_sync.sys.platform", "linux")
+@patch("desk_cli.commands.route_sync._systemctl_user")
+@patch("desk_cli.commands.route_sync._install_route_sync_systemd_units")
+def test_route_sync_start_on_boot_enables_timer(
+    mock_install: MagicMock,
+    mock_systemctl: MagicMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """desk route-sync start --on-boot installs units and runs enable --now."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+
+    def _fake_ctl(args: list[str]) -> object:
+        class R:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return R()
+
+    mock_systemctl.side_effect = _fake_ctl
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route-sync", "start", "--on-boot", "--interval", "10"])
+    assert result.exit_code == 0
+    mock_install.assert_called_once_with(interval_seconds=10)
+    assert mock_systemctl.call_args_list[-1][0][0] == ["enable", "--now", "desk-route-sync-pull.timer"]
+    assert "persists on boot" in result.output
+
+
+@patch("desk_cli.commands.route_sync.sys.platform", "linux")
+@patch("desk_cli.commands.route_sync._systemctl_user")
+@patch("desk_cli.commands.route_sync._install_route_sync_systemd_units")
+def test_route_sync_start_without_on_boot_only_starts_timer(
+    mock_install: MagicMock,
+    mock_systemctl: MagicMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+
+    def _fake_ctl(args: list[str]) -> object:
+        class R:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return R()
+
+    mock_systemctl.side_effect = _fake_ctl
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route-sync", "start", "--interval", "15"])
+    assert result.exit_code == 0
+    mock_install.assert_called_once_with(interval_seconds=15)
+    assert mock_systemctl.call_args_list[-1][0][0] == ["start", "desk-route-sync-pull.timer"]
+    assert "current session" in result.output
+
+
+@patch("desk_cli.commands.route_sync.sys.platform", "linux")
+@patch("desk_cli.commands.route_sync._disable_route_sync_systemd_units")
+def test_route_sync_stop_on_boot_removes_units(mock_disable: MagicMock) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route-sync", "stop", "--on-boot"])
+    assert result.exit_code == 0
+    mock_disable.assert_called_once_with(remove_unit_files=True)
+
+
+@patch("desk_cli.commands.route_sync.sys.platform", "linux")
+@patch("desk_cli.commands.route_sync._stop_route_sync_timer")
+def test_route_sync_stop_stops_timer(mock_stop: MagicMock) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route-sync", "stop"])
+    assert result.exit_code == 0
+    mock_stop.assert_called_once()
+
+
+@patch("desk_cli.commands.route_sync._timer_enabled", return_value=True)
+@patch("desk_cli.commands.route_sync._timer_active", return_value=True)
+def test_route_sync_status_shows_enabled(
+    _mock_act: object,
+    _mock_en: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / ".config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+    ud = cfg / "systemd" / "user"
+    ud.mkdir(parents=True)
+    (ud / "desk-route-sync-pull.timer").write_text("[Timer]\nOnUnitActiveSec=10s\n")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route-sync", "status"])
+    assert result.exit_code == 0
+    assert "desk-route-sync-pull.timer" in result.output
+    assert "10s" in result.output
