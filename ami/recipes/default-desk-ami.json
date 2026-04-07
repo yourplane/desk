@@ -1,6 +1,6 @@
 {
   "ami_name": "default-desk-ami",
-  "steps": [
+  "build": [
     {"run": "sudo -u ubuntu mkdir -p /tmp/desk-build"},
     {"copy": {"source": "../aws/install-aws-cli.sh", "dest": "/tmp/desk-build/install-aws-cli.sh"}},
     {"copy": {"source": "../aws/install-session-manager-plugin.sh", "dest": "/tmp/desk-build/install-session-manager-plugin.sh"}},
@@ -18,10 +18,16 @@
     {"run": "sudo -u ubuntu git clone https://github.com/maxrademacher/desk.git /home/ubuntu/desk"},
     {"run": "sudo -u ubuntu bash -c 'export PATH=\"/opt/desk-uv-venv/bin:$PATH\"; bash /tmp/desk-build/update-desk'"},
     {"run": "sudo -u ubuntu mv /tmp/desk-build/update-desk /home/ubuntu/desk/update-desk && sudo -u ubuntu chmod +x /home/ubuntu/desk/update-desk"},
+    {"run": "sudo ln -sf /home/ubuntu/desk/.venv/bin/desk /usr/local/bin/desk"},
     {"run": "sudo -u ubuntu bash -c 'echo \"export PATH=\\\"/home/ubuntu/desk/.venv/bin:/home/ubuntu/desk:/opt/desk-uv-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.bashrc'"},
     {"run": "sudo -u ubuntu bash -c 'grep -q desk/.venv/bin /home/ubuntu/.profile 2>/dev/null || echo \"export PATH=\\\"/home/ubuntu/desk/.venv/bin:/home/ubuntu/desk:/opt/desk-uv-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.profile'"},
     {"run": "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /tmp/desk-build/desk-config.ini /home/ubuntu/.config/desk/config.ini'"},
+    {"run": "sudo install -d -m 0755 /root/.config/desk && sudo cp /home/ubuntu/.config/desk/config.ini /root/.config/desk/config.ini"},
     {"run": "sudo bash /tmp/desk-build/install-cursor-agent.sh"},
     {"run": "rm -rf /tmp/desk-build"}
+  ],
+  "test": [
+    {"run": "desk list"},
+    {"run": "test-home-dir-empty.sh"}
   ]
 }

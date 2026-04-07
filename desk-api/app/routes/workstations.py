@@ -39,6 +39,7 @@ class CreateWorkstationBody(BaseModel):
     name: str
     instance_type: str = "t3.medium"
     shutdown_after: str = "4h"
+    allow_untested_ami: bool = False
 
 
 class RunCommandBody(BaseModel):
@@ -130,6 +131,7 @@ def create_workstation_route(body: CreateWorkstationBody):
             name,
             body.instance_type,
             shutdown_after=body.shutdown_after,
+            allow_untested_ami=body.allow_untested_ami,
             region=region,
             profile=profile,
         )
