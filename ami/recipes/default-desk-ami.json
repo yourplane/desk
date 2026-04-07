@@ -25,6 +25,7 @@
     {"run": "rm -rf /tmp/desk-build"}
   ],
   "test": [
+    {"run": "desk list"},
     {"run": "test-default-desk-ami.sh"}
   ]
 }
