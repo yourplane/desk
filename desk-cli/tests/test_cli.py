@@ -244,7 +244,7 @@ def test_desk_ami_list_help() -> None:
     assert "--all" in output
 
 
-@patch("desk_cli.commands.ami.list_amis")
+@patch("desk_cli.ami_build.aws_shim.list_amis")
 def test_desk_ami_list_empty(mock_list_amis: object) -> None:
     """desk ami list shows message when no AMIs found."""
     mock_list_amis.return_value = []
@@ -257,7 +257,7 @@ def test_desk_ami_list_empty(mock_list_amis: object) -> None:
     mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=True)
 
 
-@patch("desk_cli.commands.ami.list_amis")
+@patch("desk_cli.ami_build.aws_shim.list_amis")
 def test_desk_ami_list_success(mock_list_amis: object) -> None:
     """desk ami list shows table of AMIs."""
     from desk.aws import AmiInfo
@@ -284,7 +284,7 @@ def test_desk_ami_list_success(mock_list_amis: object) -> None:
     mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=True)
 
 
-@patch("desk_cli.commands.ami.list_amis")
+@patch("desk_cli.ami_build.aws_shim.list_amis")
 def test_desk_ami_list_plain(mock_list_amis: object) -> None:
     """desk ami list --output plain prints tab-separated lines."""
     from desk.aws import AmiInfo
@@ -307,7 +307,7 @@ def test_desk_ami_list_plain(mock_list_amis: object) -> None:
     mock_list_amis.assert_called_once()
 
 
-@patch("desk_cli.commands.ami.list_amis")
+@patch("desk_cli.ami_build.aws_shim.list_amis")
 def test_desk_ami_list_all_flag(mock_list_amis: object) -> None:
     """desk ami list --all passes managed_only=False."""
     mock_list_amis.return_value = []
@@ -347,9 +347,9 @@ def test_desk_ami_build_missing_config() -> None:
     assert "No such file" in result.stderr or "nonexistent" in result.stderr.lower()
 
 
-@patch("desk_cli.commands.ami._drive_ami_build_run_loop")
+@patch("desk_cli.ami_build.run_loop.drive_ami_build_run_loop")
 @patch(
-    "desk_cli.commands.ami._stage_ami_build_to_s3",
+    "desk_cli.ami_build.staging.stage_ami_build_to_s3",
     return_value=("20260101-010101-abcdef01", "test-bucket", "ami-builds/20260101-010101-abcdef01/"),
 )
 def test_ami_build_uses_sdk_instead_of_nested_desk_process(
@@ -409,9 +409,9 @@ def test_desk_ami_build_list_help() -> None:
     assert "--archived" in output
 
 
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
-@patch("desk_cli.commands.ami._new_build_id", return_value="20260101-010101-abcdef01")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.s3_utils.new_build_id", return_value="20260101-010101-abcdef01")
 def test_ami_build_create_uploads(
     _mock_new_id: object,
     _mock_bucket: object,
@@ -444,9 +444,9 @@ def test_ami_build_create_uploads(
     assert s3.put_object.call_count == 2
 
 
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
-@patch("desk_cli.commands.ami._new_build_id", return_value="20260101-010101-abcdef01")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.s3_utils.new_build_id", return_value="20260101-010101-abcdef01")
 def test_ami_build_create_tar_preserves_mode_bits(
     _mock_new_id: object,
     _mock_bucket: object,
@@ -494,8 +494,8 @@ def test_ami_build_create_tar_preserves_mode_bits(
     assert by_name["daemon"].mode & 0o111
 
 
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_list_active(_mock_bucket: object, mock_session: object) -> None:
     """ami build list reads manifests under ami-builds/."""
     s3 = MagicMock()
@@ -552,8 +552,8 @@ def _s3_get_for_async_build(
     return s3
 
 
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_status_no_builder_record(_mock_bucket: object, mock_session: object) -> None:
     """ami build status shows next step when builder-instance.json is absent."""
     s3 = _s3_get_for_async_build(has_builder_record=False)
@@ -567,10 +567,10 @@ def test_ami_build_status_no_builder_record(_mock_bucket: object, mock_session: 
     assert "builder-instance.json" in result.output
 
 
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=False)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=False)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_status_running_not_ssm(
     _mock_bucket: object, mock_session: object, _mock_state: object, _mock_ssm: object
 ) -> None:
@@ -586,11 +586,11 @@ def test_ami_build_status_running_not_ssm(
     assert "no" in result.output.lower() or "not ready" in result.output.lower()
 
 
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_status_recipe_ssm_ready(
     _mock_bucket: object, mock_session: object, _mock_state: object, _mock_ssm: object, _mock_list: object
 ) -> None:
@@ -617,13 +617,13 @@ def test_ami_build_status_recipe_ssm_ready(
     assert "echo hi" in result.output
 
 
-@patch("desk_cli.commands.ami._evaluate_async_recipe")
-@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.recipe_eval.evaluate_async_recipe")
+@patch("desk_cli.ami_build.aws_shim.send_ssm_command", return_value="cmd-ssm-1")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_evaluates_recipe_once(
     _mock_bucket: object,
     mock_session: object,
@@ -634,7 +634,7 @@ def test_ami_build_step_evaluates_recipe_once(
     mock_eval: object,
 ) -> None:
     """ami build step calls _evaluate_async_recipe only once (shared with status print)."""
-    from desk_cli.commands.ami import AsyncRecipeEval
+    from desk_cli.ami_build.recipe_eval import AsyncRecipeEval
 
     mock_eval.return_value = AsyncRecipeEval(
         total_steps=1,
@@ -663,12 +663,12 @@ def test_ami_build_step_evaluates_recipe_once(
     mock_send.assert_called_once()
 
 
-@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.send_ssm_command", return_value="cmd-ssm-1")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_starts_recipe_run(
     _mock_bucket: object,
     mock_session: object,
@@ -697,13 +697,13 @@ def test_ami_build_step_starts_recipe_run(
     assert "cmd-ssm-1" in result.output
 
 
-@patch("desk_cli.commands.ami.generate_presigned_get_object_url", return_value="https://example.com/presigned")
-@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-copy")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.generate_presigned_get_object_url", return_value="https://example.com/presigned")
+@patch("desk_cli.ami_build.aws_shim.send_ssm_command", return_value="cmd-ssm-copy")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_copy_uses_curl_presigned_url(
     _mock_bucket: object,
     mock_session: object,
@@ -744,13 +744,13 @@ def test_ami_build_step_copy_uses_curl_presigned_url(
     assert "aws s3" not in script
 
 
-@patch("desk_cli.commands.ami.generate_presigned_get_object_url", return_value="https://example.com/presigned")
-@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-copy")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.generate_presigned_get_object_url", return_value="https://example.com/presigned")
+@patch("desk_cli.ami_build.aws_shim.send_ssm_command", return_value="cmd-ssm-copy")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_recursive_copy_extracts_tar_to_dest(
     _mock_bucket: object,
     mock_session: object,
@@ -786,13 +786,13 @@ def test_ami_build_step_recursive_copy_extracts_tar_to_dest(
     assert 'tar -xf "$TMP" -C /tmp/desk-git' in script
 
 
-@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-retry")
-@patch("desk_cli.commands.ami._evaluate_async_recipe")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.send_ssm_command", return_value="cmd-retry")
+@patch("desk_cli.ami_build.recipe_eval.evaluate_async_recipe")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_retry_after_failure(
     _mock_bucket: object,
     mock_session: object,
@@ -803,7 +803,7 @@ def test_ami_build_step_retry_after_failure(
     mock_send: object,
 ) -> None:
     """--retry re-sends SSM for the failed step index."""
-    from desk_cli.commands.ami import AsyncRecipeEval
+    from desk_cli.ami_build.recipe_eval import AsyncRecipeEval
 
     mock_eval.return_value = AsyncRecipeEval(
         total_steps=1,
@@ -832,12 +832,12 @@ def test_ami_build_step_retry_after_failure(
     mock_send.assert_called_once()
 
 
-@patch("desk_cli.commands.ami._evaluate_async_recipe")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.recipe_eval.evaluate_async_recipe")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_retry_requires_failed_step(
     _mock_bucket: object,
     mock_session: object,
@@ -847,7 +847,7 @@ def test_ami_build_step_retry_requires_failed_step(
     mock_eval: object,
 ) -> None:
     """--retry errors when there is no failed step."""
-    from desk_cli.commands.ami import AsyncRecipeEval
+    from desk_cli.ami_build.recipe_eval import AsyncRecipeEval
 
     mock_eval.return_value = AsyncRecipeEval(
         total_steps=1,
@@ -875,11 +875,11 @@ def test_ami_build_step_retry_requires_failed_step(
     assert "Nothing to retry" in result.output
 
 
-@patch("desk_cli.commands.ami._put_s3_object_json")
-@patch("desk_cli.commands.ami.create_workstation", return_value=("i-new", None))
-@patch("desk_cli.commands.ami.get_latest_ubuntu_ami", return_value="ami-ubuntu")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.s3_utils.put_s3_object_json")
+@patch("desk_cli.ami_build.aws_shim.create_workstation", return_value=("i-new", None))
+@patch("desk_cli.ami_build.aws_shim.get_latest_ubuntu_ami", return_value="ami-ubuntu")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_creates_and_records_instance(
     _mock_bucket: object,
     mock_session: object,
@@ -903,13 +903,13 @@ def test_ami_build_step_creates_and_records_instance(
     assert "builder-instance.json" in args[2]
 
 
-@patch("desk_cli.commands.ami.create_ami", return_value="ami-reg1")
-@patch("desk_cli.commands.ami._evaluate_async_recipe")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.create_ami", return_value="ami-reg1")
+@patch("desk_cli.ami_build.recipe_eval.evaluate_async_recipe")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_after_recipe_calls_create_ami(
     _mock_bucket: object,
     mock_session: object,
@@ -920,7 +920,7 @@ def test_ami_build_step_after_recipe_calls_create_ami(
     mock_create_ami: object,
 ) -> None:
     """After all recipe steps succeed, step registers an AMI and writes ami-result.json."""
-    from desk_cli.commands.ami import AsyncRecipeEval
+    from desk_cli.ami_build.recipe_eval import AsyncRecipeEval
 
     mock_eval.return_value = AsyncRecipeEval(
         total_steps=1,
@@ -956,14 +956,14 @@ def test_ami_build_step_after_recipe_calls_create_ami(
     assert json.loads(body.decode()) == {"image_id": "ami-reg1"}
 
 
-@patch("desk_cli.commands.ami.terminate_instance")
-@patch("desk_cli.commands.ami.get_ami_state", return_value="available")
-@patch("desk_cli.commands.ami._evaluate_async_recipe")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.terminate_instance")
+@patch("desk_cli.ami_build.aws_shim.get_ami_state", return_value="available")
+@patch("desk_cli.ami_build.recipe_eval.evaluate_async_recipe")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_step_terminates_builder_when_ami_available(
     _mock_bucket: object,
     mock_session: object,
@@ -975,7 +975,7 @@ def test_ami_build_step_terminates_builder_when_ami_available(
     mock_terminate: object,
 ) -> None:
     """When the AMI is available, step terminates the builder (completion is inferred from AWS + S3)."""
-    from desk_cli.commands.ami import AsyncRecipeEval
+    from desk_cli.ami_build.recipe_eval import AsyncRecipeEval
 
     mock_eval.return_value = AsyncRecipeEval(
         total_steps=1,
@@ -1006,13 +1006,13 @@ def test_ami_build_step_terminates_builder_when_ami_available(
     assert len(put_calls) == 0
 
 
-@patch("desk_cli.commands.ami._maybe_evaluate_async_recipe")
-@patch("desk_cli.commands.ami.get_ami_state", return_value="pending")
-@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
-@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.recipe_eval.maybe_evaluate_async_recipe")
+@patch("desk_cli.ami_build.aws_shim.get_ami_state", return_value="pending")
+@patch("desk_cli.ami_build.aws_shim.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.ami_build.aws_shim.is_ssm_ready", return_value=True)
+@patch("desk_cli.ami_build.aws_shim.get_instance_state", return_value="running")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_status_shows_post_recipe_ami_pending(
     _mock_bucket: object,
     mock_session: object,
@@ -1023,7 +1023,7 @@ def test_ami_build_status_shows_post_recipe_ami_pending(
     mock_maybe_recipe: object,
 ) -> None:
     """status shows post-recipe AMI section when an image id is recorded."""
-    from desk_cli.commands.ami import AsyncRecipeEval
+    from desk_cli.ami_build.recipe_eval import AsyncRecipeEval
 
     mock_maybe_recipe.return_value = AsyncRecipeEval(
         total_steps=1,
@@ -1054,8 +1054,8 @@ def test_ami_build_status_shows_post_recipe_ami_pending(
     assert "pending" in result.output
 
 
-@patch("desk_cli.commands.ami.boto3.Session")
-@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.ami_build.aws_shim.boto3.Session")
+@patch("desk_cli.ami_build.aws_shim.get_desk_copy_bucket", return_value="test-bucket")
 def test_ami_build_cancel_archives(_mock_bucket: object, mock_session: object) -> None:
     """ami build cancel copies keys to ami-build-archive/ then deletes."""
     s3 = MagicMock()
@@ -1086,10 +1086,10 @@ def test_desk_ami_create_help() -> None:
     assert "--wait" in output
 
 
-@patch("desk_cli.commands.ami.get_ami_state")
-@patch("desk_cli.commands.ami.create_ami")
-@patch("desk_cli.commands.ami.get_instance_state")
-@patch("desk_cli.commands.ami.resolve_workstation")
+@patch("desk_cli.ami_build.aws_shim.get_ami_state")
+@patch("desk_cli.ami_build.aws_shim.create_ami")
+@patch("desk_cli.ami_build.aws_shim.get_instance_state")
+@patch("desk_cli.ami_build.aws_shim.resolve_workstation")
 def test_desk_ami_create_success(
     mock_resolve: object,
     mock_get_state: object,
@@ -1122,10 +1122,10 @@ def test_desk_ami_create_success(
     assert "created successfully" in result.output
 
 
-@patch("desk_cli.commands.ami.get_ami_state")
-@patch("desk_cli.commands.ami.create_ami")
-@patch("desk_cli.commands.ami.get_instance_state")
-@patch("desk_cli.commands.ami.resolve_workstation")
+@patch("desk_cli.ami_build.aws_shim.get_ami_state")
+@patch("desk_cli.ami_build.aws_shim.create_ami")
+@patch("desk_cli.ami_build.aws_shim.get_instance_state")
+@patch("desk_cli.ami_build.aws_shim.resolve_workstation")
 def test_desk_ami_create_no_wait(
     mock_resolve: object,
     mock_get_state: object,
@@ -1146,9 +1146,9 @@ def test_desk_ami_create_no_wait(
     assert "being created in the background" in result.output
 
 
-@patch("desk_cli.commands.ami.create_ami")
-@patch("desk_cli.commands.ami.get_instance_state")
-@patch("desk_cli.commands.ami.resolve_workstation")
+@patch("desk_cli.ami_build.aws_shim.create_ami")
+@patch("desk_cli.ami_build.aws_shim.get_instance_state")
+@patch("desk_cli.ami_build.aws_shim.resolve_workstation")
 def test_desk_ami_create_with_no_reboot(
     mock_resolve: object,
     mock_get_state: object,
@@ -1169,7 +1169,7 @@ def test_desk_ami_create_with_no_reboot(
     assert "inconsistent state" in result.output
 
 
-@patch("desk_cli.commands.ami.resolve_workstation")
+@patch("desk_cli.ami_build.aws_shim.resolve_workstation")
 def test_desk_ami_create_workstation_not_found(mock_resolve: object) -> None:
     """desk ami create fails when workstation not found."""
     mock_resolve.side_effect = ValueError("Workstation 'unknown' not found")
@@ -1181,9 +1181,9 @@ def test_desk_ami_create_workstation_not_found(mock_resolve: object) -> None:
     assert "not found" in result.output
 
 
-@patch("desk_cli.commands.ami.wait_for_instance_state")
-@patch("desk_cli.commands.ami.get_instance_state")
-@patch("desk_cli.commands.ami.resolve_workstation")
+@patch("desk_cli.ami_build.aws_shim.wait_for_instance_state")
+@patch("desk_cli.ami_build.aws_shim.get_instance_state")
+@patch("desk_cli.ami_build.aws_shim.resolve_workstation")
 def test_desk_ami_create_waits_for_stopping_instance(
     mock_resolve: object,
     mock_get_state: object,
@@ -1202,10 +1202,10 @@ def test_desk_ami_create_waits_for_stopping_instance(
     mock_wait_state.assert_called_once()
 
 
-@patch("desk_cli.commands.ami.get_ami_state")
-@patch("desk_cli.commands.ami.create_ami")
-@patch("desk_cli.commands.ami.get_instance_state")
-@patch("desk_cli.commands.ami.resolve_workstation")
+@patch("desk_cli.ami_build.aws_shim.get_ami_state")
+@patch("desk_cli.ami_build.aws_shim.create_ami")
+@patch("desk_cli.ami_build.aws_shim.get_instance_state")
+@patch("desk_cli.ami_build.aws_shim.resolve_workstation")
 def test_desk_ami_create_generates_default_name(
     mock_resolve: object,
     mock_get_state: object,
@@ -1230,10 +1230,10 @@ def test_desk_ami_create_generates_default_name(
     assert len(call_kwargs["name"]) > len("main-")
 
 
-@patch("desk_cli.commands.ami.get_ami_state")
-@patch("desk_cli.commands.ami.create_ami")
-@patch("desk_cli.commands.ami.get_instance_state")
-@patch("desk_cli.commands.ami.resolve_workstation")
+@patch("desk_cli.ami_build.aws_shim.get_ami_state")
+@patch("desk_cli.ami_build.aws_shim.create_ami")
+@patch("desk_cli.ami_build.aws_shim.get_instance_state")
+@patch("desk_cli.ami_build.aws_shim.resolve_workstation")
 def test_desk_ami_create_fails_on_ami_failure(
     mock_resolve: object,
     mock_get_state: object,
