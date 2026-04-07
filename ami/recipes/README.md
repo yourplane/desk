@@ -6,7 +6,7 @@ Defines a **`build`** phase (provision the image) and a **`test`** phase (run on
 
 Tests are split into two steps:
 - `desk list` (validates `desk` is installed and on PATH as configured by the build).
-- `test-default-desk-ami.sh` (validates `/home/ubuntu` has no unexpected top-level entries).
+- `test-home-dir-empty.sh` (validates `/home/ubuntu` has no unexpected top-level entries).
 
 ### Run a full build + test in AWS
 

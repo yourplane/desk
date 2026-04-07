@@ -26,6 +26,6 @@
   ],
   "test": [
     {"run": "desk list"},
-    {"run": "test-default-desk-ami.sh"}
+    {"run": "test-home-dir-empty.sh"}
   ]
 }
