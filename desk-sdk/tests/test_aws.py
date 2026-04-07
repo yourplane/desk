@@ -6,6 +6,8 @@ import pytest
 from botocore.exceptions import ClientError
 
 from desk.aws import (
+    AMI_TAG_BUILD_STATUS,
+    AMI_BUILD_STATUS_TESTED,
     AmiInfo,
     DeskVpcOutputs,
     Workstation,
@@ -20,6 +22,7 @@ from desk.aws import (
     get_desk_vpc_outputs,
     get_instance_state,
     get_latest_ami_by_name_prefix,
+    get_latest_tested_ami_by_name_prefix,
     get_latest_ubuntu_ami,
     get_running_workstations_using_key,
     get_ssm_command,
@@ -315,6 +318,31 @@ def test_get_latest_ami_by_name_prefix_none_found(mock_session: MagicMock) -> No
 
 
 @patch("desk.aws.boto3.Session")
+def test_get_latest_tested_ami_by_name_prefix_success(mock_session: MagicMock) -> None:
+    """get_latest_tested_ami_by_name_prefix returns newest tested AMI whose name starts with prefix."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {"ImageId": "ami-old", "Name": "default-desk-ami-20240101-120000", "CreationDate": "2024-01-01"},
+            {"ImageId": "ami-new", "Name": "default-desk-ami-20240601-120000", "CreationDate": "2024-06-01"},
+            {"ImageId": "ami-other", "Name": "other-ami", "CreationDate": "2024-05-01"},
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_latest_tested_ami_by_name_prefix("default-desk-ami")
+
+    assert result == "ami-new"
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"],
+        Filters=[
+            {"Name": "state", "Values": ["available"]},
+            {"Name": f"tag:{AMI_TAG_BUILD_STATUS}", "Values": [AMI_BUILD_STATUS_TESTED]},
+        ],
+    )
+
+
+@patch("desk.aws.boto3.Session")
 def test_run_workstation_success(mock_session: MagicMock) -> None:
     """run_workstation launches instance and sets shutdown tag; returns (instance_id, shutdown_at)."""
     mock_ec2 = MagicMock()
@@ -389,7 +417,7 @@ def test_create_workstation_success(
 
 
 @patch("desk.aws.run_workstation")
-@patch("desk.aws.get_latest_ami_by_name_prefix")
+@patch("desk.aws.get_latest_tested_ami_by_name_prefix")
 @patch("desk.aws.get_desk_vpc_outputs")
 @patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
@@ -400,7 +428,7 @@ def test_create_workstation_uses_ami_prefix(
     mock_ami_by_prefix: MagicMock,
     mock_run: MagicMock,
 ) -> None:
-    """create_workstation resolves AMI via configured prefix when available."""
+    """create_workstation resolves AMI via configured prefix (tested images only by default)."""
     mock_list.return_value = []
     mock_settings.return_value = MagicMock(ami_prefix="default-desk-ami")
     mock_ami_by_prefix.return_value = "ami-custom"
@@ -416,6 +444,66 @@ def test_create_workstation_uses_ami_prefix(
 
     kw = mock_run.call_args[1]
     assert kw["ami_id"] == "ami-custom"
+
+
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_latest_ami_by_name_prefix")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_desk_settings")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_allow_untested_uses_latest_by_prefix(
+    mock_list: MagicMock,
+    mock_settings: MagicMock,
+    mock_vpc: MagicMock,
+    mock_ami_by_prefix: MagicMock,
+    mock_run: MagicMock,
+) -> None:
+    """allow_untested_ami uses get_latest_ami_by_name_prefix (any matching name)."""
+    mock_list.return_value = []
+    mock_settings.return_value = MagicMock(ami_prefix="default-desk-ami")
+    mock_ami_by_prefix.return_value = "ami-untested"
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+    mock_run.return_value = ("i-x", None)
+
+    create_workstation("ws", ami_id=None, allow_untested_ami=True)
+
+    mock_ami_by_prefix.assert_called_once()
+    kw = mock_run.call_args[1]
+    assert kw["ami_id"] == "ami-untested"
+
+
+@patch("desk.aws.get_latest_tested_ami_by_name_prefix")
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_desk_settings")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_raises_when_no_tested_ami(
+    mock_list: MagicMock,
+    mock_settings: MagicMock,
+    mock_vpc: MagicMock,
+    mock_run: MagicMock,
+    mock_tested: MagicMock,
+) -> None:
+    """Without allow_untested_ami, missing tested AMI raises ValueError."""
+    mock_list.return_value = []
+    mock_settings.return_value = MagicMock(ami_prefix="pfx")
+    mock_tested.return_value = None
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+
+    with pytest.raises(ValueError, match="No tested AMI"):
+        create_workstation("ws", ami_id=None)
+
+    mock_run.assert_not_called()
 
 
 @patch("desk.aws.run_workstation")

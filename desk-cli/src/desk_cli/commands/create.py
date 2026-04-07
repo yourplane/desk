@@ -21,7 +21,7 @@ from desk.config import get_desk_settings
     "--ami",
     "-a",
     default=None,
-    help="AMI ID. Default: latest AMI matching config ami_prefix, or latest Ubuntu 24.04 LTS.",
+    help="AMI ID. Default: latest tested AMI matching config ami_prefix, or latest Ubuntu 24.04 LTS.",
 )
 @click.option(
     "--shutdown",
@@ -31,11 +31,18 @@ from desk.config import get_desk_settings
     show_default=True,
     help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable).",
 )
+@click.option(
+    "--allow-untested-ami",
+    is_flag=True,
+    help="When resolving AMI via config ami_prefix, allow the latest matching image even if it "
+    "is not tagged as tested (desk:ami-build-status=tested). Default: only tested AMIs.",
+)
 def create(
     workstation: str,
     instance_type: str,
     ami: str | None,
     shutdown_after: str,
+    allow_untested_ami: bool,
 ) -> None:
     """Create a new workstation instance.
 
@@ -58,6 +65,7 @@ def create(
             instance_type,
             ami_id=ami or None,
             shutdown_after=shutdown_after,
+            allow_untested_ami=allow_untested_ami,
             region=region,
             profile=profile,
         )

@@ -16,6 +16,11 @@ from botocore.exceptions import ClientError
 # Tag key used to store the scheduled shutdown time (ISO 8601 UTC).
 TAG_SHUTDOWN_AT = "desk:shutdown-at"
 
+# AMI build pipeline: whether desk ami build tests have passed (used when resolving ami_prefix).
+AMI_TAG_BUILD_STATUS = "desk:ami-build-status"
+AMI_BUILD_STATUS_UNTESTED = "untested"
+AMI_BUILD_STATUS_TESTED = "tested"
+
 
 @dataclass
 class DeskVpcOutputs:
@@ -264,6 +269,51 @@ def get_latest_ami_by_name_prefix(
     return images[0]["ImageId"]
 
 
+def get_latest_tested_ami_by_name_prefix(
+    prefix: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Latest owned *available* AMI whose name starts with *prefix* and has ``desk:ami-build-status=tested``.
+
+    Returns None if no match.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    response = ec2.describe_images(
+        Owners=["self"],
+        Filters=[
+            {"Name": "state", "Values": ["available"]},
+            {"Name": f"tag:{AMI_TAG_BUILD_STATUS}", "Values": [AMI_BUILD_STATUS_TESTED]},
+        ],
+    )
+    images = [
+        img
+        for img in response.get("Images", [])
+        if (img.get("Name") or "").startswith(prefix)
+    ]
+    if not images:
+        return None
+    images.sort(key=lambda x: x.get("CreationDate", ""), reverse=True)
+    return images[0]["ImageId"]
+
+
+def tag_ami_build_status(
+    image_id: str,
+    status: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """Set ``desk:ami-build-status`` on an AMI (*status* is e.g. ``untested`` or ``tested``)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.create_tags(
+        Resources=[image_id],
+        Tags=[{"Key": AMI_TAG_BUILD_STATUS, "Value": status}],
+    )
+
+
 def _run_instance(
     *,
     ami_id: str,
@@ -356,6 +406,7 @@ def create_workstation(
     *,
     ami_id: str | None = None,
     shutdown_after: str = "4h",
+    allow_untested_ami: bool = False,
     region: str | None = None,
     profile: str | None = None,
 ) -> tuple[str, str | None]:
@@ -380,7 +431,19 @@ def create_workstation(
     if ami_id is None:
         ami_prefix = get_desk_settings().ami_prefix
         if ami_prefix:
-            ami_id = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
+            if allow_untested_ami:
+                ami_id = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
+            else:
+                ami_id = get_latest_tested_ami_by_name_prefix(
+                    ami_prefix, region=region, profile=profile
+                )
+            if ami_id is None and not allow_untested_ami:
+                raise ValueError(
+                    f"No tested AMI found with name prefix {ami_prefix!r} (tag "
+                    f"{AMI_TAG_BUILD_STATUS}={AMI_BUILD_STATUS_TESTED}). "
+                    "Build and test an AMI with `desk ami build`, or pass allow_untested_ami to use "
+                    "the latest image matching the prefix regardless of test status."
+                )
         if ami_id is None:
             ami_id = get_latest_ubuntu_ami(region=region, profile=profile)
 

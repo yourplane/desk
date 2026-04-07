@@ -545,6 +545,8 @@ def _s3_get_for_async_build(
                 raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "n"}}, "GetObject")
             assert isinstance(ami_result, dict)
             return {"Body": io.BytesIO(json.dumps(ami_result).encode())}
+        if Key.endswith("test-instance.json"):
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "n"}}, "GetObject")
         raise AssertionError(Key)
 
     s3 = MagicMock()
@@ -611,7 +613,7 @@ def test_ami_build_status_recipe_ssm_ready(
     result = runner.invoke(cli, ["ami", "build", "status", "b1"])
 
     assert result.exit_code == 0
-    assert "Recipe:" in result.output
+    assert "Build recipe:" in result.output
     assert "Steps in config: 2" in result.output
     assert "Next: step 0" in result.output
     assert "echo hi" in result.output
@@ -956,6 +958,7 @@ def test_ami_build_step_after_recipe_calls_create_ami(
     assert json.loads(body.decode()) == {"image_id": "ami-reg1"}
 
 
+@patch("desk_cli.commands.ami.tag_ami_build_status")
 @patch("desk_cli.commands.ami.terminate_instance")
 @patch("desk_cli.commands.ami.get_ami_state", return_value="available")
 @patch("desk_cli.commands.ami._evaluate_async_recipe")
@@ -973,6 +976,7 @@ def test_ami_build_step_terminates_builder_when_ami_available(
     mock_eval: object,
     _mock_ami_state: object,
     mock_terminate: object,
+    _mock_tag: object,
 ) -> None:
     """When the AMI is available, step terminates the builder (completion is inferred from AWS + S3)."""
     from desk_cli.commands.ami import AsyncRecipeEval
@@ -1002,8 +1006,12 @@ def test_ami_build_step_terminates_builder_when_ami_available(
 
     assert result.exit_code == 0
     mock_terminate.assert_called_once_with("i-abc", region=None, profile=None)
+    _mock_tag.assert_called_once()
     put_calls = [c for c in s3.put_object.call_args_list if "ami-result.json" in str(c)]
-    assert len(put_calls) == 0
+    assert len(put_calls) == 1
+    merged = json.loads(put_calls[0][1]["Body"].decode())
+    assert merged.get("image_id") == "ami-reg1"
+    assert merged.get("pipeline_complete") is True
 
 
 @patch("desk_cli.commands.ami._maybe_evaluate_async_recipe")
@@ -1049,7 +1057,7 @@ def test_ami_build_status_shows_post_recipe_ami_pending(
     result = runner.invoke(cli, ["ami", "build", "status", "b1"])
 
     assert result.exit_code == 0
-    assert "Post-recipe (AMI):" in result.output
+    assert "Post-build (AMI):" in result.output
     assert "ami-reg1" in result.output
     assert "pending" in result.output
 

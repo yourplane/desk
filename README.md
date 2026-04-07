@@ -180,13 +180,15 @@ AWS **region** and **credential profile** for API calls come from the environmen
 [default]
 region = us-east-1
 aws_profile = my-aws-profile
-ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations without --ami
+ami_prefix = my-desk-ami   ; default AMI name prefix when creating workstations without --ami (tested AMIs only; see below)
 
 [profile work]
 region = eu-west-1
 aws_profile = work-aws
 ami_prefix = desk-ami-work
 ```
+
+With `ami_prefix` set, `desk create` picks the newest matching AMI that is tagged `desk:ami-build-status=tested`. To allow any matching image (for example before tests have been run), use `desk create --allow-untested-ami`. The API accepts the same flag as `allow_untested_ami` on `POST /api/workstations`. AMI builds (`desk ami build`) use a JSON recipe with a `build` section (and optional `test` section); see `desk ami build run --help`.
 
 ---
 
