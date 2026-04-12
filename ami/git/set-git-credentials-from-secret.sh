@@ -1,120 +1,154 @@
 #!/usr/bin/env bash
 #
-# Fetch GitHub App credentials (app id, installation id, private key) from an
-# AWS Secrets Manager secret, obtain an installation access token, and set
-# git's global credential helper so all git operations to GitHub use that token.
-#
-# The token is written to ~/.config/git-auth/github-token and credential.https://github.com.helper
-# is set to an inline helper that reads that file. GitHub App tokens expire
-# (typically after 1 hour); re-run this script to refresh, or use
-# git-credential-refresh-daemon.sh to keep the token updated in the background.
+# Read ~/.config/git-auth/bots.json (or GITHUB_KEY_SECRET_CONFIG), fetch each
+# bot's AWS Secrets Manager secret, mint GitHub App installation tokens, write
+# one file per org under ~/.config/git-auth/tokens/, and install the dispatcher
+# credential helper for https://github.com.
 #
 # Usage:
-#   GITHUB_KEY_SECRET_NAME=my-github-app ./set-git-credentials-from-secret.sh
+#   ./set-git-credentials-from-secret.sh
 #
 # Environment:
-#   GITHUB_KEY_SECRET_NAME  (required) Secrets Manager secret ID or name.
-#                           Secret must be JSON with app_id, installation_id, private_key.
-#   GIT_AUTH_TOKEN_FILE     (optional) Where to write the token; default: ~/.config/git-auth/github-token
-#   AWS_REGION              (optional) AWS region
-#   AWS_PROFILE             (optional) AWS profile
+#   GITHUB_KEY_SECRET_CONFIG  Path to bots JSON (default: ~/.config/git-auth/bots.json)
+#   AWS_REGION, AWS_PROFILE   Optional; passed to aws CLI
 #
-# Requirements: aws CLI, jq, openssl, curl (or npx for token)
+# bots.json format:
+#   { "bots": [ { "secret": "aws-secret-name", "org": "GitHubOrg" }, ... ] }
 #
-set -e
+# Requirements: aws CLI, jq, openssl, curl (or npx for token minting)
+#
+set -eo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 info() { echo -e "${GREEN}[set-git-credentials]${NC} $1"; }
+warn() { echo -e "${YELLOW}[set-git-credentials]${NC} $1" >&2; }
 err()  { echo -e "${RED}[set-git-credentials]${NC} $1" >&2; exit 1; }
 
-usage() {
-  echo "Usage: GITHUB_KEY_SECRET_NAME=<secret> $0"
-  echo "  Optional: GIT_AUTH_TOKEN_FILE, AWS_REGION, AWS_PROFILE"
-  echo "  Secret must be JSON with app_id, installation_id, and private_key (e.g. from create-github-app-secret.sh)."
-  exit 1
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=git-auth-common.sh
+source "$SCRIPT_DIR/git-auth-common.sh"
 
-SECRET_NAME="${GITHUB_KEY_SECRET_NAME:-}"
-[[ -z "$SECRET_NAME" ]] && usage
+DISPATCHER="$SCRIPT_DIR/git-credential-github-dispatch.sh"
+CONFIG="$(git_auth_default_config_path)"
+if [[ "$CONFIG" != /* ]]; then
+  CONFIG="$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")"
+fi
 
+[[ -f "$CONFIG" ]] || err "Missing config: $CONFIG (set GITHUB_KEY_SECRET_CONFIG or create ${GIT_AUTH_DIR}/bots.json)"
 command -v jq &>/dev/null || err "jq is required"
 command -v aws &>/dev/null || err "aws CLI is required"
+[[ -x "$DISPATCHER" ]] || err "Dispatcher not executable: $DISPATCHER"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TOKEN_FILE="${GIT_AUTH_TOKEN_FILE:-${HOME}/.config/git-auth/github-token}"
-KEY_FILE=""
-CLEANUP_KEY_FILE=""
-
-cleanup() {
-  if [[ -n "$CLEANUP_KEY_FILE" && -f "$CLEANUP_KEY_FILE" ]]; then
-    rm -f "$CLEANUP_KEY_FILE"
-  fi
-}
-trap cleanup EXIT
+BOT_COUNT="$(jq '.bots | length' "$CONFIG")"
+[[ "$BOT_COUNT" =~ ^[0-9]+$ && "$BOT_COUNT" -gt 0 ]] || err "Config must contain a non-empty \"bots\" array"
 
 AWS_ARGS=()
 [[ -n "${AWS_REGION:-}" ]]  && AWS_ARGS+=(--region "$AWS_REGION")
 [[ -n "${AWS_PROFILE:-}" ]] && AWS_ARGS+=(--profile "$AWS_PROFILE")
 
-# Fetch secret
-info "Fetching secret: $SECRET_NAME"
-SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" "${AWS_ARGS[@]}" --query SecretString --output text 2>/dev/null) || err "Failed to get secret (check AWS credentials and secret name)"
+# --- obtain installation token for one secret; key PEM is in key_file ---
+mint_installation_token() {
+  local secret_json="$1" key_file="$2"
+  local app_id installation_id token
 
-# Parse app_id, installation_id, private_key (required for this script)
-APP_ID=$(echo "$SECRET_JSON" | jq -r '.app_id // empty')
-INSTALLATION_ID=$(echo "$SECRET_JSON" | jq -r '.installation_id // empty')
-KEY_CONTENT=$(echo "$SECRET_JSON" | jq -r '.private_key // .key // empty')
+  app_id=$(echo "$secret_json" | jq -r '.app_id // empty')
+  installation_id=$(echo "$secret_json" | jq -r '.installation_id // empty')
+  [[ -n "$app_id" && -n "$installation_id" && -s "$key_file" ]] || return 1
 
-[[ -z "$APP_ID" ]] && err "Secret is missing app_id (use a secret created by create-github-app-secret.sh)"
-[[ -z "$INSTALLATION_ID" ]] && err "Secret is missing installation_id"
-[[ -z "$KEY_CONTENT" ]] && err "Secret is missing private_key"
+  token=""
+  if command -v npx &>/dev/null; then
+    token=$(npx -y obtain-github-app-installation-access-token -a "$app_id" -i "$installation_id" -k "$key_file" 2>/dev/null) || true
+  fi
 
-# Write PEM to temp file
-KEY_FILE=$(mktemp -t github_key.XXXXXX)
-CLEANUP_KEY_FILE="$KEY_FILE"
-printf '%s' "$KEY_CONTENT" > "$KEY_FILE"
-chmod 600 "$KEY_FILE"
+  if [[ -z "$token" ]]; then
+    local NOW EXP HEADER PAYLOAD SIGN_INPUT SIGNATURE JWT
+    NOW=$(date +%s)
+    EXP=$((NOW + 600))
+    B64URL() { base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='; }
+    HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | B64URL)
+    PAYLOAD=$(echo -n "{\"iat\":$NOW,\"exp\":$EXP,\"iss\":\"$app_id\"}" | B64URL)
+    SIGN_INPUT="${HEADER}.${PAYLOAD}"
+    SIGNATURE=$(echo -n "$SIGN_INPUT" | openssl dgst -sha256 -sign "$key_file" | B64URL)
+    JWT="${SIGN_INPUT}.${SIGNATURE}"
+    token=$(curl -sS -X POST \
+      -H "Authorization: Bearer $JWT" \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/app/installations/${installation_id}/access_tokens" \
+      -d '{"permissions":{"contents":"write"}}' | jq -r '.token // empty')
+  fi
 
-# Obtain installation access token
-info "Obtaining GitHub App installation token..."
-TOKEN=""
-if command -v npx &>/dev/null; then
-  TOKEN=$(npx -y obtain-github-app-installation-access-token -a "$APP_ID" -i "$INSTALLATION_ID" -k "$KEY_FILE" 2>/dev/null) || true
-fi
+  [[ -n "$token" ]] || return 1
+  printf '%s' "$token"
+}
 
-if [[ -z "$TOKEN" ]]; then
-  info "Using built-in JWT fallback..."
-  NOW=$(date +%s)
-  EXP=$((NOW + 600))
-  B64URL() { base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='; }
-  HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | B64URL)
-  PAYLOAD=$(echo -n "{\"iat\":$NOW,\"exp\":$EXP,\"iss\":\"$APP_ID\"}" | B64URL)
-  SIGN_INPUT="${HEADER}.${PAYLOAD}"
-  SIGNATURE=$(echo -n "$SIGN_INPUT" | openssl dgst -sha256 -sign "$KEY_FILE" | B64URL)
-  JWT="${SIGN_INPUT}.${SIGNATURE}"
-  TOKEN=$(curl -sS -X POST \
-    -H "Authorization: Bearer $JWT" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-    -d '{"permissions":{"contents":"write"}}' | jq -r '.token // empty')
-fi
+# Refresh one bot: returns 0 on success
+refresh_one_bot() {
+  local secret_name="$1" org="$2"
+  local secret_json key_content key_file token token_path
 
-[[ -z "$TOKEN" ]] && err "Failed to get GitHub installation token (check App ID, Installation ID, PEM; install Node/npx for best results)"
+  info "Fetching secret: $secret_name (org: $org)"
+  secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_name" "${AWS_ARGS[@]}" --query SecretString --output text 2>/dev/null) || {
+    warn "Failed to get secret: $secret_name"
+    return 1
+  }
 
-# Write token to persistent file
-TOKEN_DIR="$(dirname "$TOKEN_FILE")"
-mkdir -p "$TOKEN_DIR"
-printf '%s' "$TOKEN" > "$TOKEN_FILE"
-chmod 600 "$TOKEN_FILE"
-info "Token written to $TOKEN_FILE"
+  key_content=$(echo "$secret_json" | jq -r '.private_key // .key // empty')
+  [[ -n "$key_content" ]] || {
+    warn "Secret $secret_name is missing private_key"
+    return 1
+  }
 
-# Set global credential helper so all git commands use this token for github.com
-# Inline helper reads from the same path we wrote the token to (baked in so GIT_AUTH_TOKEN_FILE is respected)
-CRED_HELPER="!f() { [ -r \"$TOKEN_FILE\" ] || exit 1; echo \"username=x-access-token\"; echo \"password=\$(cat \"$TOKEN_FILE\")\"; }; f"
+  key_file=$(mktemp -t github_key.XXXXXX)
+  chmod 600 "$key_file"
+  printf '%s' "$key_content" > "$key_file"
+
+  token=""
+  if ! token=$(mint_installation_token "$secret_json" "$key_file"); then
+    rm -f "$key_file"
+    warn "Failed to mint token for secret $secret_name (org $org)"
+    return 1
+  fi
+  rm -f "$key_file"
+
+  token_path="$(git_auth_token_file_for_org "$org")"
+  mkdir -p "$(dirname "$token_path")"
+  printf '%s' "$token" > "$token_path"
+  chmod 600 "$token_path"
+  info "Token written for org $org -> $token_path"
+  return 0
+}
+
+mkdir -p "$GIT_AUTH_TOKENS_DIR"
+chmod 700 "$GIT_AUTH_DIR" 2>/dev/null || true
+chmod 700 "$GIT_AUTH_TOKENS_DIR" 2>/dev/null || true
+
+success_count=0
+for ((i = 0; i < BOT_COUNT; i++)); do
+  secret_name="$(jq -r ".bots[$i].secret // empty" "$CONFIG")"
+  org="$(jq -r ".bots[$i].org // empty" "$CONFIG")"
+  [[ -n "$secret_name" && -n "$org" ]] || {
+    warn "Skipping entry $i: missing secret or org"
+    continue
+  }
+  if refresh_one_bot "$secret_name" "$org"; then
+    success_count=$((success_count + 1))
+  fi
+done
+
+[[ "$success_count" -gt 0 ]] || err "No bot credentials refreshed successfully"
+
+mkdir -p "$GIT_AUTH_DIR"
+chmod 700 "$GIT_AUTH_DIR"
+printf '%s\n' "$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")" > "${GIT_AUTH_DIR}/config.path"
+chmod 600 "${GIT_AUTH_DIR}/config.path"
+
+CRED_HELPER="!\"$DISPATCHER\""
 git config --global credential.https://github.com.helper "$CRED_HELPER"
-info "Git global credential helper set for https://github.com"
+git config --global credential.useHttpPath true
+info "Git credential helper set to dispatcher for https://github.com"
 
-info "Done. Git will use the token for HTTPS operations to GitHub (e.g. clone, pull, push)."
-info "Token expires in about 1 hour; re-run this script to refresh."
+info "Done ($success_count/$BOT_COUNT bot(s) refreshed)."
+info "Tokens expire in about 1 hour; re-run or use git-credential-refresh-daemon.sh."

@@ -1,0 +1,6 @@
+{
+  "bots": [
+    {"org": "maxrademacher", "secret": "mybot-personal"},
+    {"org": "yourplane", "secret": "mybot-yourplane"}
+  ]
+}
