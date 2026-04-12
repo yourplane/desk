@@ -2,6 +2,10 @@
 
 Scripts in `ami/git/` manage **multiple** GitHub App credentials: each AWS Secrets Manager secret (app id, installation id, private key) is listed in `~/.config/git-auth/bots.json` together with the **GitHub org** whose repositories should use that installation token.
 
+### Default Desk AMI
+
+The **`default-desk-ami.json`** build copies **`bots.desk-ami.json`** to **`~/.config/git-auth/bots.json`** on the image before installing the credential refresh service. Edit that file in the repo when the baked-in org/secret list should change.
+
 ## 1. Create secrets
 
 **`create-github-app-secret.sh`** — Store app id, installation id, and private key in one Secrets Manager secret per app/installation.

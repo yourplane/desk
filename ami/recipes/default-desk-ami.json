@@ -11,6 +11,7 @@
     {"run": "sudo bash /tmp/desk-build/install-aws-cli.sh"},
     {"run": "sudo bash /tmp/desk-build/install-session-manager-plugin.sh"},
     {"run": "sudo -u ubuntu mkdir -p /home/ubuntu/.local/share/desk && cp -r /tmp/desk-build/desk-git /home/ubuntu/.local/share/desk/git && sudo chown -R ubuntu:ubuntu /home/ubuntu/.local/share/desk"},
+    {"run": "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/git-auth && cp /home/ubuntu/.local/share/desk/git/bots.desk-ami.json /home/ubuntu/.config/git-auth/bots.json && chmod 600 /home/ubuntu/.config/git-auth/bots.json'"},
     {"run": "sudo -u ubuntu HOME=/home/ubuntu bash /home/ubuntu/.local/share/desk/git/install-git-credential-refresh-service.sh"},
     {"run": "sudo apt-get update -qq && sudo apt-get install -y python3-venv"},
     {"run": "sudo mkdir -p /opt/desk-uv-venv && sudo chown ubuntu:ubuntu /opt/desk-uv-venv"},
