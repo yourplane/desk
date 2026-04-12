@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
 import click
 
 from desk.aws import resolve_workstation_target, stop_instance
-from desk.config import get_default_profile, get_default_region
+from desk.config import get_desk_settings
 
 
 @click.command("stop")
@@ -17,32 +15,19 @@ from desk.config import get_default_profile, get_default_region
     is_flag=True,
     help="Allow targeting desk infrastructure instances (for example NAT).",
 )
-@click.option(
-    "--region",
-    "-r",
-    default=None,
-    envvar="AWS_REGION",
-    help="AWS region.",
-)
-@click.option(
-    "--profile",
-    "-p",
-    default=None,
-    envvar="AWS_PROFILE",
-    help="AWS profile.",
-)
 def stop(
     workstation: str,
-    region: str | None,
-    profile: str | None,
     infra: bool,
 ) -> None:
     """Stop a workstation instance.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
+
+    AWS region and credential profile come from the environment or desk config.
     """
-    region = region or get_default_region()
-    profile = profile or get_default_profile()
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
 
     try:
         instance_id = resolve_workstation_target(

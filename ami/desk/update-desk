@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Update desk from git and rebuild with tox.
+# Update desk from git and install deps with uv (workspace monorepo).
 set -e
 cd /home/ubuntu/desk
 git pull
-tox run -e py
+uv sync

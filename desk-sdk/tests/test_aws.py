@@ -6,6 +6,8 @@ import pytest
 from botocore.exceptions import ClientError
 
 from desk.aws import (
+    AMI_TAG_BUILD_STATUS,
+    AMI_BUILD_STATUS_TESTED,
     AmiInfo,
     DeskVpcOutputs,
     Workstation,
@@ -13,17 +15,22 @@ from desk.aws import (
     create_key_pair,
     create_workstation,
     delete_key_pair,
+    generate_presigned_get_object_url,
     get_ami_state,
     get_desk_copy_bucket,
+    get_desk_data_bucket,
     get_desk_vpc_outputs,
     get_instance_state,
     get_latest_ami_by_name_prefix,
+    get_latest_tested_ami_by_name_prefix,
     get_latest_ubuntu_ami,
     get_running_workstations_using_key,
+    get_ssm_command,
     is_ssm_ready,
     list_amis,
     list_infra_workstations,
     list_ec2_key_pairs,
+    list_s3_object_keys_under_prefix,
     list_workstations,
     resolve_workstation,
     resolve_infra_instance,
@@ -135,6 +142,119 @@ def test_get_desk_copy_bucket_missing_output(mock_session: MagicMock) -> None:
 
 
 @patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_success(mock_session: MagicMock) -> None:
+    """get_desk_data_bucket returns bucket name from stack output."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.return_value = {
+        "Stacks": [
+            {
+                "Outputs": [
+                    {"OutputKey": "DeskDataBucketName", "OutputValue": "desk-123-us-east-1-data"},
+                ],
+            },
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    result = get_desk_data_bucket(stack_name="desk")
+    assert result == "desk-123-us-east-1-data"
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_stack_not_found(mock_session: MagicMock) -> None:
+    """get_desk_data_bucket raises when stack does not exist."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.side_effect = ClientError(
+        {"Error": {"Code": "ValidationError", "Message": "Stack does not exist"}},
+        "DescribeStacks",
+    )
+    mock_session.return_value.client.return_value = mock_cf
+
+    with pytest.raises(RuntimeError, match="Stack 'desk' not found"):
+        get_desk_data_bucket(stack_name="desk")
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_missing_output(mock_session: MagicMock) -> None:
+    """get_desk_data_bucket raises when DeskDataBucketName output is missing."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.return_value = {
+        "Stacks": [{"Outputs": [{"OutputKey": "VpcId", "OutputValue": "vpc-123"}]}],
+    }
+    mock_session.return_value.client.return_value = mock_cf
+
+    with pytest.raises(RuntimeError, match="no DeskDataBucketName output"):
+        get_desk_data_bucket(stack_name="desk")
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_auto_prefers_desk_web(mock_session: MagicMock) -> None:
+    """When stack_name is None, desk-web is queried first."""
+    mock_cf = MagicMock()
+
+    def describe_stacks(StackName: str, **_kwargs: object) -> dict:
+        if StackName == "desk-web":
+            return {
+                "Stacks": [
+                    {
+                        "Outputs": [
+                            {"OutputKey": "DeskDataBucketName", "OutputValue": "app-data-bucket"},
+                        ],
+                    },
+                ],
+            }
+        raise AssertionError(f"unexpected stack {StackName!r}")
+
+    mock_cf.describe_stacks.side_effect = describe_stacks
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    result = get_desk_data_bucket(stack_name=None)
+    assert result == "app-data-bucket"
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_auto_falls_back_to_second_stack(mock_session: MagicMock) -> None:
+    """When desk-web has no DeskDataBucketName, the second candidate stack is used."""
+    mock_cf = MagicMock()
+
+    def describe_stacks(StackName: str, **_kwargs: object) -> dict:
+        if StackName == "desk-web":
+            return {"Stacks": [{"Outputs": []}]}
+        if StackName == "desk":
+            return {
+                "Stacks": [
+                    {
+                        "Outputs": [
+                            {"OutputKey": "DeskDataBucketName", "OutputValue": "second-stack-bucket"},
+                        ],
+                    },
+                ],
+            }
+        raise AssertionError(f"unexpected stack {StackName!r}")
+
+    mock_cf.describe_stacks.side_effect = describe_stacks
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    result = get_desk_data_bucket(stack_name=None)
+    assert result == "second-stack-bucket"
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_desk_data_bucket_auto_raises_when_all_candidates_fail(mock_session: MagicMock) -> None:
+    """When no candidate stack exports DeskDataBucketName, raise a combined error."""
+    mock_cf = MagicMock()
+    mock_cf.describe_stacks.return_value = {"Stacks": [{"Outputs": []}]}
+    mock_session.return_value.client.return_value = mock_cf
+    mock_session.return_value.region_name = "us-east-1"
+
+    with pytest.raises(RuntimeError, match="Could not resolve DeskDataBucketName"):
+        get_desk_data_bucket(stack_name=None)
+
+
+@patch("desk.aws.boto3.Session")
 def test_get_latest_ubuntu_ami_success(mock_session: MagicMock) -> None:
     """get_latest_ubuntu_ami returns newest AMI ID."""
     mock_ec2 = MagicMock()
@@ -201,6 +321,31 @@ def test_get_latest_ami_by_name_prefix_none_found(mock_session: MagicMock) -> No
 
 
 @patch("desk.aws.boto3.Session")
+def test_get_latest_tested_ami_by_name_prefix_success(mock_session: MagicMock) -> None:
+    """get_latest_tested_ami_by_name_prefix returns newest tested AMI whose name starts with prefix."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {"ImageId": "ami-old", "Name": "default-desk-ami-20240101-120000", "CreationDate": "2024-01-01"},
+            {"ImageId": "ami-new", "Name": "default-desk-ami-20240601-120000", "CreationDate": "2024-06-01"},
+            {"ImageId": "ami-other", "Name": "other-ami", "CreationDate": "2024-05-01"},
+        ],
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_latest_tested_ami_by_name_prefix("default-desk-ami")
+
+    assert result == "ami-new"
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"],
+        Filters=[
+            {"Name": "state", "Values": ["available"]},
+            {"Name": f"tag:{AMI_TAG_BUILD_STATUS}", "Values": [AMI_BUILD_STATUS_TESTED]},
+        ],
+    )
+
+
+@patch("desk.aws.boto3.Session")
 def test_run_workstation_success(mock_session: MagicMock) -> None:
     """run_workstation launches instance and sets shutdown tag; returns (instance_id, shutdown_at)."""
     mock_ec2 = MagicMock()
@@ -240,18 +385,18 @@ def test_run_workstation_success(mock_session: MagicMock) -> None:
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_latest_ubuntu_ami")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_success(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_ubuntu_ami: MagicMock,
     mock_run: MagicMock,
 ) -> None:
     """create_workstation validates name, resolves VPC/AMI, and launches."""
     mock_list.return_value = []
-    mock_ami_prefix.return_value = None
+    mock_settings.return_value = MagicMock(ami_prefix=None)
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
         private_subnet_ids=["subnet-a"],
@@ -275,20 +420,20 @@ def test_create_workstation_success(
 
 
 @patch("desk.aws.run_workstation")
-@patch("desk.aws.get_latest_ami_by_name_prefix")
+@patch("desk.aws.get_latest_tested_ami_by_name_prefix")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_uses_ami_prefix(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_ami_by_prefix: MagicMock,
     mock_run: MagicMock,
 ) -> None:
-    """create_workstation resolves AMI via configured prefix when available."""
+    """create_workstation resolves AMI via configured prefix (tested images only by default)."""
     mock_list.return_value = []
-    mock_ami_prefix.return_value = "default-desk-ami"
+    mock_settings.return_value = MagicMock(ami_prefix="default-desk-ami")
     mock_ami_by_prefix.return_value = "ami-custom"
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
@@ -305,18 +450,78 @@ def test_create_workstation_uses_ami_prefix(
 
 
 @patch("desk.aws.run_workstation")
+@patch("desk.aws.get_latest_ami_by_name_prefix")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_allow_untested_uses_latest_by_prefix(
+    mock_list: MagicMock,
+    mock_settings: MagicMock,
+    mock_vpc: MagicMock,
+    mock_ami_by_prefix: MagicMock,
+    mock_run: MagicMock,
+) -> None:
+    """allow_untested_ami uses get_latest_ami_by_name_prefix (any matching name)."""
+    mock_list.return_value = []
+    mock_settings.return_value = MagicMock(ami_prefix="default-desk-ami")
+    mock_ami_by_prefix.return_value = "ami-untested"
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+    mock_run.return_value = ("i-x", None)
+
+    create_workstation("ws", ami_id=None, allow_untested_ami=True)
+
+    mock_ami_by_prefix.assert_called_once()
+    kw = mock_run.call_args[1]
+    assert kw["ami_id"] == "ami-untested"
+
+
+@patch("desk.aws.get_latest_tested_ami_by_name_prefix")
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_desk_settings")
+@patch("desk.aws.list_workstations")
+def test_create_workstation_raises_when_no_tested_ami(
+    mock_list: MagicMock,
+    mock_settings: MagicMock,
+    mock_vpc: MagicMock,
+    mock_run: MagicMock,
+    mock_tested: MagicMock,
+) -> None:
+    """Without allow_untested_ami, missing tested AMI raises ValueError."""
+    mock_list.return_value = []
+    mock_settings.return_value = MagicMock(ami_prefix="pfx")
+    mock_tested.return_value = None
+    mock_vpc.return_value = DeskVpcOutputs(
+        vpc_id="vpc-1",
+        private_subnet_ids=["subnet-a"],
+        security_group_id="sg-1",
+        instance_profile_name="profile-1",
+    )
+
+    with pytest.raises(ValueError, match="No tested AMI"):
+        create_workstation("ws", ami_id=None)
+
+    mock_run.assert_not_called()
+
+
+@patch("desk.aws.run_workstation")
+@patch("desk.aws.get_desk_vpc_outputs")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_explicit_ami(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_run: MagicMock,
 ) -> None:
     """create_workstation skips AMI resolution when ami_id is provided."""
     mock_list.return_value = []
-    mock_ami_prefix.return_value = "default-desk-ami"
+    mock_settings.return_value = MagicMock(ami_prefix="default-desk-ami")
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
         private_subnet_ids=["subnet-a"],
@@ -356,11 +561,11 @@ def test_create_workstation_rejects_duplicate_stopped(mock_list: MagicMock) -> N
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_latest_ubuntu_ami")
 @patch("desk.aws.get_desk_vpc_outputs")
-@patch("desk.config.get_default_ami_prefix")
+@patch("desk.config.get_desk_settings")
 @patch("desk.aws.list_workstations")
 def test_create_workstation_allows_terminated_duplicate(
     mock_list: MagicMock,
-    mock_ami_prefix: MagicMock,
+    mock_settings: MagicMock,
     mock_vpc: MagicMock,
     mock_ubuntu_ami: MagicMock,
     mock_run: MagicMock,
@@ -369,7 +574,7 @@ def test_create_workstation_allows_terminated_duplicate(
     mock_list.return_value = [
         Workstation(instance_id="i-old", name="my-ws", state="terminated"),
     ]
-    mock_ami_prefix.return_value = None
+    mock_settings.return_value = MagicMock(ami_prefix=None)
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
         private_subnet_ids=["subnet-a"],
@@ -911,3 +1116,72 @@ def test_list_amis_all_owned(mock_session: MagicMock) -> None:
     assert result[0].image_id == "ami-any"
     assert result[0].source_instance is None
     mock_ec2.describe_images.assert_called_once_with(Owners=["self"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_ssm_command_uses_list_commands(mock_session: MagicMock) -> None:
+    """get_ssm_command uses list_commands(CommandId=) when get_command is unavailable."""
+    mock_ssm = MagicMock()
+    mock_ssm.list_commands.return_value = {
+        "Commands": [
+            {
+                "CommandId": "cid-1",
+                "DocumentName": "AWS-RunShellScript",
+                "Comment": "desk-ami-build:test:0:run",
+                "Parameters": {"commands": ["echo hi"]},
+            }
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ssm
+
+    cmd = get_ssm_command("cid-1", region="us-east-1", profile=None)
+
+    assert cmd["DocumentName"] == "AWS-RunShellScript"
+    assert cmd["Parameters"]["commands"] == ["echo hi"]
+    mock_ssm.list_commands.assert_called_once_with(CommandId="cid-1", MaxResults=1)
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_ssm_command_empty_raises(mock_session: MagicMock) -> None:
+    """get_ssm_command raises when list_commands returns no rows."""
+    mock_ssm = MagicMock()
+    mock_ssm.list_commands.return_value = {"Commands": []}
+    mock_session.return_value.client.return_value = mock_ssm
+
+    with pytest.raises(RuntimeError, match="No SSM command found"):
+        get_ssm_command("missing", region="us-east-1", profile=None)
+
+
+@patch("desk.aws.boto3.Session")
+def test_generate_presigned_get_object_url(mock_session: MagicMock) -> None:
+    """generate_presigned_get_object_url delegates to S3 generate_presigned_url."""
+    mock_s3 = MagicMock()
+    mock_s3.generate_presigned_url.return_value = "https://bucket.s3.amazonaws.com/k?sig=1"
+    mock_session.return_value.client.return_value = mock_s3
+
+    url = generate_presigned_get_object_url("my-bucket", "path/key.txt", region="us-east-1", profile=None)
+
+    assert url.startswith("https://")
+    mock_s3.generate_presigned_url.assert_called_once()
+    call_kw = mock_s3.generate_presigned_url.call_args
+    assert call_kw[0][0] == "get_object"
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_s3_object_keys_under_prefix(mock_session: MagicMock) -> None:
+    """list_s3_object_keys_under_prefix skips trailing-slash keys."""
+    mock_s3 = MagicMock()
+    mock_s3.get_paginator.return_value.paginate.return_value = [
+        {
+            "Contents": [
+                {"Key": "p/a/"},
+                {"Key": "p/a/x.txt"},
+                {"Key": "p/b/y.txt"},
+            ]
+        }
+    ]
+    mock_session.return_value.client.return_value = mock_s3
+
+    keys = list_s3_object_keys_under_prefix("b", "p/", region="us-east-1", profile=None)
+
+    assert keys == ["p/a/x.txt", "p/b/y.txt"]

@@ -1,0 +1,23 @@
+{
+  "ami_name": "router-ami",
+  "steps": [
+    {"run": "sudo -u ubuntu mkdir -p /tmp/router-build"},
+    {"copy": {"source": "../aws/install-aws-cli.sh", "dest": "/tmp/router-build/install-aws-cli.sh"}},
+    {"copy": {"source": "../aws/install-session-manager-plugin.sh", "dest": "/tmp/router-build/install-session-manager-plugin.sh"}},
+    {"run": "sudo bash /tmp/router-build/install-aws-cli.sh"},
+    {"run": "sudo bash /tmp/router-build/install-session-manager-plugin.sh"},
+    {"run": "sudo apt-get update -qq && sudo apt-get install -y python3-venv caddy"},
+    {"run": "sudo mkdir -p /opt/desk-uv-venv && sudo chown ubuntu:ubuntu /opt/desk-uv-venv"},
+    {"run": "sudo -u ubuntu bash -c 'python3 -m venv /opt/desk-uv-venv && /opt/desk-uv-venv/bin/pip install -q uv'"},
+    {"copy": {"source": "../..", "dest": "/home/ubuntu/desk", "recursive": true}},
+    {"run": "sudo chown -R ubuntu:ubuntu /home/ubuntu/desk"},
+    {"run": "sudo -u ubuntu bash -c 'export PATH=\"/opt/desk-uv-venv/bin:$PATH\"; cd /home/ubuntu/desk && uv sync'"},
+    {"run": "sudo -u ubuntu bash -c 'grep -q desk/.venv/bin /home/ubuntu/.profile 2>/dev/null || echo \"export PATH=\\\"/home/ubuntu/desk/.venv/bin:/home/ubuntu/desk:/opt/desk-uv-venv/bin:\\$PATH\\\"\" >> /home/ubuntu/.profile'"},
+    {"run": "sudo -u ubuntu bash -c 'mkdir -p /home/ubuntu/.config/desk && cp /home/ubuntu/desk/ami/desk/router-config.ini /home/ubuntu/.config/desk/config.ini'"},
+    {"run": "sudo loginctl enable-linger ubuntu"},
+    {"run": "sudo systemctl start user@1000.service"},
+    {"run": "sudo -u ubuntu env XDG_RUNTIME_DIR=/run/user/1000 bash -lc 'export DESK_WEB_ROUTER_LISTEN=:8780; desk web-router start --on-boot'"},
+    {"run": "sudo -u ubuntu env XDG_RUNTIME_DIR=/run/user/1000 bash -lc 'desk route-sync start --on-boot --interval 10'"},
+    {"run": "rm -rf /tmp/router-build"}
+  ]
+}

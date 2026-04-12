@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { createWorkstation, listInstances, setAutoStop, startInstance, stopInstance, killInstance, type Instance } from '../api/client'
-import { isAuthEnabled, logout } from '../auth'
+import {
+  createWorkstation,
+  listInstances,
+  setAutoStop,
+  startInstance,
+  stopInstance,
+  killInstance,
+  type Instance,
+} from '../api/client'
+import { logout } from '../auth'
+import { instanceKey, stateColor } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
@@ -37,16 +46,6 @@ function formatShutdownLocal(isoUtc: string | null, state: string): { absolute: 
     return { absolute, relative }
   } catch {
     return { absolute: isoUtc, relative: '' }
-  }
-}
-
-function stateColor(state: string): string {
-  switch (state) {
-    case 'running': return 'var(--state-running)'
-    case 'pending': return 'var(--state-pending)'
-    case 'stopped': return 'var(--state-stopped)'
-    case 'stopping': return 'var(--state-pending)'
-    default: return 'var(--state-default)'
   }
 }
 
@@ -278,19 +277,6 @@ export function InstanceList() {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [openAutoStopFor])
 
-  const pageHeader = (
-    <div className="page-header">
-      <h1 className="page-title">Workstations</h1>
-      {isAuthEnabled() && (
-        <div className="page-header-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => logout()}>
-            Log out
-          </button>
-        </div>
-      )}
-    </div>
-  )
-
   const createSection = (
     <div className="create-section">
       {showCreateForm ? (
@@ -341,19 +327,13 @@ export function InstanceList() {
   )
 
   if (loading) {
-    return (
-      <div className="instance-list">
-        {pageHeader}
-        <p className="loading">Loading instances…</p>
-      </div>
-    )
+    return <p className="loading">Loading instances…</p>
   }
 
   if (error) {
     const isAuthError = /session expired|invalid|log in again/i.test(error)
     return (
-      <div className="instance-list">
-        {pageHeader}
+      <>
         <p className="error-message" role="alert">{error}</p>
         {isAuthError && (
           <button type="button" className="btn btn-start" onClick={() => logout()}>
@@ -361,13 +341,12 @@ export function InstanceList() {
           </button>
         )}
         {createSection}
-      </div>
+      </>
     )
   }
 
   return (
-    <div className="instance-list">
-      {pageHeader}
+    <>
       {refreshError && (
         <p className="refresh-error" role="status">{refreshError}</p>
       )}
@@ -387,9 +366,11 @@ export function InstanceList() {
                 <td colSpan={4} className="empty">No workstations found.</td>
               </tr>
             ) : (
-              instances.map((inst) => (
+              instances.map((inst) => {
+                const key = instanceKey(inst)
+                return (
                 <tr key={inst.instance_id}>
-                  <td className="name">{inst.name && inst.name !== '-' ? inst.name : inst.instance_id}</td>
+                  <td className="name">{key}</td>
                   <td>
                     <span className="state-label" style={{ color: stateColor(inst.state) }}>
                       {inst.state}
@@ -399,8 +380,7 @@ export function InstanceList() {
                     {(() => {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
                       const isRunningOrPending = inst.state === 'running' || inst.state === 'pending'
-                      const nameOrId = inst.name && inst.name !== '-' ? inst.name : inst.instance_id
-                      const menuOpen = openAutoStopFor === nameOrId
+                      const menuOpen = openAutoStopFor === key
                       const busy = acting !== null
                       if (!isRunningOrPending) {
                         return relative ? (
@@ -420,9 +400,9 @@ export function InstanceList() {
                             disabled={busy}
                             onClick={() => {
                               setOpenAutoStopFor((prev) => {
-                                if (prev === nameOrId) return null
+                                if (prev === key) return null
                                 setCustomTime(toDatetimeLocalValue(inst.shutdown_at))
-                                return nameOrId
+                                return key
                               })
                             }}
                             title="Set auto-stop time"
@@ -440,7 +420,7 @@ export function InstanceList() {
                             type="button"
                             className="btn btn-plus2h"
                             disabled={busy}
-                            onClick={() => onPlus2h(nameOrId, inst.shutdown_at)}
+                            onClick={() => onPlus2h(key, inst.shutdown_at)}
                             title="Set auto-stop to 2 hours from now"
                           >
                             +2h
@@ -454,7 +434,7 @@ export function InstanceList() {
                                   type="button"
                                   role="menuitem"
                                   className="shutdown-menu-item"
-                                  onClick={() => onSetAutoStop(nameOrId, value)}
+                                  onClick={() => onSetAutoStop(key, value)}
                                 >
                                   {label}
                                 </button>
@@ -470,7 +450,7 @@ export function InstanceList() {
                                   type="button"
                                   className="btn btn-set-time"
                                   disabled={!customTime}
-                                  onClick={() => onSetAutoStopAt(nameOrId, customTime)}
+                                  onClick={() => onSetAutoStopAt(key, customTime)}
                                 >
                                   Set
                                 </button>
@@ -479,7 +459,7 @@ export function InstanceList() {
                                 type="button"
                                 role="menuitem"
                                 className="shutdown-menu-item shutdown-menu-item--clear"
-                                onClick={() => onClearAutoStop(nameOrId)}
+                                onClick={() => onClearAutoStop(key)}
                               >
                                 Clear auto-stop
                               </button>
@@ -495,9 +475,9 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-start"
                         disabled={acting !== null}
-                        onClick={() => onStart(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
+                        onClick={() => onStart(key)}
                       >
-                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Start'}
+                        {acting === key ? '…' : 'Start'}
                       </button>
                     )}
                     {(inst.state === 'running' || inst.state === 'pending') && (
@@ -505,9 +485,9 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-stop"
                         disabled={acting !== null}
-                        onClick={() => onStop(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
+                        onClick={() => onStop(key)}
                       >
-                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Stop'}
+                        {acting === key ? '…' : 'Stop'}
                       </button>
                     )}
                     {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
@@ -515,19 +495,20 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-kill"
                         disabled={acting !== null}
-                        onClick={() => onKill(inst.name && inst.name !== '-' ? inst.name : inst.instance_id)}
+                        onClick={() => onKill(key)}
                       >
-                        {acting === (inst.name && inst.name !== '-' ? inst.name : inst.instance_id) ? '…' : 'Kill'}
+                        {acting === key ? '…' : 'Kill'}
                       </button>
                     )}
                   </td>
                 </tr>
-              ))
+                )
+              })
             )}
           </tbody>
         </table>
       </div>
       {createSection}
-    </div>
+    </>
   )
 }

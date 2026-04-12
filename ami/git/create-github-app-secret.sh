@@ -2,9 +2,8 @@
 #
 # Create or update an AWS Secrets Manager secret containing GitHub App
 # credentials: app id, installation id, and private key (PEM). All three
-# are stored in a single secret so you only need GITHUB_KEY_SECRET_NAME
-# when using git-auth-with-secret.sh (it will read app_id and installation_id
-# from the secret if not set in the environment).
+# are stored in a single secret; reference that secret from ~/.config/git-auth/bots.json
+# (see set-git-credentials-from-secret.sh) alongside the GitHub org for routing.
 #
 # Usage:
 #   ./create-github-app-secret.sh --secret-name my-github-app \\
@@ -96,4 +95,4 @@ else
   info "Secret created successfully."
 fi
 
-info "Use with: GITHUB_KEY_SECRET_NAME=$SECRET_NAME ./git-auth-with-secret.sh"
+info "Add to bots.json: { \"secret\": \"$SECRET_NAME\", \"org\": \"<GitHubOrg>\" } then run set-git-credentials-from-secret.sh"

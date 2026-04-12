@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 import boto3
 
@@ -14,6 +15,11 @@ from botocore.exceptions import ClientError
 
 # Tag key used to store the scheduled shutdown time (ISO 8601 UTC).
 TAG_SHUTDOWN_AT = "desk:shutdown-at"
+
+# AMI build pipeline: whether desk ami build tests have passed (used when resolving ami_prefix).
+AMI_TAG_BUILD_STATUS = "desk:ami-build-status"
+AMI_BUILD_STATUS_UNTESTED = "untested"
+AMI_BUILD_STATUS_TESTED = "tested"
 
 
 @dataclass
@@ -109,6 +115,92 @@ def get_desk_copy_bucket(
     return bucket
 
 
+# Stacks to probe for ``DeskDataBucketName`` when no stack name is passed.
+# The VPC template (often deployed as ``desk``) exposes DeskCopyBucketName only; the web app
+# stack from ``cloudformation/main.yaml`` (default deploy name ``desk-web``) exports the data bucket.
+_DESK_DATA_BUCKET_STACK_CANDIDATES = ("desk-web", "desk")
+
+
+def _get_desk_data_bucket_from_stack(
+    stack_name: str,
+    *,
+    cf: Any,
+    resolved_region: str | None,
+    profile: str | None,
+) -> str:
+    """Return DeskDataBucketName from a single stack or raise RuntimeError."""
+    try:
+        response = cf.describe_stacks(StackName=stack_name)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ValidationError":
+            region_hint = f" (region: {resolved_region})" if resolved_region else ""
+            profile_hint = f" (profile: {profile})" if profile else ""
+            raise RuntimeError(
+                f"Stack '{stack_name}' not found{region_hint}{profile_hint}.\n\n"
+                "Possible causes:\n"
+                "  • Wrong region  – try --region or set AWS_REGION\n"
+                "  • Wrong profile – try --profile or set AWS_PROFILE\n"
+                "  • Stack not deployed in this account\n\n"
+                f"Verify:  aws cloudformation describe-stacks --stack-name {stack_name} --region <region>\n"
+                f"Or set DESK_DATA_BUCKET to your desk data bucket name."
+            ) from e
+        raise
+
+    stack = response["Stacks"][0]
+    outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
+    bucket = outputs.get("DeskDataBucketName", "").strip()
+    if not bucket:
+        raise RuntimeError(
+            f"Stack '{stack_name}' has no DeskDataBucketName output. "
+            "Deploy desk infrastructure with a DataBucket, or set DESK_DATA_BUCKET."
+        )
+    return bucket
+
+
+def get_desk_data_bucket(
+    stack_name: str | None = None,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Return the desk data S3 bucket name from CloudFormation stack output ``DeskDataBucketName``.
+
+    Used for ``DESK_DATA_BUCKET`` (web routes registry, saved commands, etc.) when the
+    environment variable is unset.
+
+    If *stack_name* is ``None``, tries stacks in order: ``desk-web`` (web app / SAM stack), then
+    ``desk``. If *stack_name* is set, only that stack is queried (same behavior as ``desk copy``'s
+    ``--stack`` for a single stack).
+
+    Raises RuntimeError if the bucket cannot be resolved.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    cf = session.client("cloudformation")
+    resolved_region = session.region_name
+
+    if stack_name is not None:
+        return _get_desk_data_bucket_from_stack(
+            stack_name, cf=cf, resolved_region=resolved_region, profile=profile
+        )
+
+    last_exc: RuntimeError | None = None
+    for name in _DESK_DATA_BUCKET_STACK_CANDIDATES:
+        try:
+            return _get_desk_data_bucket_from_stack(
+                name, cf=cf, resolved_region=resolved_region, profile=profile
+            )
+        except RuntimeError as exc:
+            last_exc = exc
+            continue
+
+    assert last_exc is not None
+    tried = ", ".join(_DESK_DATA_BUCKET_STACK_CANDIDATES)
+    raise RuntimeError(
+        f"Could not resolve DeskDataBucketName (tried stacks: {tried}).\n"
+        f"Last error: {last_exc}\n"
+        "Set DESK_DATA_BUCKET, or pass --stack-name to the stack that exports DeskDataBucketName."
+    ) from last_exc
+
+
 def get_latest_ubuntu_ami(
     version: str = "24.04",
     architecture: str = "x86_64",
@@ -175,6 +267,51 @@ def get_latest_ami_by_name_prefix(
         return None
     images.sort(key=lambda x: x.get("CreationDate", ""), reverse=True)
     return images[0]["ImageId"]
+
+
+def get_latest_tested_ami_by_name_prefix(
+    prefix: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Latest owned *available* AMI whose name starts with *prefix* and has ``desk:ami-build-status=tested``.
+
+    Returns None if no match.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    response = ec2.describe_images(
+        Owners=["self"],
+        Filters=[
+            {"Name": "state", "Values": ["available"]},
+            {"Name": f"tag:{AMI_TAG_BUILD_STATUS}", "Values": [AMI_BUILD_STATUS_TESTED]},
+        ],
+    )
+    images = [
+        img
+        for img in response.get("Images", [])
+        if (img.get("Name") or "").startswith(prefix)
+    ]
+    if not images:
+        return None
+    images.sort(key=lambda x: x.get("CreationDate", ""), reverse=True)
+    return images[0]["ImageId"]
+
+
+def tag_ami_build_status(
+    image_id: str,
+    status: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """Set ``desk:ami-build-status`` on an AMI (*status* is e.g. ``untested`` or ``tested``)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    ec2.create_tags(
+        Resources=[image_id],
+        Tags=[{"Key": AMI_TAG_BUILD_STATUS, "Value": status}],
+    )
 
 
 def _run_instance(
@@ -269,6 +406,7 @@ def create_workstation(
     *,
     ami_id: str | None = None,
     shutdown_after: str = "4h",
+    allow_untested_ami: bool = False,
     region: str | None = None,
     profile: str | None = None,
 ) -> tuple[str, str | None]:
@@ -277,7 +415,7 @@ def create_workstation(
     Raises ValueError if a non-terminated workstation with the same name exists.
     Returns (instance_id, shutdown_at or None).
     """
-    from desk.config import get_default_ami_prefix
+    from desk.config import get_desk_settings
 
     existing = list_workstations(region=region, profile=profile)
     duplicates = [w for w in existing if w.name == name and w.state != "terminated"]
@@ -291,9 +429,21 @@ def create_workstation(
     vpc_outputs = get_desk_vpc_outputs(region=region, profile=profile)
 
     if ami_id is None:
-        ami_prefix = get_default_ami_prefix()
+        ami_prefix = get_desk_settings().ami_prefix
         if ami_prefix:
-            ami_id = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
+            if allow_untested_ami:
+                ami_id = get_latest_ami_by_name_prefix(ami_prefix, region=region, profile=profile)
+            else:
+                ami_id = get_latest_tested_ami_by_name_prefix(
+                    ami_prefix, region=region, profile=profile
+                )
+            if ami_id is None and not allow_untested_ami:
+                raise ValueError(
+                    f"No tested AMI found with name prefix {ami_prefix!r} (tag "
+                    f"{AMI_TAG_BUILD_STATUS}={AMI_BUILD_STATUS_TESTED}). "
+                    "Build and test an AMI with `desk ami build`, or pass allow_untested_ami to use "
+                    "the latest image matching the prefix regardless of test status."
+                )
         if ami_id is None:
             ami_id = get_latest_ubuntu_ami(region=region, profile=profile)
 
@@ -714,23 +864,106 @@ def send_ssm_command(
     region: str | None = None,
     profile: str | None = None,
     timeout_seconds: int = 3600,
+    comment: str | None = None,
 ) -> str:
     """
     Send a command to an instance via SSM. Returns the command ID.
+
+    Optional ``comment`` is stored on the command (max 100 chars per AWS) for
+    correlation in ``list_commands``.
     """
     session = boto3.Session(region_name=region, profile_name=profile)
     ssm = session.client("ssm")
 
-    response = ssm.send_command(
-        InstanceIds=[instance_id],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": [command]},
-        TimeoutSeconds=timeout_seconds,
-    )
+    send_kw: dict = {
+        "InstanceIds": [instance_id],
+        "DocumentName": "AWS-RunShellScript",
+        "Parameters": {"commands": [command]},
+        "TimeoutSeconds": timeout_seconds,
+    }
+    if comment is not None:
+        send_kw["Comment"] = comment[:100]
+
+    response = ssm.send_command(**send_kw)
 
     command_id = response["Command"]["CommandId"]
     log.debug("send_ssm_command instance_id=%s command_id=%s", instance_id, command_id)
     return command_id
+
+
+def get_ssm_command(
+    command_id: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> dict:
+    """Return the SSM ``Command`` object (Comment, Parameters, DocumentName, …).
+
+    Uses ``list_commands(CommandId=…)`` because some boto3 builds omit ``get_command``.
+    """
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+    resp = ssm.list_commands(CommandId=command_id, MaxResults=1)
+    commands = resp.get("Commands") or []
+    if not commands:
+        raise RuntimeError(f"No SSM command found for command_id={command_id!r}.")
+    return commands[0]
+
+
+def list_command_invocations_for_instance(
+    instance_id: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[dict]:
+    """Return all command invocations for an instance (paginated), oldest first."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ssm = session.client("ssm")
+    out: list[dict] = []
+    paginator = ssm.get_paginator("list_command_invocations")
+    for page in paginator.paginate(InstanceId=instance_id):
+        out.extend(page.get("CommandInvocations") or [])
+    out.sort(key=lambda x: x.get("RequestedDateTime") or "")
+    return out
+
+
+def generate_presigned_get_object_url(
+    bucket: str,
+    key: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+    expires_in: int = 7200,
+) -> str:
+    """Return a presigned HTTPS URL for ``GetObject`` (for e.g. ``curl`` on a workstation)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expires_in,
+    )
+
+
+def list_s3_object_keys_under_prefix(
+    bucket: str,
+    prefix: str,
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[str]:
+    """List object keys under ``prefix`` (paginated); omits keys that look like empty dir markers."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    s3 = session.client("s3")
+    out: list[str] = []
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents") or []:
+            k = obj["Key"]
+            if k.endswith("/"):
+                continue
+            out.append(k)
+    return sorted(out)
 
 
 def add_temporary_ssh_key(

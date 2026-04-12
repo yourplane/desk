@@ -1,13 +1,25 @@
 """CLI tests."""
 
+import io
+import json
 import re
 import subprocess
 import sys
-from unittest.mock import patch
+import tarfile
+from unittest.mock import MagicMock, patch
 
+from botocore.exceptions import ClientError
 from click.testing import CliRunner
 
+from desk.config import AwsSettings, DeskSettings
+
 from desk_cli.cli import cli
+
+_TAB_CLI_SETTINGS = DeskSettings(
+    active_desk_profile_name=None,
+    aws_settings=AwsSettings("us-east-1", None),
+    ami_prefix=None,
+)
 
 
 def _run_desk(*args: str) -> subprocess.CompletedProcess[str]:
@@ -312,44 +324,762 @@ def test_desk_ami_build_help() -> None:
     result = _run_desk("ami", "build", "--help")
     assert result.returncode == 0
     output = _output(result)
+    assert "run" in output
+    assert "create" in output
+    assert "status" in output
+    assert "step" in output
+
+
+def test_desk_ami_build_run_help() -> None:
+    """desk ami build run --help succeeds."""
+    result = _run_desk("ami", "build", "run", "--help")
+    assert result.returncode == 0
+    output = _output(result)
     assert "CONFIG_FILE" in output
     assert "copy" in output
     assert "desk create" in output or "create" in output
 
 
 def test_desk_ami_build_missing_config() -> None:
-    """desk ami build fails when config file does not exist."""
-    result = _run_desk("ami", "build", "/nonexistent/config.json")
+    """desk ami build run fails when config file does not exist."""
+    result = _run_desk("ami", "build", "run", "/nonexistent/config.json")
     assert result.returncode != 0
     assert "No such file" in result.stderr or "nonexistent" in result.stderr.lower()
 
 
+@patch("desk_cli.commands.ami._drive_ami_build_run_loop")
+@patch(
+    "desk_cli.commands.ami._stage_ami_build_to_s3",
+    return_value=("20260101-010101-abcdef01", "test-bucket", "ami-builds/20260101-010101-abcdef01/"),
+)
+def test_ami_build_uses_sdk_instead_of_nested_desk_process(
+    mock_stage: object,
+    mock_drive: object,
+    tmp_path,
+) -> None:
+    """AMI build run stages to S3 and drives the async step loop (no nested desk process)."""
+    import json
+
+    config_path = tmp_path / "ami-config.json"
+    config_path.write_text(json.dumps({"ami_name": "my-ami", "steps": []}))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "run", str(config_path)])
+
+    assert result.exit_code == 0
+    mock_stage.assert_called_once()
+    mock_drive.assert_called_once_with(
+        "20260101-010101-abcdef01", stack="desk", no_wait=False
+    )
+
+
 def test_desk_ami_build_invalid_config(tmp_path: object) -> None:
-    """desk ami build fails when config is invalid JSON or schema."""
+    """desk ami build run fails when config is invalid JSON or schema."""
     from pathlib import Path
 
     path = Path(tmp_path) / "config.json"
     path.write_text("not json")
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
 
     path.write_text('{"copy": "not a list"}')
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
     out = _output(result)
     assert "config" in out.lower() or "copy" in out.lower() or "run" in out.lower() or "error" in out.lower()
 
     path.write_text('{"copy": [], "run": []}')
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
     out = _output(result)
     assert "ami_name" in out.lower()
 
     path.write_text('{"copy": [], "run": [], "ami_name": "x", "workstation_name": "builder"}')
-    result = _run_desk("ami", "build", str(path))
+    result = _run_desk("ami", "build", "run", str(path))
     assert result.returncode != 0
     out = _output(result)
     assert "workstation_name" in out.lower()
+
+
+def test_desk_ami_build_list_help() -> None:
+    """desk ami build list --help mentions archived flag."""
+    result = _run_desk("ami", "build", "list", "--help")
+    assert result.returncode == 0
+    output = _output(result)
+    assert "--archived" in output
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.commands.ami._new_build_id", return_value="20260101-010101-abcdef01")
+def test_ami_build_create_uploads(
+    _mock_new_id: object,
+    _mock_bucket: object,
+    mock_session: object,
+    tmp_path: object,
+) -> None:
+    """ami build create uploads artifacts and writes config/manifest to S3."""
+    from pathlib import Path
+
+    p = Path(tmp_path)
+    (p / "hello.txt").write_text("hi")
+    cfg = p / "recipe.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "ami_name": "my-ami",
+                "steps": [{"copy": {"source": "hello.txt", "dest": "/tmp/"}}],
+            }
+        )
+    )
+
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "create", str(cfg)])
+
+    assert result.exit_code == 0
+    s3.upload_file.assert_called()
+    assert s3.put_object.call_count == 2
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+@patch("desk_cli.commands.ami._new_build_id", return_value="20260101-010101-abcdef01")
+def test_ami_build_create_tar_preserves_mode_bits(
+    _mock_new_id: object,
+    _mock_bucket: object,
+    mock_session: object,
+    tmp_path: object,
+) -> None:
+    """Copy steps stage bundle.tar so non-.sh files can remain executable."""
+    from pathlib import Path
+
+    p = Path(tmp_path)
+    exe = p / "daemon"
+    exe.write_text("#!/bin/sh\necho ok\n")
+    exe.chmod(0o755)
+    cfg = p / "recipe.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "ami_name": "my-ami",
+                "steps": [{"copy": {"source": "daemon", "dest": "/tmp/daemon"}}],
+            }
+        )
+    )
+
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+    uploaded: list[tuple[str, str]] = []
+    bundle_bytes: list[bytes] = []
+
+    def _capture(local: str, bucket: str, key: str) -> None:
+        uploaded.append((local, key))
+        if key.endswith("bundle.tar"):
+            with open(local, "rb") as f:
+                bundle_bytes.append(f.read())
+
+    s3.upload_file.side_effect = _capture
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "create", str(cfg)])
+
+    assert result.exit_code == 0
+    assert len(bundle_bytes) == 1
+    with tarfile.open(fileobj=io.BytesIO(bundle_bytes[0]), mode="r") as tf:
+        by_name = {m.name.lstrip("./"): m for m in tf.getmembers() if m.isreg()}
+    assert "daemon" in by_name
+    assert by_name["daemon"].mode & 0o111
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_list_active(_mock_bucket: object, mock_session: object) -> None:
+    """ami build list reads manifests under ami-builds/."""
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+    s3.list_objects_v2.return_value = {"CommonPrefixes": [{"Prefix": "ami-builds/b1/"}]}
+    s3.get_object.return_value = {
+        "Body": MagicMock(read=lambda: b'{"ami_name":"n","created_at":"t"}'),
+    }
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "list"])
+
+    assert result.exit_code == 0
+    assert "b1" in result.output
+    assert "n" in result.output
+
+
+def _s3_get_for_async_build(
+    *,
+    has_builder_record: bool,
+    instance_id: str | None = None,
+    config: dict | None = None,
+    ami_result: dict | None | str = "missing",
+) -> MagicMock:
+    """Return a mock S3 client get_object that serves config.json and optional builder-instance.json."""
+
+    cfg = {"ami_name": "my-ami", "instance_type": "t3.medium"}
+    if config is not None:
+        cfg = {**cfg, **config}
+
+    def get_object(Bucket: object, Key: str) -> dict:
+        if Key.endswith("config.json"):
+            return {
+                "Body": io.BytesIO(
+                    json.dumps(cfg).encode()
+                )
+            }
+        if Key.endswith("builder-instance.json"):
+            if not has_builder_record:
+                raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "n"}}, "GetObject")
+            assert instance_id is not None
+            return {
+                "Body": io.BytesIO(json.dumps({"instance_id": instance_id}).encode()),
+            }
+        if Key.endswith("ami-result.json"):
+            if ami_result == "missing":
+                raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "n"}}, "GetObject")
+            assert isinstance(ami_result, dict)
+            return {"Body": io.BytesIO(json.dumps(ami_result).encode())}
+        if Key.endswith("test-instance.json"):
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "n"}}, "GetObject")
+        raise AssertionError(Key)
+
+    s3 = MagicMock()
+    s3.get_object.side_effect = get_object
+    return s3
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_no_builder_record(_mock_bucket: object, mock_session: object) -> None:
+    """ami build status shows next step when builder-instance.json is absent."""
+    s3 = _s3_get_for_async_build(has_builder_record=False)
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "not recorded" in result.output.lower() or "not recorded yet" in result.output.lower()
+    assert "builder-instance.json" in result.output
+
+
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=False)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_running_not_ssm(
+    _mock_bucket: object, mock_session: object, _mock_state: object, _mock_ssm: object
+) -> None:
+    """ami build status reports SSM not ready when EC2 is running."""
+    s3 = _s3_get_for_async_build(has_builder_record=True, instance_id="i-abc")
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "SSM" in result.output
+    assert "no" in result.output.lower() or "not ready" in result.output.lower()
+
+
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_recipe_ssm_ready(
+    _mock_bucket: object, mock_session: object, _mock_state: object, _mock_ssm: object, _mock_list: object
+) -> None:
+    """ami build status shows recipe section when SSM is ready."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={
+            "steps": [
+                {"run": "echo hi"},
+                {"copy": {"source": "s3:/ami-builds/b1/files/copy/0/bundle.tar", "dest": "/tmp/x"}},
+            ]
+        },
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "Build recipe:" in result.output
+    assert "Steps in config: 2" in result.output
+    assert "Next: step 0" in result.output
+    assert "echo hi" in result.output
+
+
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_evaluates_recipe_once(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+    mock_eval: object,
+) -> None:
+    """ami build step calls _evaluate_async_recipe only once (shared with status print)."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hello"},),
+        blocked=False,
+        blocked_step_index=None,
+        blocked_command_id=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=0,
+        recipe_complete=False,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hello"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_eval.assert_called_once()
+    mock_send.assert_called_once()
+
+
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-1")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_starts_recipe_run(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+) -> None:
+    """ami build step sends async SSM for first recipe step when idle."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hello"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_send.assert_called_once()
+    _args, kwargs = mock_send.call_args
+    assert _args[0] == "i-abc"
+    assert "echo hello" in _args[1]
+    assert kwargs.get("comment") is not None
+    assert "cmd-ssm-1" in result.output
+
+
+@patch("desk_cli.commands.ami.generate_presigned_get_object_url", return_value="https://example.com/presigned")
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-copy")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_copy_uses_curl_presigned_url(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+    _mock_presign: object,
+) -> None:
+    """Copy steps download bundle.tar via curl and extract with tar (preserves modes)."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={
+            "steps": [
+                {
+                    "copy": {
+                        "source": "s3:/ami-builds/b1/files/copy/0/bundle.tar",
+                        "dest": "/tmp/file.sh",
+                    }
+                },
+            ]
+        },
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_send.assert_called_once()
+    _args, _kwargs = mock_send.call_args
+    script = _args[1]
+    assert "curl -fsSL" in script
+    assert "https://example.com/presigned" in script
+    assert 'tar -xf "$TMP"' in script
+    assert "chmod" not in script
+    assert "aws s3" not in script
+
+
+@patch("desk_cli.commands.ami.generate_presigned_get_object_url", return_value="https://example.com/presigned")
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-ssm-copy")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_recursive_copy_extracts_tar_to_dest(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_send: object,
+    _mock_presign: object,
+) -> None:
+    """Recursive copy steps extract bundle.tar into the destination directory."""
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={
+            "steps": [
+                {
+                    "copy": {
+                        "source": "s3:/ami-builds/b1/files/copy/0/bundle.tar",
+                        "dest": "/tmp/desk-git",
+                        "recursive": True,
+                    }
+                },
+            ]
+        },
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    script = mock_send.call_args[0][1]
+    assert 'tar -xf "$TMP" -C /tmp/desk-git' in script
+
+
+@patch("desk_cli.commands.ami.send_ssm_command", return_value="cmd-retry")
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_retry_after_failure(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+    mock_send: object,
+) -> None:
+    """--retry re-sends SSM for the failed step index."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=True,
+        blocked_step_index=0,
+        blocked_command_id="cmd-failed-1",
+        last_error="status='Failed'",
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=False,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1", "--retry"])
+
+    assert result.exit_code == 0
+    assert "Retrying recipe step 0" in result.output
+    mock_send.assert_called_once()
+
+
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_retry_requires_failed_step(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+) -> None:
+    """--retry errors when there is no failed step."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        blocked_command_id=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=0,
+        recipe_complete=False,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1", "--retry"])
+
+    assert result.exit_code != 0
+    assert "Nothing to retry" in result.output
+
+
+@patch("desk_cli.commands.ami._put_s3_object_json")
+@patch("desk_cli.commands.ami.create_workstation", return_value=("i-new", None))
+@patch("desk_cli.commands.ami.get_latest_ubuntu_ami", return_value="ami-ubuntu")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_creates_and_records_instance(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_ubuntu: object,
+    mock_create: object,
+    mock_put: object,
+) -> None:
+    """ami build step creates workstation and writes builder-instance.json to S3."""
+    s3 = _s3_get_for_async_build(has_builder_record=False)
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once()
+    _args, kwargs = mock_create.call_args
+    assert kwargs.get("shutdown_after") == "4h"
+    mock_put.assert_called_once()
+    args, kwargs = mock_put.call_args
+    assert "builder-instance.json" in args[2]
+
+
+@patch("desk_cli.commands.ami.create_ami", return_value="ami-reg1")
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_after_recipe_calls_create_ami(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+    mock_create_ami: object,
+) -> None:
+    """After all recipe steps succeed, step registers an AMI and writes ami-result.json."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        blocked_command_id=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=True,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_create_ami.assert_called_once()
+    assert mock_create_ami.call_args[0][0] == "i-abc"
+    _kwargs = mock_create_ami.call_args[1]
+    assert _kwargs["name"] == "my-ami-b1"
+    assert _kwargs["no_reboot"] is False
+    put_calls = [c for c in s3.put_object.call_args_list if "ami-result.json" in str(c)]
+    assert len(put_calls) == 1
+    body = put_calls[0][1]["Body"]
+    assert json.loads(body.decode()) == {"image_id": "ami-reg1"}
+
+
+@patch("desk_cli.commands.ami.tag_ami_build_status")
+@patch("desk_cli.commands.ami.terminate_instance")
+@patch("desk_cli.commands.ami.get_ami_state", return_value="available")
+@patch("desk_cli.commands.ami._evaluate_async_recipe")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_step_terminates_builder_when_ami_available(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    mock_eval: object,
+    _mock_ami_state: object,
+    mock_terminate: object,
+    _mock_tag: object,
+) -> None:
+    """When the AMI is available, step terminates the builder (completion is inferred from AWS + S3)."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_eval.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        blocked_command_id=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=True,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+        ami_result={"image_id": "ami-reg1"},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "step", "b1"])
+
+    assert result.exit_code == 0
+    mock_terminate.assert_called_once_with("i-abc", region=None, profile=None)
+    _mock_tag.assert_called_once()
+    put_calls = [c for c in s3.put_object.call_args_list if "ami-result.json" in str(c)]
+    assert len(put_calls) == 1
+    merged = json.loads(put_calls[0][1]["Body"].decode())
+    assert merged.get("image_id") == "ami-reg1"
+    assert merged.get("pipeline_complete") is True
+
+
+@patch("desk_cli.commands.ami._maybe_evaluate_async_recipe")
+@patch("desk_cli.commands.ami.get_ami_state", return_value="pending")
+@patch("desk_cli.commands.ami.list_command_invocations_for_instance", return_value=[])
+@patch("desk_cli.commands.ami.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.ami.get_instance_state", return_value="running")
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_status_shows_post_recipe_ami_pending(
+    _mock_bucket: object,
+    mock_session: object,
+    _mock_state: object,
+    _mock_ssm: object,
+    _mock_list: object,
+    _mock_ami_state: object,
+    mock_maybe_recipe: object,
+) -> None:
+    """status shows post-recipe AMI section when an image id is recorded."""
+    from desk_cli.commands.ami import AsyncRecipeEval
+
+    mock_maybe_recipe.return_value = AsyncRecipeEval(
+        total_steps=1,
+        steps=({"run": "echo hi"},),
+        blocked=False,
+        blocked_step_index=None,
+        blocked_command_id=None,
+        last_error=None,
+        in_progress_step_index=None,
+        in_progress_command_id=None,
+        next_step_index=None,
+        recipe_complete=True,
+    )
+    s3 = _s3_get_for_async_build(
+        has_builder_record=True,
+        instance_id="i-abc",
+        config={"steps": [{"run": "echo hi"}]},
+        ami_result={"image_id": "ami-reg1"},
+    )
+    mock_session.return_value.client.return_value = s3
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "status", "b1"])
+
+    assert result.exit_code == 0
+    assert "Post-build (AMI):" in result.output
+    assert "ami-reg1" in result.output
+    assert "pending" in result.output
+
+
+@patch("desk_cli.commands.ami.boto3.Session")
+@patch("desk_cli.commands.ami.get_desk_copy_bucket", return_value="test-bucket")
+def test_ami_build_cancel_archives(_mock_bucket: object, mock_session: object) -> None:
+    """ami build cancel copies keys to ami-build-archive/ then deletes."""
+    s3 = MagicMock()
+    mock_session.return_value.client.return_value = s3
+    paginator = MagicMock()
+    paginator.paginate.return_value = [
+        {"Contents": [{"Key": "ami-builds/bid/manifest.json"}]},
+    ]
+    s3.get_paginator.return_value = paginator
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ami", "build", "cancel", "bid"])
+
+    assert result.exit_code == 0
+    s3.copy_object.assert_called_once()
+    s3.delete_object.assert_called_once()
 
 
 def test_desk_ami_create_help() -> None:
@@ -587,6 +1317,7 @@ def test_desk_connect_help() -> None:
     assert "WORKSTATION" in output
     assert "--forward" in output or "-L" in output
     assert "--infra" in output
+    assert "--forward-agent" in output or "-A" in output
 
 
 def test_desk_keygen_help() -> None:
@@ -926,6 +1657,70 @@ def test_desk_connect_with_multiple_port_forwards(
     assert args.count("-L") == 2
     assert "8080:localhost:80" in args
     assert "3000:localhost:3000" in args
+
+
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
+def test_desk_connect_with_forward_agent(
+    mock_get_default_key: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
+    tmp_path,
+) -> None:
+    """desk connect -A passes -A to ssh."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_default_key.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "max", "-A"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "-A" in args
+
+
+@patch("desk_cli.commands.connect.add_temporary_ssh_key")
+@patch("desk_cli.commands.connect.get_public_key_content", return_value="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ssm")
+@patch("desk_cli.commands.connect.os.execvp")
+@patch("desk_cli.commands.connect.is_ssm_ready")
+@patch("desk_cli.commands.connect.resolve_workstation_target")
+@patch("desk_cli.commands.connect.get_default_private_key_path")
+def test_desk_connect_with_forward_agent_long_option(
+    mock_get_default_key: object,
+    mock_resolve: object,
+    mock_ssm: object,
+    mock_execvp: object,
+    _mock_get_public: object,
+    _mock_add_key: object,
+    tmp_path,
+) -> None:
+    """desk connect --forward-agent passes -A to ssh."""
+    mock_resolve.return_value = "i-abc123"
+    mock_ssm.return_value = True
+    mock_execvp.side_effect = OSError(2, "No such file")
+
+    key_file = tmp_path / "main-key.pem"
+    key_file.write_text("key")
+    mock_get_default_key.return_value = str(key_file)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["connect", "max", "--forward-agent"])
+
+    mock_execvp.assert_called_once()
+    args = mock_execvp.call_args[0][1]
+    assert "-A" in args
 
 
 def test_desk_stop_help() -> None:
@@ -2270,11 +3065,9 @@ def test_desk_tab_help() -> None:
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_connect_calls_connection_with_screen(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2303,11 +3096,9 @@ def test_desk_tab_connect_calls_connection_with_screen(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_connect_with_session_uses_session_id(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2333,11 +3124,9 @@ def test_desk_tab_connect_with_session_uses_session_id(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.wait_for_ssm_ready")
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_no_session(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_wait: object,
     mock_run_remote: object,
@@ -2357,11 +3146,9 @@ def test_desk_tab_list_no_session(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_connect_fails_when_no_session(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2381,11 +3168,9 @@ def test_desk_tab_connect_fails_when_no_session(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_shows_session_and_windows(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2414,11 +3199,9 @@ def test_desk_tab_list_shows_session_and_windows(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_default_no_winlist_call(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2446,11 +3229,9 @@ def test_desk_tab_list_default_no_winlist_call(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_tree_two_levels_one_line_per_window(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2486,11 +3267,9 @@ def test_desk_tab_list_tree_two_levels_one_line_per_window(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2517,13 +3296,11 @@ def test_desk_tab_list_command_column_shows_full_desk_tab_list_main(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 @patch("desk_cli.commands.tab.new_session_name", return_value="abc123")
 def test_desk_tab_create_success(
     mock_new_session: object,
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2553,11 +3330,9 @@ def test_desk_tab_create_success(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_create_with_optional_name(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
@@ -2583,11 +3358,9 @@ def test_desk_tab_create_with_optional_name(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_up_connects_when_session_exists(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2617,13 +3390,11 @@ def test_desk_tab_up_connects_when_session_exists(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 @patch("desk_cli.commands.tab.new_session_name", return_value="abc123")
 def test_desk_tab_up_creates_then_connects_when_no_session(
     mock_new_session: object,
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2656,11 +3427,9 @@ def test_desk_tab_up_creates_then_connects_when_no_session(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_up_with_tab_name_connects_to_matching(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2687,11 +3456,9 @@ def test_desk_tab_up_with_tab_name_connects_to_matching(
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_up_with_tab_name_creates_when_no_match(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm_ready: object,
     mock_run_remote: object,
@@ -2731,11 +3498,9 @@ def test_desk_tab_up_help() -> None:
 @patch("desk_cli.commands.tab.run_remote_command")
 @patch("desk_cli.commands.tab.is_ssm_ready", return_value=True)
 @patch("desk_cli.commands.tab.resolve_workstation")
-@patch("desk_cli.commands.tab.get_default_region", return_value="us-east-1")
-@patch("desk_cli.commands.tab.get_default_profile", return_value=None)
+@patch("desk_cli.commands.tab.get_desk_settings", return_value=_TAB_CLI_SETTINGS)
 def test_desk_tab_close_success(
-    _mock_profile: object,
-    _mock_region: object,
+    _mock_settings: object,
     mock_resolve: object,
     mock_ssm: object,
     mock_run_remote: object,
