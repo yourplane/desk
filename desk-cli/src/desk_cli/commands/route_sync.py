@@ -273,6 +273,8 @@ def _install_route_sync_systemd_units(*, interval_seconds: int) -> None:
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
+        # Default KillMode=control-group would SIGTERM aws ssm start-session children when pull exits.
+        "KillMode=none\n"
         f"{env_block}"
         f"ExecStart={exec_line}\n"
     )
