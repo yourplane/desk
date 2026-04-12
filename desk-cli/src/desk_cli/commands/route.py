@@ -173,14 +173,6 @@ def _start_forward_process(
     return proc.pid, log_path
 
 
-# ``desk route add`` and ``desk route-sync pull`` both start forwards via
-# ``_start_forward_process``. After ``route add`` exits, the shell/init does not
-# tear down the ``aws ssm`` child cgroup. ``route-sync pull`` is often run under
-# systemd ``Type=oneshot``; the service unit must set ``KillMode`` so the stop
-# after pull does not SIGTERM those same children (see constant below).
-SYSTEMD_KILL_MODE_FOR_ROUTE_SYNC_ONESHOT = "none"
-
-
 def _notify_web_router_after_route_change() -> None:
     from desk_cli.commands.web_router import refresh_web_router_after_route_change
 
