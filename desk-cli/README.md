@@ -25,6 +25,8 @@ Workstation names must be a single DNS label: letters, digits, `_`, and `-` (no 
 
 If something still blocks requests (e.g. Vite host checks), `header_up Host` preserves the browser host; you may still need `server.allowedHosts: true` (or similar) in the dev server config.
 
+**Blank page for a URL path under the route (e.g. `/desk-frontend/`) while `/` and `/README.md` work:** the app’s HTML often references **root-absolute** assets (`/src/…`, `/favicon.svg`, …). The browser resolves those against `http://<ws>.<port>.localhost:<listen_port>/`, not under the subpath, so scripts and styles 404 and the page looks empty. This is normal for plain `http.server` from a parent directory. Use a dev server whose document root is that app (e.g. run Vite on the app port, or `python -m http.server` from inside the app folder), or set the bundler **`base`** (e.g. Vite `base`) so asset URLs match the path you use.
+
 ### Debugging
 
 - **`desk web-router probe`** — GETs `/health` on the bind address and each active route at `http://<ws>.<port>.localhost:<listen_port>/`; shows status, length, and a short body preview.
