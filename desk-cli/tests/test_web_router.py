@@ -182,9 +182,9 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert caddyfile.is_file()
     text = caddyfile.read_text()
     assert "8780" in text
-    assert "http://127.0.0.1:8780" in text
-    assert "http://localhost:8780" in text
-    assert "[::1]:8780" in text
+    assert "http://:8780" in text
+    assert "bind 127.0.0.1" in text
+    assert "[::1]" in text
     assert "auto_https off" in text
     assert "admin 127.0.0.1:29789" in text
     assert "host dev.5001.localhost" in text

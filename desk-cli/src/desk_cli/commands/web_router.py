@@ -143,19 +143,30 @@ def _http_site_address(listen: str) -> str:
     return f"http://{listen}"
 
 
-def _http_site_block_address(listen: str) -> str:
-    """Site line for the Caddyfile opening block.
+def _site_block_opening_lines(listen: str) -> list[str]:
+    """Opening lines for the HTTP site block: address and optional ``bind``.
 
-    For ``127.0.0.1:<port>``, include ``localhost`` and ``[::1]`` with the same port so
-    ``curl http://localhost:8780/...`` matches (Host: localhost) when it resolves to IPv6,
-    not only ``curl http://127.0.0.1:8780/...``.
+    Listing ``http://127.0.0.1:<port>`` (or ``localhost`` / ``[::1]``) as the site address
+    makes Caddy wrap all routes in a ``host`` matcher for those names only, which breaks
+    subdomain routing (``Host: {ws}.{port}.localhost``). Use ``http://:<port>`` plus
+    ``bind`` so the socket listens on loopback without restricting ``Host``.
     """
-    site = _http_site_address(listen)
-    m = re.fullmatch(r"http://127\.0\.0\.1:(\d+)", site)
-    if m:
-        port = m.group(1)
-        return f"http://127.0.0.1:{port}, http://localhost:{port}, http://[::1]:{port}"
-    return site
+    addr = listen.strip()
+    port = _listen_port()
+
+    if addr.startswith(":") or re.fullmatch(r"\d+", addr):
+        return [f"http://:{port} {{", "    bind 127.0.0.1 [::1]"]
+
+    if ":" not in addr:
+        raise RuntimeError(f"cannot parse listen address: {listen!r}")
+
+    host, _port_s = addr.rsplit(":", 1)
+    host_lower = host.lower()
+    if host_lower in ("127.0.0.1", "localhost", "::1", "[::1]"):
+        return [f"http://:{port} {{", "    bind 127.0.0.1 [::1]"]
+    if host_lower in ("0.0.0.0",):
+        return [f"http://:{port} {{"]
+    return [f"http://:{port} {{", f"    bind {host}"]
 
 
 def _reverse_proxy_block_lines(upstream: str) -> list[str]:
@@ -187,14 +198,14 @@ def _active_routes() -> list[dict]:
 
 def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     admin = _admin_address()
-    site = _http_site_block_address(listen)
+    site_opening = _site_block_opening_lines(listen)
     lines: list[str] = [
         "{",
         f"    admin {admin}",
         "    auto_https off",
         "}",
         "",
-        f"{site} {{",
+        *site_opening,
         "    log {",
         f"        output file {_access_log_path()!s}",
         "        format console",
