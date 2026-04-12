@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Managed desk router — one private EC2 instance in an ASG (Type=router, Name=router)
+Description: Managed desk router - one private EC2 instance in an ASG (Type=router, Name=router)
 
 Parameters:
   RouterAmiId:
     Type: String
-    Description: AMI ID — use the latest router-ami-* at deploy time; redeploy this stack to pick a newer AMI.
+    Description: AMI ID - use the latest router-ami-* at deploy time; redeploy this stack to pick a newer AMI.
   InstanceType:
     Type: String
     Default: t3.small
@@ -15,7 +15,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: desk-router-sg
-      GroupDescription: Desk managed router — no inbound; egress for SSM and NAT (no instance-to-instance access)
+      GroupDescription: Desk managed router - no inbound; egress for SSM and NAT (no instance-to-instance access)
       VpcId: !ImportValue desk-VpcId
       SecurityGroupEgress:
         - IpProtocol: -1
@@ -78,10 +78,11 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       AutoScalingGroupName: desk-router-asg
-      VPCZoneIdentifier: !ImportValue desk-PrivateSubnetIds
+      # Export is comma-separated; ASG requires a list of subnet IDs
+      VPCZoneIdentifier: !Split [",", !ImportValue desk-PrivateSubnetIds]
       LaunchTemplate:
         LaunchTemplateId: !Ref RouterLaunchTemplate
-        Version: $Latest
+        Version: !GetAtt RouterLaunchTemplate.LatestVersionNumber
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
