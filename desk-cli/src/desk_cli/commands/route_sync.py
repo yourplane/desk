@@ -17,6 +17,7 @@ from desk.config import get_desk_settings
 from desk.web_routes import list_all_web_routes
 
 from desk_cli.commands.route import (
+    SYSTEMD_KILL_MODE_FOR_ROUTE_SYNC_ONESHOT,
     _load_routes,
     _notify_web_router_after_route_change,
     _parse_port_range,
@@ -266,6 +267,9 @@ def _install_route_sync_systemd_units(*, interval_seconds: int) -> None:
 
     env_block = _systemd_env_block_for_pull()
     exec_line = _systemd_exec_start_pull()
+    # Pull uses _start_forward_process like ``desk route add``; interactive desk does not wrap
+    # forwards in a systemd cgroup that is torn down when desk exits. This oneshot does — see
+    # SYSTEMD_KILL_MODE_FOR_ROUTE_SYNC_ONESHOT in route.py.
     service_body = (
         "[Unit]\n"
         "Description=Desk route-sync pull (S3 registry to local SSM routes)\n"
@@ -273,8 +277,7 @@ def _install_route_sync_systemd_units(*, interval_seconds: int) -> None:
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
-        # Default KillMode=control-group would SIGTERM aws ssm start-session children when pull exits.
-        "KillMode=none\n"
+        f"KillMode={SYSTEMD_KILL_MODE_FOR_ROUTE_SYNC_ONESHOT}\n"
         f"{env_block}"
         f"ExecStart={exec_line}\n"
     )
