@@ -1,7 +1,7 @@
 {
   "bots": [
     {
-      "secret": "github-desk",
+      "secret": "YOUR_SECRET",
       "org": "YOUR_GITHUB_ORG"
     }
   ]

@@ -30,8 +30,8 @@ Create or edit **`~/.config/git-auth/bots.json`** (or use `bots.json.example` as
 ```json
 {
   "bots": [
-    { "secret": "github-desk", "org": "acme" },
-    { "secret": "github-other-bot", "org": "widgets-inc" }
+    { "secret": "YOUR_SECRET", "org": "acme" },
+    { "secret": "YOUR_OTHER_SECRET", "org": "widgets-inc" }
   ]
 }
 ```
