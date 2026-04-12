@@ -1,0 +1,8 @@
+{
+  "bots": [
+    {
+      "secret": "github-desk",
+      "org": "YOUR_GITHUB_ORG"
+    }
+  ]
+}
