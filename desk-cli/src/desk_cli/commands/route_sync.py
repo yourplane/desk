@@ -22,6 +22,7 @@ from desk_cli.commands.route import (
     _parse_port_range,
     _pick_local_port,
     _pid_alive,
+    _refresh_stale_routes,
     _save_routes,
     _start_forward_process,
     _terminate_route_pid,
@@ -154,7 +155,18 @@ def run_route_sync_pull(
         added += 1
         click.echo(f"Added route {ws}:{port} -> 127.0.0.1:{local_port} (pid {pid})")
 
-    if removed == 0 and added == 0:
+    refreshed, refresh_failures = _refresh_stale_routes(
+        wait=wait,
+        wait_timeout=wait_timeout,
+        local_port_start=local_port_start,
+        local_port_end=local_port_end,
+        region=region,
+        profile=profile,
+    )
+    if refresh_failures:
+        raise click.ClickException(f"Failed to refresh {len(refresh_failures)} stale route(s).")
+
+    if removed == 0 and added == 0 and refreshed == 0:
         click.echo("Local routes already match S3.")
 
 

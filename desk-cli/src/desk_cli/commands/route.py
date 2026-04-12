@@ -370,36 +370,20 @@ def route_clear() -> None:
     click.echo(f"Removed {removed} stale route(s).")
 
 
-@route_group.command("refresh")
-@click.option(
-    "--wait/--no-wait",
-    default=True,
-    show_default=True,
-    help="Wait for instance to be SSM-ready if not already.",
-)
-@click.option(
-    "--wait-timeout",
-    default=300,
-    show_default=True,
-    help="Seconds to wait for SSM before failing (per stale route).",
-)
-@click.option("--local-port-start", type=click.IntRange(1, 65535), default=None, help="Local port range start.")
-@click.option("--local-port-end", type=click.IntRange(1, 65535), default=None, help="Local port range end.")
-def route_refresh(
+def _refresh_stale_routes(
+    *,
     wait: bool,
     wait_timeout: int,
     local_port_start: int | None,
     local_port_end: int | None,
-) -> None:
-    """Restart SSM port forwards for routes whose process has exited (stale)."""
-    aws = get_desk_settings().aws_settings
-    region = aws.region
-    profile = aws.profile
+    region: str | None,
+    profile: str | None,
+) -> tuple[int, list[tuple[str, int, str]]]:
+    """Restart SSM forwards for routes whose process has exited. Returns (refreshed_count, failures)."""
     start, end = _parse_port_range(local_port_start, local_port_end)
     routes = _load_routes()
     if not any(_route_status(r) == "stale" for r in routes):
-        click.echo("No stale routes.")
-        return
+        return 0, []
 
     new_routes: list[dict[str, Any]] = []
     failures: list[tuple[str, int, str]] = []
@@ -459,6 +443,46 @@ def route_refresh(
 
     for ws, port, msg in failures:
         click.echo(click.style(f"Failed to refresh {ws}:{port}: {msg}", fg="red"), err=True)
+
+    return refreshed, failures
+
+
+@route_group.command("refresh")
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait for instance to be SSM-ready if not already.",
+)
+@click.option(
+    "--wait-timeout",
+    default=300,
+    show_default=True,
+    help="Seconds to wait for SSM before failing (per stale route).",
+)
+@click.option("--local-port-start", type=click.IntRange(1, 65535), default=None, help="Local port range start.")
+@click.option("--local-port-end", type=click.IntRange(1, 65535), default=None, help="Local port range end.")
+def route_refresh(
+    wait: bool,
+    wait_timeout: int,
+    local_port_start: int | None,
+    local_port_end: int | None,
+) -> None:
+    """Restart SSM port forwards for routes whose process has exited (stale)."""
+    aws = get_desk_settings().aws_settings
+    region = aws.region
+    profile = aws.profile
+    refreshed, failures = _refresh_stale_routes(
+        wait=wait,
+        wait_timeout=wait_timeout,
+        local_port_start=local_port_start,
+        local_port_end=local_port_end,
+        region=region,
+        profile=profile,
+    )
+    if refreshed == 0 and not failures:
+        click.echo("No stale routes.")
+        return
 
     if failures:
         raise click.ClickException(f"Failed to refresh {len(failures)} route(s).")
