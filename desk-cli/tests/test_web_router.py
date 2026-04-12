@@ -64,11 +64,13 @@ def test_desk_web_router_probe_suggests_sync_on_caddy_placeholder_404(
     assert "desk web-router sync" in result.output
 
 
+@patch("desk_cli.commands.web_router._caddyfile_out_of_sync_with_active_routes", return_value=False)
 @patch("desk_cli.commands.web_router._http_probe_get")
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
 def test_desk_web_router_probe_checks_active_route(
     _mock_pid: object,
     mock_get: MagicMock,
+    _mock_sync: object,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -87,7 +89,7 @@ def test_desk_web_router_probe_checks_active_route(
     result = runner.invoke(cli, ["web-router", "probe"])
     assert result.exit_code == 0
     assert "GET /health" in result.output
-    assert "/dev/80/" in result.output
+    assert "http://dev.80.localhost:8780/" in result.output
     assert mock_get.call_count == 2
 
 
@@ -116,7 +118,7 @@ def test_desk_web_router_sync_writes_and_reloads(
     assert "Reloaded Caddy" in result.output
     cf = tmp_path / "web-router" / "Caddyfile"
     assert cf.is_file()
-    assert "uri strip_prefix /dev/8080" in cf.read_text()
+    assert "host dev.8080.localhost" in cf.read_text()
     mock_reload.assert_called_once()
 
 
@@ -175,20 +177,18 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
 
     assert result.exit_code == 0
     assert "4242" in result.output
-    assert "/dev/5001" in result.output or "workstation" in result.output
+    assert "dev.5001.localhost" in result.output
     caddyfile = tmp_path / "web-router" / "Caddyfile"
     assert caddyfile.is_file()
     text = caddyfile.read_text()
     assert "8780" in text
-    assert "http://127.0.0.1:8780" in text
-    assert "http://localhost:8780" in text
-    assert "[::1]:8780" in text
+    assert "http://:8780" in text
+    assert "bind 127.0.0.1" in text
+    assert "[::1]" in text
     assert "auto_https off" in text
     assert "admin 127.0.0.1:29789" in text
-    assert "uri strip_prefix /dev/5001" in text
+    assert "host dev.5001.localhost" in text
     assert "@desk_route_" in text
-    assert "desk_root_fallback_" in text
-    assert "not path /health" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
     assert "header_up Host {http.request.host}" in text
     assert "versions 1.1" in text
@@ -199,14 +199,14 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
 @patch("desk_cli.commands.web_router._start_caddy_background", return_value=4242)
 @patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
 @patch("desk_cli.commands.web_router._systemd_active", return_value=False)
-def test_desk_web_router_start_multi_route_sets_route_cookie_and_cookie_fallback(
+def test_desk_web_router_start_multi_route_two_hosts(
     _mock_sysd: object,
     _mock_which: object,
     _mock_bg: object,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """Multiple routes: strip_prefix responses set desk_route cookie; fallback has Referer + Cookie matchers."""
+    """Multiple routes: separate host matchers per workstation/port (no path strip or cookies)."""
     monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
     routes_dir = tmp_path / "routes"
     routes_dir.mkdir(parents=True)
@@ -235,10 +235,10 @@ def test_desk_web_router_start_multi_route_sets_route_cookie_and_cookie_fallback
 
     assert result.exit_code == 0
     text = (tmp_path / "web-router" / "Caddyfile").read_text()
-    assert "header_down +Set-Cookie" in text
-    assert "desk_route=dev_5001" in text or "desk_route=dev_5002" in text
-    assert "desk_root_fallback_ck_dev_5001" in text
-    assert "header Cookie *desk_route=dev_5001*" in text
+    assert "host dev.5001.localhost" in text
+    assert "host dev.5002.localhost" in text
+    assert "reverse_proxy 127.0.0.1:45001" in text
+    assert "reverse_proxy 127.0.0.1:45002" in text
 
 
 @patch("desk_cli.commands.web_router._which_caddy", return_value=None)
@@ -414,5 +414,5 @@ def test_refresh_writes_caddyfile_without_reload_when_router_stopped(
         refresh_web_router_after_route_change()
     caddyfile = tmp_path / "web-router" / "Caddyfile"
     assert caddyfile.is_file()
-    assert "uri strip_prefix /dev/80" in caddyfile.read_text()
+    assert "host dev.80.localhost" in caddyfile.read_text()
     _mock_reload.assert_not_called()

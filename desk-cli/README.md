@@ -15,27 +15,30 @@ Copy `config.example` to `~/.config/desk/config.ini` (or set `DESK_CONFIG`).
 
 ## Web router
 
-`desk web-router` reverse-proxies active `desk route` forwards at paths like `http://localhost:8780/<workstation>/<remote_port>/`.
+`desk web-router` reverse-proxies active `desk route` forwards by **hostname**. Browser URLs always use the pattern:
 
-Many dev servers (bundlers, API gateways, etc.) issue requests to **root paths** (`/foo`, WebSocket upgrades on `/`, …) instead of under `/<workstation>/<port>/`. The generated Caddyfile adds **fallback** rules:
+`http://<workstation>.<remote_port>.localhost:<listen_port>/…`
 
-- **One active route:** every path except `/health` is proxied to that upstream (so root-absolute URLs and WebSockets reach the same process as the prefixed app).
-- **Several active routes:** each fallback matches a **`Referer`** containing that route’s URL prefix **or** a short-lived **`desk_route`** cookie (set when you load the prefixed app). The cookie is needed because ES-module requests (e.g. from `/@vite/client`) often send `Referer: …/@vite/…`, not the document URL, so Referer alone is not enough for `/node_modules/…` and similar paths.
+`<listen_port>` comes from `DESK_WEB_ROUTER_LISTEN` (default `127.0.0.1:8780` → `8780`). The address you bind is independent: open `http://dev.5001.localhost:8780/` in the browser even when the server listens only on `127.0.0.1:8780` (modern resolvers map `*.localhost` to loopback).
 
-If something still blocks requests (e.g. Vite host checks), preserve `Host` is already set; you may still need `server.allowedHosts: true` (or similar) in the dev server config.
+Workstation names must be a single DNS label: letters, digits, `_`, and `-` (no dots). Each host maps to one local upstream, so dev servers that use root paths (`/`, `/@vite/client`, WebSockets, …) work without extra path prefixes or cookies.
+
+If something still blocks requests (e.g. Vite host checks), `header_up Host` preserves the browser host; you may still need `server.allowedHosts: true` (or similar) in the dev server config.
+
+**Blank page for a URL path under the route (e.g. `/desk-frontend/`) while `/` and `/README.md` work:** the app’s HTML often references **root-absolute** assets (`/src/…`, `/favicon.svg`, …). The browser resolves those against `http://<ws>.<port>.localhost:<listen_port>/`, not under the subpath, so scripts and styles 404 and the page looks empty. This is normal for plain `http.server` from a parent directory. Use a dev server whose document root is that app (e.g. run Vite on the app port, or `python -m http.server` from inside the app folder), or set the bundler **`base`** (e.g. Vite `base`) so asset URLs match the path you use.
 
 ### Debugging
 
-- **`desk web-router probe`** — GETs `/health` and each active route URL; shows status, length, and a short body preview.
+- **`desk web-router probe`** — GETs `/health` on the bind address and each active route at `http://<ws>.<port>.localhost:<listen_port>/`; shows status, length, and a short body preview.
 - **`desk web-router sync`** — Regenerates the Caddyfile from active routes and reloads Caddy when the router is running. Use when probe warns about a stale config.
-- **Inspect the live config:** `DESK_STATE_HOME` defaults to `~/.local/state/desk`; the file is `$DESK_STATE_HOME/web-router/Caddyfile`. Confirm it lists your routes and `desk_root_fallback_*` blocks.
-- **`curl`:** Compare direct upstream vs router, e.g. `curl -sv http://127.0.0.1:<local_port>/…` and `curl -sv http://127.0.0.1:8780/<ws>/<port>/…`. For root paths with **multiple** routes, try adding a Referer: `curl -sv -H 'Referer: http://127.0.0.1:8780/dev/5174/' http://127.0.0.1:8780/some/path` — if that fixes it, the browser tab’s Referer is missing or wrong (e.g. opened asset URL in a new tab).
-- **WebSockets:** In DevTools → Network, check the failing request: status **101** means upgrade OK; **404** often means the request hit the router without a matching rule (wrong host, or missing Referer when several routes are active). Compare with `curl -sv -H 'Connection: Upgrade' -H 'Upgrade: websocket' …` (see Caddy docs for a full upgrade handshake).
+- **Inspect the live config:** `DESK_STATE_HOME` defaults to `~/.local/state/desk`; the file is `$DESK_STATE_HOME/web-router/Caddyfile`. Confirm it lists `host <workstation>.<remote_port>.localhost` and `reverse_proxy` to your local ports.
+- **`curl`:** Compare direct upstream vs router, e.g. `curl -sv http://127.0.0.1:<local_port>/…` and `curl -sv http://dev.5001.localhost:8780/`.
+- **WebSockets:** In DevTools → Network, check the failing request: status **101** means upgrade OK; **404** often means the request hit the router without a matching rule (wrong `Host`).
 - **Validate Caddy:** `caddy validate --config ~/.local/state/desk/web-router/Caddyfile --adapter caddyfile` (adjust path). **`caddy adapt --config …`** prints JSON and shows how matchers compile.
 - **Access log:** `tail -f ~/.local/state/desk/web-router/access.log` (path from the `log` block in the Caddyfile).
 - **Two Caddy processes:** If behavior is inconsistent, check `ps aux | grep caddy` — a system service may be using a different config than desk’s instance.
 
-If `/health` works but routed paths 404, **`desk route list`** may show **stale** forwards (dead PID), or run **`desk web-router sync`**. The Caddyfile only includes **active** routes.
+If `/health` works but routed hosts 404, **`desk route list`** may show **stale** forwards (dead PID), or run **`desk web-router sync`**. The Caddyfile only includes **active** routes.
 
 - **`desk route clear`** — Deletes stale route rows from local state (no live process to stop). Updates the web-router config when anything was removed.
 - **`desk route refresh`** — Starts new SSM port forwards for stale routes (same options as `desk route add` for wait timing and local port range). If one route fails (e.g. workstation name no longer resolves), it continues with the others and exits non-zero if any failed; successfully refreshed routes are saved.
