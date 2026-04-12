@@ -16,6 +16,10 @@ from botocore.exceptions import ClientError
 # Tag key used to store the scheduled shutdown time (ISO 8601 UTC).
 TAG_SHUTDOWN_AT = "desk:shutdown-at"
 
+# Managed ASG router uses Name=router and Type=router. Workstations must not use this name.
+RESERVED_INFRA_WORKSTATION_NAME = "router"
+TAG_TYPE_ROUTER = "router"
+
 # AMI build pipeline: whether desk ami build tests have passed (used when resolving ami_prefix).
 AMI_TAG_BUILD_STATUS = "desk:ami-build-status"
 AMI_BUILD_STATUS_UNTESTED = "untested"
@@ -417,6 +421,12 @@ def create_workstation(
     """
     from desk.config import get_desk_settings
 
+    if name.strip() == RESERVED_INFRA_WORKSTATION_NAME:
+        raise ValueError(
+            f"The name '{RESERVED_INFRA_WORKSTATION_NAME}' is reserved for the managed router instance. "
+            "Choose a different workstation name."
+        )
+
     existing = list_workstations(region=region, profile=profile)
     duplicates = [w for w in existing if w.name == name and w.state != "terminated"]
     if duplicates:
@@ -473,6 +483,15 @@ class Workstation:
     shutdown_at: str | None = None
 
 
+@dataclass
+class InfraInstance:
+    """EC2 instance identified as desk infra (managed router, Type=router)."""
+
+    instance_id: str
+    name: str
+    state: str
+
+
 def list_workstations(
     region: str | None = None,
     profile: str | None = None,
@@ -503,6 +522,37 @@ def list_workstations(
                 )
 
     return workstations
+
+
+def list_routers(
+    region: str | None = None,
+    profile: str | None = None,
+    *,
+    states: list[str] | None = None,
+) -> list[InfraInstance]:
+    """List EC2 instances tagged Type=router (managed infra). Optionally filter by state(s)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+
+    routers: list[InfraInstance] = []
+    filters = [{"Name": "tag:Type", "Values": [TAG_TYPE_ROUTER]}]
+    if states:
+        filters.append({"Name": "instance-state-name", "Values": states})
+
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
+        for reservation in page.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+                routers.append(
+                    InfraInstance(
+                        instance_id=instance["InstanceId"],
+                        name=tags.get("Name", ""),
+                        state=instance["State"]["Name"],
+                    )
+                )
+
+    return routers
 
 
 def resolve_workstation(
@@ -542,6 +592,42 @@ def resolve_workstation(
         return matches[0].instance_id
 
     raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
+
+
+def resolve_router(
+    name_or_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+    *,
+    states: list[str] | None = None,
+) -> str:
+    """Resolve infra (router) name or instance ID to instance ID. Raises ValueError if not found."""
+    if states is None:
+        states = ["running", "pending"]
+
+    if name_or_id.startswith("i-"):
+        routers = list_routers(region=region, profile=profile)
+        for r in routers:
+            if r.instance_id == name_or_id:
+                return r.instance_id
+        raise ValueError(
+            f"Infra instance '{name_or_id}' not found. Run 'desk list --infra' to see the router."
+        )
+
+    matching_state = list_routers(region=region, profile=profile, states=states)
+    matches = [r for r in matching_state if r.name == name_or_id]
+    if len(matches) > 1:
+        ids = ", ".join(m.instance_id for m in matches)
+        raise ValueError(
+            f"Multiple infra instances named '{name_or_id}': {ids}. "
+            "Use the instance ID to target a specific one."
+        )
+    if len(matches) == 1:
+        return matches[0].instance_id
+
+    raise ValueError(
+        f"Infra instance '{name_or_id}' not found. Run 'desk list --infra' to see the router."
+    )
 
 
 def is_ssm_ready(
@@ -690,6 +776,15 @@ def start_workstation(
         instance_id, shutdown_after=shutdown_after, region=region, profile=profile
     )
     return (instance_id, shutdown_at)
+
+
+def start_infra_instance(
+    instance_id: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> str:
+    """Start a stopped infra (router) instance without setting auto-stop. Returns instance ID."""
+    return _start_instance(instance_id, region=region, profile=profile)
 
 
 def terminate_instance(

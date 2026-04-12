@@ -10,6 +10,7 @@ from desk.aws import (
     AMI_BUILD_STATUS_TESTED,
     AmiInfo,
     DeskVpcOutputs,
+    InfraInstance,
     Workstation,
     create_ami,
     create_key_pair,
@@ -30,7 +31,9 @@ from desk.aws import (
     list_amis,
     list_ec2_key_pairs,
     list_s3_object_keys_under_prefix,
+    list_routers,
     list_workstations,
+    resolve_router,
     resolve_workstation,
     run_workstation,
     start_workstation,
@@ -587,6 +590,12 @@ def test_create_workstation_allows_terminated_duplicate(
     mock_run.assert_called_once()
 
 
+def test_create_workstation_rejects_reserved_router_name() -> None:
+    """create_workstation rejects the reserved name router (managed ASG)."""
+    with pytest.raises(ValueError, match="reserved"):
+        create_workstation("router")
+
+
 def test_resolve_workstation_by_id() -> None:
     """resolve_workstation finds by instance ID."""
     with patch("desk.aws.list_workstations") as mock_list:
@@ -622,6 +631,32 @@ def test_resolve_workstation_multiple_running_same_name() -> None:
         ]
         with pytest.raises(ValueError, match="Multiple workstations named 'main'.*i-aaa, i-bbb"):
             resolve_workstation("main")
+
+
+def test_resolve_router_by_id() -> None:
+    """resolve_router finds by instance ID."""
+    with patch("desk.aws.list_routers") as mock_list:
+        mock_list.return_value = [
+            InfraInstance(instance_id="i-abc123", name="router", state="running"),
+        ]
+        assert resolve_router("i-abc123") == "i-abc123"
+
+
+def test_resolve_router_by_name() -> None:
+    """resolve_router finds by name."""
+    with patch("desk.aws.list_routers") as mock_list:
+        mock_list.return_value = [
+            InfraInstance(instance_id="i-abc123", name="router", state="running"),
+        ]
+        assert resolve_router("router") == "i-abc123"
+
+
+def test_resolve_router_not_found() -> None:
+    """resolve_router raises when not found."""
+    with patch("desk.aws.list_routers") as mock_list:
+        mock_list.return_value = []
+        with pytest.raises(ValueError, match="not found"):
+            resolve_router("unknown")
 
 
 def test_resolve_workstation_by_name_only_stopped() -> None:

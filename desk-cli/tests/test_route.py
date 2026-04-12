@@ -372,3 +372,38 @@ def test_desk_route_refresh_continues_after_resolve_failure(
     assert routes[1]["workstation"] == "good"
     assert routes[1]["pid"] == 88888
     _mock_refresh.assert_called_once()
+
+
+def test_desk_route_add_router_requires_infra(tmp_path, monkeypatch) -> None:
+    """desk route add router PORT without --infra fails with usage hint."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route", "add", "router", "8080"])
+    assert result.exit_code != 0
+    assert "--infra" in result.output
+
+
+@patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
+@patch("desk_cli.commands.route._start_forward_process", return_value=(12345, "/tmp/route.log"))
+@patch("desk_cli.commands.route._pick_local_port", return_value=45001)
+@patch("desk_cli.commands.route.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.route.resolve_router", return_value="i-router")
+def test_desk_route_add_infra_sets_flag(
+    _mock_resolve_router: object,
+    _mock_ssm_ready: object,
+    _mock_pick_port: object,
+    _mock_start_forward: object,
+    _mock_refresh: object,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """desk route add ... --infra uses resolve_router and stores infra in state."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route", "add", "router", "8780", "--infra"])
+
+    assert result.exit_code == 0
+    routes = _read_routes(tmp_path)
+    assert len(routes) == 1
+    assert routes[0]["workstation"] == "router"
+    assert routes[0]["infra"] is True

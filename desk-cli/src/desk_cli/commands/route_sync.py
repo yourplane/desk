@@ -12,7 +12,14 @@ from typing import Any
 
 import click
 
-from desk.aws import get_desk_data_bucket, is_ssm_ready, resolve_workstation, wait_for_ssm_ready
+from desk.aws import (
+    RESERVED_INFRA_WORKSTATION_NAME,
+    get_desk_data_bucket,
+    is_ssm_ready,
+    resolve_router,
+    resolve_workstation,
+    wait_for_ssm_ready,
+)
 from desk.config import get_desk_settings
 from desk.web_routes import list_all_web_routes
 
@@ -115,7 +122,10 @@ def run_route_sync_pull(
             continue
 
         try:
-            instance_id = resolve_workstation(ws, region=region, profile=profile)
+            if ws == RESERVED_INFRA_WORKSTATION_NAME:
+                instance_id = resolve_router(ws, region=region, profile=profile)
+            else:
+                instance_id = resolve_workstation(ws, region=region, profile=profile)
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc
 
@@ -149,6 +159,8 @@ def run_route_sync_pull(
             "bind_host": "127.0.0.1",
             "log_path": log_path,
         }
+        if ws == RESERVED_INFRA_WORKSTATION_NAME:
+            route["infra"] = True
         routes_now.append(route)
         _save_routes(routes_now)
         _notify_web_router_after_route_change()

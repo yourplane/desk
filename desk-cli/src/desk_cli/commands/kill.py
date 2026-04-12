@@ -6,7 +6,7 @@ import os
 
 import click
 
-from desk.aws import resolve_workstation, terminate_instance
+from desk.aws import resolve_router, resolve_workstation, terminate_instance
 from desk.config import get_desk_settings
 
 
@@ -18,13 +18,21 @@ from desk.config import get_desk_settings
     is_flag=True,
     help="Skip confirmation prompt.",
 )
+@click.option(
+    "--infra",
+    is_flag=True,
+    default=False,
+    help="Target the managed router (Type=router).",
+)
 def kill(
     workstation: str,
     yes: bool,
+    infra: bool,
 ) -> None:
     """Terminate a workstation instance.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
+    Use --infra to terminate the managed router (the ASG will typically launch a replacement).
 
     This permanently destroys the instance and all data on its root volume.
 
@@ -35,12 +43,20 @@ def kill(
     profile = aws.profile
 
     try:
-        instance_id = resolve_workstation(
-            workstation,
-            region=region,
-            profile=profile,
-            states=["pending", "running", "stopping", "stopped"],
-        )
+        if infra:
+            instance_id = resolve_router(
+                workstation,
+                region=region,
+                profile=profile,
+                states=["pending", "running", "stopping", "stopped"],
+            )
+        else:
+            instance_id = resolve_workstation(
+                workstation,
+                region=region,
+                profile=profile,
+                states=["pending", "running", "stopping", "stopped"],
+            )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 

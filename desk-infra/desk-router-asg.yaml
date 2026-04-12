@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Managed desk router — one private EC2 instance in an ASG (Type=router, Name=router)
+
+Parameters:
+  RouterAmiId:
+    Type: String
+    Description: AMI ID — use the latest router-ami-* at deploy time; redeploy this stack to pick a newer AMI.
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    Description: Instance type for the router.
+
+Resources:
+  RouterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: desk-router-sg
+      GroupDescription: Desk managed router — no inbound; egress for SSM and NAT (no instance-to-instance access)
+      VpcId: !ImportValue desk-VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Egress for SSM, NAT, package updates
+      Tags:
+        - Key: Name
+          Value: desk-router-sg
+        - Key: desk:managed
+          Value: "true"
+
+  RouterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: desk-router-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: desk:managed
+          Value: "true"
+
+  RouterInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: desk-router-profile
+      Roles:
+        - !Ref RouterRole
+
+  RouterLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: desk-router-lt
+      LaunchTemplateData:
+        ImageId: !Ref RouterAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Name: !Ref RouterInstanceProfile
+        SecurityGroupIds:
+          - !Ref RouterSecurityGroup
+        MetadataOptions:
+          HttpTokens: optional
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 32
+              VolumeType: gp3
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: router
+              - Key: Type
+                Value: router
+              - Key: desk:managed
+                Value: "true"
+
+  RouterAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: desk-router-asg
+      VPCZoneIdentifier: !ImportValue desk-PrivateSubnetIds
+      LaunchTemplate:
+        LaunchTemplateId: !Ref RouterLaunchTemplate
+        Version: $Latest
+      MinSize: 1
+      MaxSize: 1
+      DesiredCapacity: 1
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: desk-router-asg
+          PropagateAtLaunch: false
+        - Key: desk:managed
+          Value: "true"
+          PropagateAtLaunch: false
+
+Outputs:
+  RouterAsgName:
+    Description: Auto Scaling group name for the managed router
+    Value: !Ref RouterAsg
+  RouterSecurityGroupId:
+    Description: Security group attached to router instances
+    Value: !Ref RouterSecurityGroup
+  RouterLaunchTemplateId:
+    Description: Launch template for router instances
+    Value: !Ref RouterLaunchTemplate

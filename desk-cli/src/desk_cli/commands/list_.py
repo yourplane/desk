@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import click
 
-from desk.aws import Workstation, list_workstations
+from desk.aws import InfraInstance, Workstation, list_routers, list_workstations
 from desk.config import get_desk_settings
 
 
@@ -80,11 +80,18 @@ def _format_shutdown(shutdown_at: str | None, state: str = "running") -> tuple[s
     show_default=True,
     help="Output format.",
 )
-def list_cmd(output: str) -> None:
-    """List workstation instances.
+@click.option(
+    "--infra",
+    is_flag=True,
+    default=False,
+    help="List managed router instance(s) (Type=router) instead of workstations.",
+)
+def list_cmd(output: str, infra: bool) -> None:
+    """List workstation instances, or router infra with --infra.
 
-    Shows EC2 instances tagged Type=workstation with their instance ID,
-    name, and state. Connect with: desk connect <name-or-id>
+    By default shows EC2 instances tagged Type=workstation with their instance ID,
+    name, state, and shutdown. Use ``--infra`` to list only the managed router(s)
+    (Type=router). Connect with: desk connect <name-or-id> or desk connect --infra router.
 
     AWS region and credential profile come from the environment
     (``AWS_REGION``, ``AWS_PROFILE``) or the desk config file.
@@ -92,6 +99,39 @@ def list_cmd(output: str) -> None:
     aws = get_desk_settings().aws_settings
     region = aws.region
     profile = aws.profile
+
+    if infra:
+        routers: list[InfraInstance] = list_routers(region=region, profile=profile)
+        if not routers:
+            click.echo("No router instances found.")
+            return
+        if output == "plain":
+            for r in routers:
+                click.echo(
+                    f"{r.instance_id}\t{r.name}\t{_color_state(r.state)}\t-"
+                )
+            return
+        max_id = max(len(r.instance_id) for r in routers)
+        max_name = max(len(r.name or "-") for r in routers)
+        max_state = max(len(r.state) for r in routers)
+        max_id = max(max_id, 12)
+        max_name = max(max_name, 4)
+        max_state = max(max_state, 5)
+        header = (
+            f"{'INSTANCE ID':<{max_id}}  {'NAME':<{max_name}}  "
+            f"{'STATE':<{max_state}}  SHUTDOWN"
+        )
+        click.echo(header)
+        click.echo("-" * len(header))
+        for r in routers:
+            name = r.name or "-"
+            state = _color_state(r.state)
+            state_padding = " " * (max_state - len(r.state))
+            click.echo(
+                f"{r.instance_id:<{max_id}}  {name:<{max_name}}  "
+                f"{state}{state_padding}  -"
+            )
+        return
 
     workstations = list_workstations(region=region, profile=profile)
 
