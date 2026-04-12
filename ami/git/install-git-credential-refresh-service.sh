@@ -2,11 +2,11 @@
 #
 # Install the git credential refresh daemon as a user systemd service so it runs
 # on startup. Call from the directory containing the git scripts (e.g. after
-# copying ami/git to /home/ubuntu/desk-git). Run as the ubuntu user (e.g.
+# copying ami/git to /home/ubuntu/.local/share/desk/git). Run as the ubuntu user (e.g.
 # sudo -u ubuntu HOME=/home/ubuntu ./install-git-credential-refresh-service.sh).
 #
 # Environment:
-#   GITHUB_KEY_SECRET_NAME  (optional) Secrets Manager secret name; default: github-desk
+#   GITHUB_KEY_SECRET_CONFIG  (optional) Path to bots.json; default: ~/.config/git-auth/bots.json
 #
 set -e
 
@@ -14,7 +14,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 info() { echo -e "${GREEN}[install-git-credential-refresh]${NC} $1"; }
-err()  { echo -e "${RED}[install-git-credential-refresh]${NC} $1" >&2; exit 1; }
+err() { echo -e "${RED}[install-git-credential-refresh]${NC} $1" >&2; exit 1; }
 
 # Use ubuntu's home if we're in a build/SSM context (no proper $HOME)
 if [[ -z "$HOME" || "$HOME" == "/" ]] || [[ "$(whoami)" == "root" && "$HOME" == "/root" ]]; then
@@ -23,9 +23,21 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DAEMON_SCRIPT="$SCRIPT_DIR/git-credential-refresh-daemon.sh"
+EXAMPLE_BOTS="$SCRIPT_DIR/bots.json.example"
 [[ -x "$DAEMON_SCRIPT" ]] || err "Daemon script not found or not executable: $DAEMON_SCRIPT"
 
-SECRET_NAME="${GITHUB_KEY_SECRET_NAME:-github-desk}"
+GIT_AUTH_DIR="${HOME}/.config/git-auth"
+CONFIG_PATH="${GITHUB_KEY_SECRET_CONFIG:-${GIT_AUTH_DIR}/bots.json}"
+mkdir -p "$GIT_AUTH_DIR"
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  if [[ -f "$EXAMPLE_BOTS" ]]; then
+    cp "$EXAMPLE_BOTS" "$CONFIG_PATH"
+    info "Installed default bots config at $CONFIG_PATH (edit org + secret names)"
+  else
+    err "No bots config at $CONFIG_PATH and bots.json.example missing in $SCRIPT_DIR"
+  fi
+fi
+
 USER_CONFIG="$HOME/.config/systemd/user"
 mkdir -p "$USER_CONFIG"
 
@@ -38,7 +50,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=GITHUB_KEY_SECRET_NAME=$SECRET_NAME
+Environment="GITHUB_KEY_SECRET_CONFIG=$CONFIG_PATH"
 
 ExecStart=$DAEMON_SCRIPT
 Restart=on-failure
