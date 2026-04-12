@@ -137,13 +137,13 @@ def test_create_workstation_reserved_name_router_rejected() -> None:
     assert "reserved" in resp.json()["detail"].lower()
 
 
-@patch("app.routes.workstations.list_routers")
-def test_list_workstations_infra(mock_list_routers: object) -> None:
+@patch("app.routes.workstations.list_workstations")
+def test_list_workstations_infra(mock_list_workstations: object) -> None:
     """GET /api/workstations?infra=true lists Type=router instances."""
-    from desk.aws import InfraInstance
+    from desk.aws import Workstation
 
-    mock_list_routers.return_value = [
-        InfraInstance(instance_id="i-router1", name="router", state="running"),
+    mock_list_workstations.return_value = [
+        Workstation(instance_id="i-router1", name="router", state="running"),
     ]
     resp = client.get("/api/workstations?infra=true")
     assert resp.status_code == 200

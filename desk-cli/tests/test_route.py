@@ -387,9 +387,9 @@ def test_desk_route_add_router_requires_infra(tmp_path, monkeypatch) -> None:
 @patch("desk_cli.commands.route._start_forward_process", return_value=(12345, "/tmp/route.log"))
 @patch("desk_cli.commands.route._pick_local_port", return_value=45001)
 @patch("desk_cli.commands.route.is_ssm_ready", return_value=True)
-@patch("desk_cli.commands.route.resolve_router", return_value="i-router")
+@patch("desk_cli.commands.route.resolve_workstation", return_value="i-router")
 def test_desk_route_add_infra_sets_flag(
-    _mock_resolve_router: object,
+    _mock_resolve_ws: object,
     _mock_ssm_ready: object,
     _mock_pick_port: object,
     _mock_start_forward: object,
@@ -397,7 +397,7 @@ def test_desk_route_add_infra_sets_flag(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """desk route add ... --infra uses resolve_router and stores infra in state."""
+    """desk route add ... --infra uses resolve_workstation(..., infra=True) and stores infra in state."""
     monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
     runner = CliRunner()
     result = runner.invoke(cli, ["route", "add", "router", "8780", "--infra"])

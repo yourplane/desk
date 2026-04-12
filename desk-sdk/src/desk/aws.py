@@ -475,7 +475,7 @@ def create_workstation(
 
 @dataclass
 class Workstation:
-    """EC2 instance identified as a desk workstation."""
+    """EC2 instance identified as a desk workstation or infra (router)."""
 
     instance_id: str
     name: str
@@ -483,27 +483,23 @@ class Workstation:
     shutdown_at: str | None = None
 
 
-@dataclass
-class InfraInstance:
-    """EC2 instance identified as desk infra (managed router, Type=router)."""
-
-    instance_id: str
-    name: str
-    state: str
-
-
 def list_workstations(
     region: str | None = None,
     profile: str | None = None,
     *,
     states: list[str] | None = None,
+    infra: bool = False,
 ) -> list[Workstation]:
-    """List EC2 instances tagged Type=workstation. Optionally filter by state(s)."""
+    """List EC2 instances tagged Type=workstation, or Type=router when ``infra`` is True.
+
+    Optionally filter by instance state(s).
+    """
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
-    workstations: list[Workstation] = []
-    filters = [{"Name": "tag:Type", "Values": ["workstation"]}]
+    type_value = TAG_TYPE_ROUTER if infra else "workstation"
+    result: list[Workstation] = []
+    filters = [{"Name": "tag:Type", "Values": [type_value]}]
     if states:
         filters.append({"Name": "instance-state-name", "Values": states})
 
@@ -512,7 +508,7 @@ def list_workstations(
         for reservation in page.get("Reservations", []):
             for instance in reservation.get("Instances", []):
                 tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
-                workstations.append(
+                result.append(
                     Workstation(
                         instance_id=instance["InstanceId"],
                         name=tags.get("Name", ""),
@@ -521,38 +517,7 @@ def list_workstations(
                     )
                 )
 
-    return workstations
-
-
-def list_routers(
-    region: str | None = None,
-    profile: str | None = None,
-    *,
-    states: list[str] | None = None,
-) -> list[InfraInstance]:
-    """List EC2 instances tagged Type=router (managed infra). Optionally filter by state(s)."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
-
-    routers: list[InfraInstance] = []
-    filters = [{"Name": "tag:Type", "Values": [TAG_TYPE_ROUTER]}]
-    if states:
-        filters.append({"Name": "instance-state-name", "Values": states})
-
-    paginator = ec2.get_paginator("describe_instances")
-    for page in paginator.paginate(Filters=filters):
-        for reservation in page.get("Reservations", []):
-            for instance in reservation.get("Instances", []):
-                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
-                routers.append(
-                    InfraInstance(
-                        instance_id=instance["InstanceId"],
-                        name=tags.get("Name", ""),
-                        state=instance["State"]["Name"],
-                    )
-                )
-
-    return routers
+    return result
 
 
 def resolve_workstation(
@@ -561,29 +526,41 @@ def resolve_workstation(
     profile: str | None = None,
     *,
     states: list[str] | None = None,
+    infra: bool = False,
 ) -> str:
-    """Resolve workstation name or instance ID to instance ID. Raises ValueError if not found.
+    """Resolve workstation or infra name/instance ID to instance ID. Raises ValueError if not found.
 
-    When resolving by name, considers instances in the given states (default:
-    running and pending). Errors if multiple instances share the same name.
+    Set ``infra=True`` for managed router instances (Type=router). When resolving by name,
+    considers instances in the given states (default: running and pending).
+    Errors if multiple instances share the same name.
     """
     if states is None:
         states = ["running", "pending"]
 
+    not_found = (
+        f"Infra instance '{name_or_id}' not found. Run 'desk list --infra' to see the router."
+        if infra
+        else f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations."
+    )
+
     if name_or_id.startswith("i-"):
-        workstations = list_workstations(region=region, profile=profile)
-        for w in workstations:
+        instances = list_workstations(region=region, profile=profile, infra=infra)
+        for w in instances:
             if w.instance_id == name_or_id:
                 return w.instance_id
-        raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
+        raise ValueError(not_found)
 
-    # Resolve by name with given states filter
     matching_state = list_workstations(
-        region=region, profile=profile, states=states
+        region=region, profile=profile, states=states, infra=infra
     )
     matches = [w for w in matching_state if w.name == name_or_id]
     if len(matches) > 1:
         ids = ", ".join(m.instance_id for m in matches)
+        if infra:
+            raise ValueError(
+                f"Multiple infra instances named '{name_or_id}': {ids}. "
+                "Use the instance ID to target a specific one."
+            )
         raise ValueError(
             f"Multiple workstations named '{name_or_id}': {ids}. "
             "Use the instance ID to connect to a specific one."
@@ -591,43 +568,7 @@ def resolve_workstation(
     if len(matches) == 1:
         return matches[0].instance_id
 
-    raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
-
-
-def resolve_router(
-    name_or_id: str,
-    region: str | None = None,
-    profile: str | None = None,
-    *,
-    states: list[str] | None = None,
-) -> str:
-    """Resolve infra (router) name or instance ID to instance ID. Raises ValueError if not found."""
-    if states is None:
-        states = ["running", "pending"]
-
-    if name_or_id.startswith("i-"):
-        routers = list_routers(region=region, profile=profile)
-        for r in routers:
-            if r.instance_id == name_or_id:
-                return r.instance_id
-        raise ValueError(
-            f"Infra instance '{name_or_id}' not found. Run 'desk list --infra' to see the router."
-        )
-
-    matching_state = list_routers(region=region, profile=profile, states=states)
-    matches = [r for r in matching_state if r.name == name_or_id]
-    if len(matches) > 1:
-        ids = ", ".join(m.instance_id for m in matches)
-        raise ValueError(
-            f"Multiple infra instances named '{name_or_id}': {ids}. "
-            "Use the instance ID to target a specific one."
-        )
-    if len(matches) == 1:
-        return matches[0].instance_id
-
-    raise ValueError(
-        f"Infra instance '{name_or_id}' not found. Run 'desk list --infra' to see the router."
-    )
+    raise ValueError(not_found)
 
 
 def is_ssm_ready(
@@ -769,22 +710,20 @@ def start_workstation(
     shutdown_after: str,
     region: str | None = None,
     profile: str | None = None,
+    *,
+    infra: bool = False,
 ) -> tuple[str, str | None]:
-    """Start a workstation: start instance and set auto-stop. Returns (instance_id, shutdown_at or None)."""
+    """Start a workstation: start instance and set auto-stop. Returns (instance_id, shutdown_at or None).
+
+    With ``infra=True``, starts without setting auto-stop (for managed router instances).
+    """
     _start_instance(instance_id, region=region, profile=profile)
+    if infra:
+        return (instance_id, None)
     shutdown_at = _maybe_set_shutdown_tag(
         instance_id, shutdown_after=shutdown_after, region=region, profile=profile
     )
     return (instance_id, shutdown_at)
-
-
-def start_infra_instance(
-    instance_id: str,
-    region: str | None = None,
-    profile: str | None = None,
-) -> str:
-    """Start a stopped infra (router) instance without setting auto-stop. Returns instance ID."""
-    return _start_instance(instance_id, region=region, profile=profile)
 
 
 def terminate_instance(

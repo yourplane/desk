@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import click
 
-from desk.aws import InfraInstance, Workstation, list_routers, list_workstations
+from desk.aws import Workstation, list_workstations
 from desk.config import get_desk_settings
 
 
@@ -101,7 +101,7 @@ def list_cmd(output: str, infra: bool) -> None:
     profile = aws.profile
 
     if infra:
-        routers: list[InfraInstance] = list_routers(region=region, profile=profile)
+        routers: list[Workstation] = list_workstations(region=region, profile=profile, infra=True)
         if not routers:
             click.echo("No router instances found.")
             return

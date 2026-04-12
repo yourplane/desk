@@ -6,7 +6,7 @@ import os
 
 import click
 
-from desk.aws import resolve_router, resolve_workstation, start_infra_instance, start_workstation
+from desk.aws import resolve_workstation, start_workstation
 from desk.config import get_desk_settings
 
 
@@ -43,31 +43,22 @@ def start(
     profile = aws.profile
 
     try:
-        if infra:
-            instance_id = resolve_router(
-                workstation,
-                region=region,
-                profile=profile,
-                states=["stopped"],
-            )
-        else:
-            instance_id = resolve_workstation(
-                workstation,
-                region=region,
-                profile=profile,
-                states=["stopped"],
-            )
+        instance_id = resolve_workstation(
+            workstation,
+            region=region,
+            profile=profile,
+            states=["stopped"],
+            infra=infra,
+        )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 
     click.echo(f"Starting {instance_id}...")
-    if infra:
-        start_infra_instance(instance_id, region=region, profile=profile)
-    else:
-        start_workstation(
-            instance_id,
-            shutdown_after=shutdown_after,
-            region=region,
-            profile=profile,
-        )
+    start_workstation(
+        instance_id,
+        shutdown_after=shutdown_after,
+        region=region,
+        profile=profile,
+        infra=infra,
+    )
     click.secho("Started.", fg="green")

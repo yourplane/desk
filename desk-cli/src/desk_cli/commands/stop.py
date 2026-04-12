@@ -6,7 +6,7 @@ import os
 
 import click
 
-from desk.aws import resolve_router, resolve_workstation, stop_instance
+from desk.aws import resolve_workstation, stop_instance
 from desk.config import get_desk_settings
 
 
@@ -31,10 +31,9 @@ def stop(workstation: str, infra: bool) -> None:
     profile = aws.profile
 
     try:
-        if infra:
-            instance_id = resolve_router(workstation, region=region, profile=profile)
-        else:
-            instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        instance_id = resolve_workstation(
+            workstation, region=region, profile=profile, infra=infra
+        )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 

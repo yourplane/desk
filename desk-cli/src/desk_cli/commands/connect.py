@@ -9,7 +9,7 @@ from typing import Callable
 
 import click
 
-from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_router, resolve_workstation
+from desk.aws import add_temporary_ssh_key, is_ssm_ready, resolve_workstation
 from desk.config import get_desk_settings
 from desk.keys import get_default_private_key_path, get_public_key_content
 from desk.log import get_logger
@@ -62,10 +62,9 @@ def get_connection_argv(
     vb("get_connection_argv: resolve workstation")
     t0 = time.perf_counter()
     try:
-        if infra:
-            instance_id = resolve_router(workstation, region=region, profile=profile)
-        else:
-            instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        instance_id = resolve_workstation(
+            workstation, region=region, profile=profile, infra=infra
+        )
         log.info("resolved %s -> %s", workstation, instance_id)
     except ValueError as e:
         log.debug("resolve failed workstation=%s error=%s", workstation, e)

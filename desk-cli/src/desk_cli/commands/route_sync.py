@@ -16,7 +16,6 @@ from desk.aws import (
     RESERVED_INFRA_WORKSTATION_NAME,
     get_desk_data_bucket,
     is_ssm_ready,
-    resolve_router,
     resolve_workstation,
     wait_for_ssm_ready,
 )
@@ -122,10 +121,12 @@ def run_route_sync_pull(
             continue
 
         try:
-            if ws == RESERVED_INFRA_WORKSTATION_NAME:
-                instance_id = resolve_router(ws, region=region, profile=profile)
-            else:
-                instance_id = resolve_workstation(ws, region=region, profile=profile)
+            instance_id = resolve_workstation(
+                ws,
+                region=region,
+                profile=profile,
+                infra=(ws == RESERVED_INFRA_WORKSTATION_NAME),
+            )
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc
 

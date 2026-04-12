@@ -16,7 +16,6 @@ import click
 from desk.aws import (
     RESERVED_INFRA_WORKSTATION_NAME,
     is_ssm_ready,
-    resolve_router,
     resolve_workstation,
     wait_for_ssm_ready,
 )
@@ -213,9 +212,7 @@ def _resolve_instance_id(
     infra: bool = False,
 ) -> str:
     """Resolve workstation or infra name to EC2 instance id (raises ValueError if unknown)."""
-    if infra:
-        return resolve_router(workstation, region=region, profile=profile)
-    return resolve_workstation(workstation, region=region, profile=profile)
+    return resolve_workstation(workstation, region=region, profile=profile, infra=infra)
 
 
 def _ensure_instance_ssm_ready(

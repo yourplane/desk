@@ -6,7 +6,7 @@ import os
 
 import click
 
-from desk.aws import resolve_router, resolve_workstation, terminate_instance
+from desk.aws import resolve_workstation, terminate_instance
 from desk.config import get_desk_settings
 
 
@@ -43,20 +43,13 @@ def kill(
     profile = aws.profile
 
     try:
-        if infra:
-            instance_id = resolve_router(
-                workstation,
-                region=region,
-                profile=profile,
-                states=["pending", "running", "stopping", "stopped"],
-            )
-        else:
-            instance_id = resolve_workstation(
-                workstation,
-                region=region,
-                profile=profile,
-                states=["pending", "running", "stopping", "stopped"],
-            )
+        instance_id = resolve_workstation(
+            workstation,
+            region=region,
+            profile=profile,
+            states=["pending", "running", "stopping", "stopped"],
+            infra=infra,
+        )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 

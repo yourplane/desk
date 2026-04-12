@@ -12,15 +12,12 @@ from desk.aws import (
     create_workstation,
     get_command_invocation,
     is_ssm_ready,
-    list_routers,
     list_workstations,
     parse_duration,
     reap_overdue,
-    resolve_router,
     resolve_workstation,
     send_ssm_command,
     set_shutdown_tag,
-    start_infra_instance,
     start_workstation,
     stop_instance,
     terminate_instance,
@@ -155,14 +152,14 @@ def list_workstations_route(infra: bool = False):
     logger.info("list_workstations: region=%s profile=%s infra=%s", region, profile, infra)
     try:
         if infra:
-            routers = list_routers(region=region, profile=profile)
+            routers = list_workstations(region=region, profile=profile, infra=True)
             logger.info("list_workstations: returning %d router(s)", len(routers))
             return [
                 {
                     "instance_id": r.instance_id,
                     "name": r.name or "-",
                     "state": r.state,
-                    "shutdown_at": None,
+                    "shutdown_at": r.shutdown_at,
                 }
                 for r in routers
             ]
@@ -187,21 +184,13 @@ def start_workstation_by_name(name: str, infra: bool = False):
     """Start a stopped workstation by name or instance ID. Sets auto-stop to 4 hours (ignored for infra)."""
     region, profile = _region_profile()
     try:
-        if infra:
-            instance_id = resolve_router(
-                name, region=region, profile=profile, states=["stopped"]
-            )
-        else:
-            instance_id = resolve_workstation(
-                name, region=region, profile=profile, states=["stopped"]
-            )
+        instance_id = resolve_workstation(
+            name, region=region, profile=profile, states=["stopped"], infra=infra
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    if infra:
-        start_infra_instance(instance_id, region=region, profile=profile)
-        return {"instance_id": instance_id, "shutdown_at": None}
     instance_id, shutdown_at = start_workstation(
-        instance_id, shutdown_after="4h", region=region, profile=profile
+        instance_id, shutdown_after="4h", region=region, profile=profile, infra=infra
     )
     return {"instance_id": instance_id, "shutdown_at": shutdown_at}
 
@@ -211,12 +200,7 @@ def stop_workstation_by_name(name: str, infra: bool = False):
     """Stop a running workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
-        if infra:
-            instance_id = resolve_router(name, region=region, profile=profile)
-        else:
-            instance_id = resolve_workstation(
-                name, region=region, profile=profile
-            )
+        instance_id = resolve_workstation(name, region=region, profile=profile, infra=infra)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     stop_instance(instance_id, region=region, profile=profile)
@@ -228,20 +212,13 @@ def kill_instance_by_name(name: str, infra: bool = False):
     """Permanently terminate a workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
-        if infra:
-            instance_id = resolve_router(
-                name,
-                region=region,
-                profile=profile,
-                states=["pending", "running", "stopping", "stopped"],
-            )
-        else:
-            instance_id = resolve_workstation(
-                name,
-                region=region,
-                profile=profile,
-                states=["pending", "running", "stopping", "stopped"],
-            )
+        instance_id = resolve_workstation(
+            name,
+            region=region,
+            profile=profile,
+            states=["pending", "running", "stopping", "stopped"],
+            infra=infra,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     try:
