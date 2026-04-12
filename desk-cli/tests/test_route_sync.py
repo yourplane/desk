@@ -68,6 +68,7 @@ def test_route_sync_pull_removes_routes_not_in_s3(
     _mock_notify.assert_called_once()
 
 
+@patch("desk_cli.commands.route._pid_alive", return_value=True)
 @patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={"main": [8080]})
 @patch("desk_cli.commands.route_sync._start_forward_process", return_value=(12345, "/tmp/route.log"))
 @patch("desk_cli.commands.route_sync._pick_local_port", return_value=45001)
@@ -81,6 +82,7 @@ def test_route_sync_pull_adds_missing_routes(
     _mock_pick: object,
     _mock_start: object,
     _mock_list_s3: object,
+    _mock_pid_route: object,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -97,6 +99,54 @@ def test_route_sync_pull_adds_missing_routes(
     assert routes[0]["workstation"] == "main"
     assert routes[0]["remote_port"] == 8080
     _mock_notify.assert_called_once()
+
+
+@patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={"main": [8080]})
+@patch("desk_cli.commands.route._start_forward_process", return_value=(4242, "/tmp/refreshed.log"))
+@patch("desk_cli.commands.route._pick_local_port", return_value=45002)
+@patch("desk_cli.commands.route.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.route.resolve_workstation", return_value="i-abc123")
+@patch("desk_cli.commands.route._pid_alive", side_effect=lambda pid: pid != 99999)
+@patch("desk_cli.commands.route._notify_web_router_after_route_change")
+def test_route_sync_pull_refreshes_stale_routes_still_in_s3(
+    _mock_notify: object,
+    _mock_alive: object,
+    _mock_resolve_route: object,
+    _mock_ssm_route: object,
+    _mock_pick_route: object,
+    _mock_start_route: object,
+    _mock_list_s3: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pull restarts SSM forwards when local state is stale but S3 still wants the route."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("DESK_DATA_BUCKET", "bucket")
+    route_dir = tmp_path / "routes"
+    route_dir.mkdir(parents=True, exist_ok=True)
+    (route_dir / "routes.json").write_text(
+        json.dumps(
+            [
+                {
+                    "workstation": "main",
+                    "instance_id": "i-abc123",
+                    "remote_port": 8080,
+                    "local_port": 45001,
+                    "pid": 99999,
+                }
+            ]
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route-sync", "pull"])
+    assert result.exit_code == 0
+    assert "Refreshed route main:8080" in result.output
+    routes = _read_routes(tmp_path)
+    assert len(routes) == 1
+    assert routes[0]["pid"] == 4242
+    assert routes[0]["local_port"] == 45002
+    assert _mock_notify.call_count >= 1
 
 
 @patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={"main": [8080]})
