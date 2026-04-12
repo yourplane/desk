@@ -151,23 +151,11 @@ def list_workstations_route(infra: bool = False):
     region, profile = _region_profile()
     logger.info("list_workstations: region=%s profile=%s infra=%s", region, profile, infra)
     try:
-        if infra:
-            routers = list_workstations(region=region, profile=profile, infra=True)
-            logger.info("list_workstations: returning %d router(s)", len(routers))
-            return [
-                {
-                    "instance_id": r.instance_id,
-                    "name": r.name or "-",
-                    "state": r.state,
-                    "shutdown_at": r.shutdown_at,
-                }
-                for r in routers
-            ]
-        workstations = list_workstations(region=region, profile=profile)
+        workstations = list_workstations(region=region, profile=profile, infra=infra)
     except Exception as e:
         logger.exception("list_workstations failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
-    logger.info("list_workstations: returning %d workstations", len(workstations))
+    logger.info("list_workstations: returning %d instances", len(workstations))
     return [
         {
             "instance_id": w.instance_id,

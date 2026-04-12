@@ -204,17 +204,6 @@ def _terminate_route_pid(pid: int, timeout_seconds: float = 5.0) -> bool:
     return not _pid_alive(pid)
 
 
-def _resolve_instance_id(
-    workstation: str,
-    region: str | None,
-    profile: str | None,
-    *,
-    infra: bool = False,
-) -> str:
-    """Resolve workstation or infra name to EC2 instance id (raises ValueError if unknown)."""
-    return resolve_workstation(workstation, region=region, profile=profile, infra=infra)
-
-
 def _ensure_instance_ssm_ready(
     instance_id: str,
     *,
@@ -325,7 +314,7 @@ def route_add(
         )
 
     try:
-        instance_id = _resolve_instance_id(workstation, region, profile, infra=infra)
+        instance_id = resolve_workstation(workstation, region=region, profile=profile, infra=infra)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
 
@@ -423,7 +412,7 @@ def _refresh_stale_routes(
         infra = bool(r.get("infra"))
 
         try:
-            instance_id = _resolve_instance_id(ws, region, profile, infra=infra)
+            instance_id = resolve_workstation(ws, region=region, profile=profile, infra=infra)
         except ValueError as exc:
             failures.append((ws, port, str(exc)))
             new_routes.append(r)

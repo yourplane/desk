@@ -100,43 +100,10 @@ def list_cmd(output: str, infra: bool) -> None:
     region = aws.region
     profile = aws.profile
 
-    if infra:
-        routers: list[Workstation] = list_workstations(region=region, profile=profile, infra=True)
-        if not routers:
-            click.echo("No router instances found.")
-            return
-        if output == "plain":
-            for r in routers:
-                click.echo(
-                    f"{r.instance_id}\t{r.name}\t{_color_state(r.state)}\t-"
-                )
-            return
-        max_id = max(len(r.instance_id) for r in routers)
-        max_name = max(len(r.name or "-") for r in routers)
-        max_state = max(len(r.state) for r in routers)
-        max_id = max(max_id, 12)
-        max_name = max(max_name, 4)
-        max_state = max(max_state, 5)
-        header = (
-            f"{'INSTANCE ID':<{max_id}}  {'NAME':<{max_name}}  "
-            f"{'STATE':<{max_state}}  SHUTDOWN"
-        )
-        click.echo(header)
-        click.echo("-" * len(header))
-        for r in routers:
-            name = r.name or "-"
-            state = _color_state(r.state)
-            state_padding = " " * (max_state - len(r.state))
-            click.echo(
-                f"{r.instance_id:<{max_id}}  {name:<{max_name}}  "
-                f"{state}{state_padding}  -"
-            )
-        return
-
-    workstations = list_workstations(region=region, profile=profile)
+    workstations: list[Workstation] = list_workstations(region=region, profile=profile, infra=infra)
 
     if not workstations:
-        click.echo("No workstations found.")
+        click.echo("No router instances found." if infra else "No workstations found.")
         return
 
     if output == "plain":
@@ -170,7 +137,7 @@ def list_cmd(output: str, infra: bool) -> None:
     click.echo(header)
     click.echo("-" * len(header))
 
-    for w, (shutdown_label, shutdown_raw_len) in zip(workstations, shutdown_labels):
+    for w, (shutdown_label, _) in zip(workstations, shutdown_labels):
         name = w.name or "-"
         state = _color_state(w.state)
         # Pad state by raw length (no ANSI) so columns align

@@ -7,8 +7,8 @@ Parameters:
     Description: AMI ID — use the latest router-ami-* at deploy time; redeploy this stack to pick a newer AMI.
   InstanceType:
     Type: String
-    Default: t3.medium
-    Description: Instance type for the router.
+    Default: t3.small
+    Description: Burstable instance; default is enough for a small number of routes and users (override if needed).
 
 Resources:
   RouterSecurityGroup:
@@ -64,12 +64,6 @@ Resources:
           - !Ref RouterSecurityGroup
         MetadataOptions:
           HttpTokens: optional
-        BlockDeviceMappings:
-          - DeviceName: /dev/sda1
-            Ebs:
-              VolumeSize: 32
-              VolumeType: gp3
-              DeleteOnTermination: true
         TagSpecifications:
           - ResourceType: instance
             Tags:
@@ -95,7 +89,7 @@ Resources:
       HealthCheckGracePeriod: 300
       Tags:
         - Key: Name
-          Value: desk-router-asg
+          Value: router
           PropagateAtLaunch: false
         - Key: desk:managed
           Value: "true"

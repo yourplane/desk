@@ -32,7 +32,7 @@ The template provides:
 
 ### 2. Router ASG (optional, single managed `router` instance)
 
-The template `desk-router-asg.yaml` keeps **one** private EC2 instance in an Auto Scaling Group. It is tagged `Type=router` and `Name=router` (the name `router` is reserved for CLI/API workstation creation). The AMI ID is set **at deploy time** only — **redeploy this stack** after publishing a new `router-ami-*` image to roll out upgrades.
+The template `desk-router.yaml` keeps **one** private EC2 instance in an Auto Scaling Group. It is tagged `Type=router` and `Name=router` (the name `router` is reserved for CLI/API workstation creation). The AMI ID is set **at deploy time** only — **redeploy this stack** after publishing a new `router-ami-*` image to roll out upgrades.
 
 Pick the latest matching AMI, then deploy (from the repo root; set region/profile as needed):
 
@@ -43,7 +43,7 @@ ROUTER_AMI="$(aws ec2 describe-images --owners self \
 
 aws cloudformation deploy \
   --stack-name desk-router \
-  --template-file desk-infra/desk-router-asg.yaml \
+  --template-file desk-infra/desk-router.yaml \
   --parameter-overrides "RouterAmiId=${ROUTER_AMI}" \
   --capabilities CAPABILITY_NAMED_IAM
 ```
@@ -92,7 +92,7 @@ aws logs get-log-events --log-group-name /aws/lambda/desk-reaper --log-stream-na
 ## Lint CloudFormation
 
 ```bash
-cfn-lint desk-infra/desk-vpc.yaml desk-infra/desk-router-asg.yaml desk-infra/desk-reaper.yaml
+cfn-lint desk-infra/desk-vpc.yaml desk-infra/desk-router.yaml desk-infra/desk-reaper.yaml
 ```
 
 Run from the repo root, or pass paths to the templates from your current directory.

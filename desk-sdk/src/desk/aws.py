@@ -537,11 +537,7 @@ def resolve_workstation(
     if states is None:
         states = ["running", "pending"]
 
-    not_found = (
-        f"Infra instance '{name_or_id}' not found. Run 'desk list --infra' to see the router."
-        if infra
-        else f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations."
-    )
+    not_found = f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations."
 
     if name_or_id.startswith("i-"):
         instances = list_workstations(region=region, profile=profile, infra=infra)
@@ -556,11 +552,6 @@ def resolve_workstation(
     matches = [w for w in matching_state if w.name == name_or_id]
     if len(matches) > 1:
         ids = ", ".join(m.instance_id for m in matches)
-        if infra:
-            raise ValueError(
-                f"Multiple infra instances named '{name_or_id}': {ids}. "
-                "Use the instance ID to target a specific one."
-            )
         raise ValueError(
             f"Multiple workstations named '{name_or_id}': {ids}. "
             "Use the instance ID to connect to a specific one."
