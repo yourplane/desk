@@ -25,7 +25,8 @@ _ENV_LISTEN = "DESK_WEB_ROUTER_LISTEN"
 # Local-only admin API for `caddy reload` (route updates); avoid default :2019 conflicts.
 DEFAULT_ADMIN_ADDR = "127.0.0.1:29789"
 _ENV_ADMIN = "DESK_WEB_ROUTER_ADMIN"
-_WS_SAFE = re.compile(r"^[a-zA-Z0-9._-]+$")
+# Workstation label for {ws}.{remote_port}.localhost (no dots; see task comms).
+_SUBDOMAIN_WS_SAFE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def _router_dir() -> str:
@@ -65,17 +66,37 @@ def _admin_address() -> str:
     return (os.environ.get(_ENV_ADMIN) or DEFAULT_ADMIN_ADDR).strip() or DEFAULT_ADMIN_ADDR
 
 
-def _path_prefix(workstation: str, remote_port: int) -> str:
+def _listen_port() -> int:
+    """TCP port from ``DESK_WEB_ROUTER_LISTEN`` / ``_listen_address``."""
+    addr = _listen_address()
+    if addr.startswith(":"):
+        return int(addr[1:])
+    if re.fullmatch(r"\d+", addr):
+        return int(addr)
+    if ":" in addr:
+        _host, port_s = addr.rsplit(":", 1)
+        return int(port_s)
+    raise RuntimeError(f"cannot parse listen port from {addr!r}")
+
+
+def _route_hostname(workstation: str, remote_port: int) -> str:
+    """DNS hostname ``{ws}.{remote_port}.localhost`` for Caddy host matching and browser URLs."""
     ws = str(workstation).strip()
-    if not _WS_SAFE.fullmatch(ws):
+    if not _SUBDOMAIN_WS_SAFE.fullmatch(ws):
         raise click.ClickException(
-            f"Unsupported workstation name for URL path: {workstation!r} "
-            "(use letters, numbers, ., _, -)."
+            f"Unsupported workstation name for web-router hostname: {workstation!r} "
+            "(use letters, numbers, _, -; dots are not supported)."
         )
     port = int(remote_port)
     if port < 1 or port > 65535:
         raise click.ClickException(f"Invalid remote port: {remote_port}")
-    return f"/{ws}/{port}"
+    return f"{ws}.{port}.localhost"
+
+
+def _browser_route_url(workstation: str, remote_port: int) -> str:
+    """Full http URL users should open (always ``*.localhost`` + current listen port)."""
+    host = _route_hostname(workstation, remote_port)
+    return f"http://{host}:{_listen_port()}/"
 
 
 def _sanitize_listen_for_display(addr: str) -> str:
@@ -137,103 +158,26 @@ def _http_site_block_address(listen: str) -> str:
     return site
 
 
-# Set on HTML/asset responses from strip_prefix routes so root-absolute follow-up requests
-# (ESM imports from /@vite/client, etc.) can be routed when Referer is not the document URL.
-_ROUTE_COOKIE_NAME = "desk_route"
-
-
-def _reverse_proxy_block_lines(upstream: str, *, route_cookie: str | None = None) -> list[str]:
+def _reverse_proxy_block_lines(upstream: str) -> list[str]:
     """Shared reverse_proxy options for dev servers and SSM port-forwarding.
 
     Caddy's default is to set Host to the upstream address; that breaks many dev servers’
     host checks and URL generation when clients connect via desk route (e.g. Host: localhost:45001).
-
-    When ``route_cookie`` is set (multi-route), append ``Set-Cookie`` so later requests to ``/…``
-    without the desk prefix still hit the right upstream.
     """
-    lines = [
+    return [
         f"        reverse_proxy {upstream} {{",
         "            flush_interval -1",
         "            header_up Host {http.request.host}",
+        "            transport http {",
+        "                versions 1.1",
+        "            }",
+        "        }",
     ]
-    if route_cookie is not None:
-        lines.append(
-            f'            header_down +Set-Cookie "{_ROUTE_COOKIE_NAME}={route_cookie}; Path=/; '
-            f'Max-Age=86400; SameSite=Lax"'
-        )
-    lines.extend(
-        [
-            "            transport http {",
-            "                versions 1.1",
-            "            }",
-            "        }",
-        ]
-    )
-    return lines
 
 
 def _matcher_safe_name(workstation: str, remote_port: int) -> str:
     safe = re.sub(r"[^a-zA-Z0-9]", "_", f"{workstation}_{remote_port}").strip("_")
     return safe or "route"
-
-
-def _append_root_fallback_blocks(lines: list[str], route_entries: list[tuple[str, str, str]]) -> None:
-    """Proxy root-absolute URLs and WebSockets for apps that use ``/…`` instead of under the desk prefix.
-
-    route_entries: (path_prefix, upstream host:port, safe name per route).
-
-    One route: everything except ``/health`` goes to that upstream.
-
-    Several routes: match ``Referer`` containing the desk prefix *or* cookie ``desk_route=<safe>``
-    (set on strip_prefix responses). The latter covers ESM requests whose Referer is ``/@vite/…``
-    instead of the document URL.
-    """
-    if not route_entries:
-        return
-    all_prefixes = [p for p, _, _ in route_entries]
-
-    def _excludes_others(i: int) -> list[str]:
-        out: list[str] = ["        not path /health"]
-        for j, other in enumerate(all_prefixes):
-            if j == i:
-                continue
-            out.append(f"        not path {other}")
-            out.append(f"        not path {other}/*")
-        return out
-
-    if len(route_entries) == 1:
-        _prefix, upstream, safe = route_entries[0]
-        lines.append(
-            "    # Single route: proxy all requests except /health (root-absolute URLs, WebSockets, …)."
-        )
-        lines.append(f"    @desk_root_fallback_{safe} {{")
-        lines.append("        not path /health")
-        lines.append("    }")
-        lines.append(f"    handle @desk_root_fallback_{safe} {{")
-        lines.extend(_reverse_proxy_block_lines(upstream))
-        lines.append("    }")
-        lines.append("")
-        return
-
-    lines.append(
-        "    # Multiple routes: Referer or desk_route cookie (see strip_prefix) for non-prefixed paths."
-    )
-    for i, (prefix, upstream, safe) in enumerate(route_entries):
-        lines.append(f"    @desk_root_fallback_ref_{safe} {{")
-        lines.extend(_excludes_others(i))
-        lines.append(f"        header Referer *{prefix}*")
-        lines.append("    }")
-        lines.append(f"    handle @desk_root_fallback_ref_{safe} {{")
-        lines.extend(_reverse_proxy_block_lines(upstream))
-        lines.append("    }")
-        lines.append(f"    @desk_root_fallback_ck_{safe} {{")
-        lines.extend(_excludes_others(i))
-        lines.append(f"        header Cookie *{_ROUTE_COOKIE_NAME}={safe}*")
-        lines.append("    }")
-        lines.append(f"    handle @desk_root_fallback_ck_{safe} {{")
-        lines.extend(_reverse_proxy_block_lines(upstream))
-        lines.append("    }")
-        lines.append("")
 
 
 def _active_routes() -> list[dict]:
@@ -266,36 +210,31 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         if not ws or remote < 1 or local < 1:
             continue
         try:
-            prefix = _path_prefix(ws, remote)
+            hostname = _route_hostname(ws, remote)
         except click.ClickException:
             continue
         safe = _matcher_safe_name(str(ws), remote)
-        route_entries.append((prefix, f"{bind}:{local}", safe))
+        route_entries.append((hostname, f"{bind}:{local}", safe))
 
-    multi_route = len(route_entries) > 1
-    for prefix, upstream, safe in route_entries:
-        # Exact /prefix -> trailing slash (handle_path /prefix alone matches ONLY exact /prefix in JSON).
-        lines.append(f"    handle {prefix} {{")
-        lines.append(f"        redir {prefix}/ 308")
-        lines.append("    }")
-        matcher = f"desk_route_{safe}"
-        lines.append(f"    @{matcher} path {prefix} {prefix}/*")
-        lines.append(f"    handle @{matcher} {{")
-        lines.append(f"        uri strip_prefix {prefix}")
-        lines.extend(
-            _reverse_proxy_block_lines(
-                upstream, route_cookie=safe if multi_route else None
-            )
-        )
-        lines.append("    }")
-        lines.append("")
-
-    _append_root_fallback_blocks(lines, route_entries)
+    lines.append(
+        "    # Routes: Host {workstation}.{remote_port}.localhost — bind address is independent "
+        "(see DESK_WEB_ROUTER_LISTEN)."
+    )
+    lines.append("")
 
     lines.append("    handle /health {")
     lines.append('        respond "ok" 200')
     lines.append("    }")
     lines.append("")
+
+    for hostname, upstream, safe in route_entries:
+        matcher = f"desk_route_{safe}"
+        lines.append(f"    @{matcher} host {hostname}")
+        lines.append(f"    handle @{matcher} {{")
+        lines.extend(_reverse_proxy_block_lines(upstream))
+        lines.append("    }")
+        lines.append("")
+
     lines.append("    handle {")
     lines.append(
         '        respond "No matching desk route. Use desk route add and desk web-router start." 404'
@@ -513,7 +452,7 @@ def _apply_caddyfile_from_active_routes() -> tuple[str, int]:
 
 
 def _caddyfile_out_of_sync_with_active_routes() -> bool:
-    """True if the Caddyfile is missing uri strip_prefix for any active route."""
+    """True if the Caddyfile is missing a ``host`` matcher for any active route."""
     active = _active_routes()
     if not active:
         return False
@@ -528,10 +467,10 @@ def _caddyfile_out_of_sync_with_active_routes() -> bool:
         ws = str(r.get("workstation", ""))
         rp = int(r.get("remote_port", 0) or 0)
         try:
-            pfx = _path_prefix(ws, rp)
+            host = _route_hostname(ws, rp)
         except click.ClickException:
             continue
-        if f"uri strip_prefix {pfx}" not in text:
+        if f"host {host}" not in text:
             return True
     return False
 
@@ -630,8 +569,12 @@ def web_router_start(on_boot: bool, foreground: bool) -> None:
         _install_systemd_user_unit()
         _start_systemd_service()
         display = _sanitize_listen_for_display(listen)
+        lp = _listen_port()
         click.echo("Web router configured to run under systemd (user session).")
-        click.echo(f"Listening on http://{display} — routes at http://{display}/<workstation>/<remote_port>/…")
+        click.echo(
+            f"Listening on http://{display} — routes at "
+            f"http://<workstation>.<remote_port>.localhost:{lp}/…"
+        )
         click.echo(f"Caddy access log: {access_log}")
         click.echo(f"Caddyfile: {caddyfile}")
         click.echo(f"Unit: {UNIT_NAME}")
@@ -653,8 +596,12 @@ def web_router_start(on_boot: bool, foreground: bool) -> None:
     pid = _start_caddy_background(caddyfile, _process_log_path())
     _write_router_pid(pid)
     display = _sanitize_listen_for_display(listen)
+    lp = _listen_port()
     click.echo(f"Web router started (pid {pid}), listening on http://{display}")
-    click.echo(f"Routes: http://{display}/<workstation>/<remote_port>/… (example: /dev/5001/)")
+    click.echo(
+        f"Routes: http://<workstation>.<remote_port>.localhost:{lp}/… "
+        f"(example: http://dev.5001.localhost:{lp}/)"
+    )
     click.echo(f"Caddy access log: {access_log}")
     click.echo(f"Caddyfile: {caddyfile}")
 
@@ -757,12 +704,16 @@ def web_router_sync() -> None:
     help="Per-request timeout in seconds.",
 )
 def web_router_probe(timeout: float) -> None:
-    """GET /health and each active route path (like curl) to debug blank pages."""
+    """GET /health and each active route URL (like curl) to debug blank pages."""
     base = _probe_base_url()
     listen = _listen_address()
     display = _sanitize_listen_for_display(listen)
+    lp = _listen_port()
 
-    click.echo(f"Probe base URL: {base} (listen {listen}, browser URL http://{display})")
+    click.echo(
+        f"Probe base URL: {base} (listen {listen}, bind URL http://{display}; "
+        f"routes use http://<ws>.<port>.localhost:{lp}/)"
+    )
     click.echo("")
 
     health_url = f"{base.rstrip('/')}/health"
@@ -801,14 +752,13 @@ def web_router_probe(timeout: float) -> None:
         ws = str(r.get("workstation", ""))
         rp = int(r.get("remote_port", 0) or 0)
         try:
-            pfx = _path_prefix(ws, rp)
+            url = _browser_route_url(ws, rp).rstrip("/") + "/"
         except click.ClickException:
             continue
-        path = f"{pfx}/"
-        url = f"{base.rstrip('/')}{path}"
+        label = f"GET {url}"
         status, blen, prev, err = _http_probe_get(url, timeout=timeout)
         if err:
-            click.echo(click.style(f"GET {path} — error: {err}", fg="red"))
+            click.echo(click.style(f"{label} — error: {err}", fg="red"))
         else:
             if (
                 status == 404
@@ -819,7 +769,7 @@ def web_router_probe(timeout: float) -> None:
             warn = status is None or status >= 400 or blen == 0
             fg = "yellow" if warn else "green"
             code = status if status is not None else "?"
-            click.echo(click.style(f"GET {path} — HTTP {code}, {blen} bytes", fg=fg))
+            click.echo(click.style(f"{label} — HTTP {code}, {blen} bytes", fg=fg))
             if prev:
                 click.echo(f"  body preview: {prev!r}")
 
