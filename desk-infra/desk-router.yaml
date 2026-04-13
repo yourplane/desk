@@ -44,6 +44,40 @@ Resources:
         - Key: desk:managed
           Value: "true"
 
+  # desk route refresh / add on the router resolves workstations via EC2 and uses SSM port forwarding.
+  RouterDeskCliPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: desk-router-desk-cli
+      Roles:
+        - !Ref RouterRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DescribeInstancesForResolve
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceStatus
+            Resource: "*"
+          - Sid: SsmDescribeForReadyCheck
+            Effect: Allow
+            Action:
+              - ssm:DescribeInstanceInformation
+            Resource: "*"
+          - Sid: SsmPortForwardingSessions
+            Effect: Allow
+            Action:
+              - ssm:StartSession
+            Resource:
+              - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-StartPortForwardingSession"
+          - Sid: SsmTerminateSession
+            Effect: Allow
+            Action:
+              - ssm:TerminateSession
+            Resource: "*"
+
   RouterInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
