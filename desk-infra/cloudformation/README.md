@@ -29,6 +29,8 @@ export AWS_REGION=us-east-1
 
 ## Subsequent deploys (app only)
 
+`deploy.sh` also updates the **`desk-router`** stack (latest `router-ami-*` in the account) before building the web app; the VPC stack **`desk`** must already exist.
+
 ```bash
 ../scripts/deploy.sh desk-web
 ```
