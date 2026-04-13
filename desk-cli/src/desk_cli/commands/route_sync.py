@@ -235,14 +235,30 @@ def _timer_unit_path() -> str:
     return os.path.join(_systemd_user_dir(), TIMER_UNIT)
 
 
+def _desk_venv_bin() -> str | None:
+    """Typical router AMI layout: ~/desk/.venv/bin (used for systemd PATH)."""
+    home = os.path.expanduser("~")
+    p = os.path.join(home, "desk", ".venv", "bin")
+    return p if os.path.isdir(p) else None
+
+
 def _systemd_env_block_for_pull() -> str:
     lines: list[str] = []
     if desk_state := os.environ.get("DESK_STATE_HOME"):
         lines.append(f"Environment=DESK_STATE_HOME={desk_state.replace('%', '%%')}")
+    vb = _desk_venv_bin()
+    if vb:
+        # User units do not source ~/.profile; ensure venv + aws/session-manager-plugin paths.
+        path = f"{vb}:/usr/local/bin:/usr/bin:/bin"
+        lines.append(f"Environment=PATH={path}")
     return "".join(f"{line}\n" for line in lines)
 
 
 def _systemd_exec_start_pull() -> str:
+    home = os.path.expanduser("~")
+    desk_abs = os.path.join(home, "desk", ".venv", "bin", "desk")
+    if os.path.isfile(desk_abs):
+        return f"{shlex.quote(desk_abs)} route-sync pull"
     desk = shutil.which("desk")
     if desk:
         return f"{shlex.quote(desk)} route-sync pull"
