@@ -128,3 +128,27 @@ def test_create_workstation_no_stack_in_body() -> None:
     # stack is not in the model, so FastAPI ignores it; request still succeeds
     # (the key test is that it's not passed to SDK)
     assert resp.status_code in (200, 409, 500)
+
+
+def test_create_workstation_reserved_name_router_rejected() -> None:
+    """POST /api/workstations with name 'router' returns 409 (reserved for managed ASG)."""
+    resp = client.post("/api/workstations", json={"name": "router"})
+    assert resp.status_code == 409
+    assert "reserved" in resp.json()["detail"].lower()
+
+
+@patch("app.routes.workstations.list_workstations")
+def test_list_workstations_infra(mock_list_workstations: object) -> None:
+    """GET /api/workstations?infra=true lists Type=router instances."""
+    from desk.aws import Workstation
+
+    mock_list_workstations.return_value = [
+        Workstation(instance_id="i-router1", name="router", state="running"),
+    ]
+    resp = client.get("/api/workstations?infra=true")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["instance_id"] == "i-router1"
+    assert data[0]["name"] == "router"
+    assert data[0]["shutdown_at"] is None

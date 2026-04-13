@@ -86,6 +86,9 @@ export function InstanceList() {
   const loadInFlightRef = useRef(false)
   const actingRef = useRef<string | null>(null)
   actingRef.current = acting
+  const [listInfra, setListInfra] = useState(false)
+  const listInfraRef = useRef(false)
+  listInfraRef.current = listInfra
 
   const load = async (opts?: { isBackgroundRefresh?: boolean }) => {
     const isBackground = opts?.isBackgroundRefresh === true
@@ -96,7 +99,7 @@ export function InstanceList() {
       setError(null)
     }
     try {
-      const list = await listInstances()
+      const list = await listInstances({ infra: listInfraRef.current })
       setInstances(list)
       setRefreshError(null)
     } catch (e) {
@@ -140,13 +143,13 @@ export function InstanceList() {
       document.removeEventListener('visibilitychange', onVisibility)
       if (intervalId !== null) window.clearInterval(intervalId)
     }
-  }, [])
+  }, [listInfra])
 
   const onStart = async (name: string) => {
     setActing(name)
     setError(null)
     try {
-      await startInstance(name)
+      await startInstance(name, { infra: listInfra })
       await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -159,7 +162,7 @@ export function InstanceList() {
     setActing(name)
     setError(null)
     try {
-      await stopInstance(name)
+      await stopInstance(name, { infra: listInfra })
       await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -187,7 +190,7 @@ export function InstanceList() {
     setActing(name)
     setError(null)
     try {
-      await killInstance(name)
+      await killInstance(name, { infra: listInfra })
       await load({ isBackgroundRefresh: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -350,6 +353,17 @@ export function InstanceList() {
       {refreshError && (
         <p className="refresh-error" role="status">{refreshError}</p>
       )}
+      <p className="instance-list-toolbar">
+        <label className="instance-list-infra-toggle">
+          <input
+            type="checkbox"
+            checked={listInfra}
+            onChange={(e) => setListInfra(e.target.checked)}
+          />
+          {' '}
+          List managed router (infra)
+        </label>
+      </p>
       <div className="table-wrap">
         <table className="instances-table">
           <thead>
@@ -363,7 +377,9 @@ export function InstanceList() {
           <tbody>
             {instances.length === 0 ? (
               <tr>
-                <td colSpan={4} className="empty">No workstations found.</td>
+                <td colSpan={4} className="empty">
+                  {listInfra ? 'No router instances found.' : 'No workstations found.'}
+                </td>
               </tr>
             ) : (
               instances.map((inst) => {
@@ -377,7 +393,9 @@ export function InstanceList() {
                     </span>
                   </td>
                   <td className="shutdown">
-                    {(() => {
+                    {listInfra ? (
+                      '—'
+                    ) : (() => {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
                       const isRunningOrPending = inst.state === 'running' || inst.state === 'pending'
                       const menuOpen = openAutoStopFor === key
@@ -508,7 +526,7 @@ export function InstanceList() {
           </tbody>
         </table>
       </div>
-      {createSection}
+      {!listInfra && createSection}
     </>
   )
 }

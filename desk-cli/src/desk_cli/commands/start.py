@@ -18,15 +18,23 @@ from desk.config import get_desk_settings
     type=str,
     default="4h",
     show_default=True,
-    help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable).",
+    help="Duration until auto-stop, e.g. 4h, 30m, 2h30m (0 to disable). Ignored with --infra.",
+)
+@click.option(
+    "--infra",
+    is_flag=True,
+    default=False,
+    help="Target the managed router (Type=router).",
 )
 def start(
     workstation: str,
     shutdown_after: str,
+    infra: bool,
 ) -> None:
     """Start a stopped workstation instance.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
+    Use --infra to start the managed router (``--shutdown`` is ignored).
 
     AWS region and credential profile come from the environment or desk config.
     """
@@ -40,6 +48,7 @@ def start(
             region=region,
             profile=profile,
             states=["stopped"],
+            infra=infra,
         )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
@@ -50,5 +59,6 @@ def start(
         shutdown_after=shutdown_after,
         region=region,
         profile=profile,
+        infra=infra,
     )
     click.secho("Started.", fg="green")

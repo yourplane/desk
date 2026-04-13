@@ -2,7 +2,8 @@
 # Build and deploy the desk web app stack using SAM for the Lambda.
 # Usage: ./deploy.sh [stack-name] [aws-profile]
 # Requires: stack already created (run full-deploy.sh or sam deploy first with CognitoCallbackURL).
-# Builds frontend, runs sam build + sam deploy (SAM uses its own deployment bucket), syncs S3, invalidates CloudFront.
+# Also deploys the desk-router CloudFormation stack (latest self-owned router-ami-* AMI) when present.
+# Requires VPC stack "desk" (exports for subnets). Builds frontend, runs sam build + sam deploy, syncs S3, invalidates CloudFront.
 set -e
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 INFRA_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
@@ -19,6 +20,21 @@ if [ -z "$AWS_DEFAULT_REGION" ]; then
 fi
 
 echo "==> Stack: $STACK_NAME, Repo root: $REPO_ROOT"
+
+# Deploy managed router ASG (desk-router.yaml). Skips if no router AMI exists in the account.
+echo "==> Deploying desk-router stack..."
+ROUTER_AMI=$(aws ec2 describe-images --owners self \
+  --filters "Name=name,Values=router-ami-*" \
+  --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text 2>/dev/null || true)
+if [ -z "$ROUTER_AMI" ] || [ "$ROUTER_AMI" = "None" ]; then
+  echo "Warning: No self-owned router-ami-* AMI found; skipping desk-router deploy." >&2
+else
+  aws cloudformation deploy \
+    --stack-name desk-router \
+    --template-file "$INFRA_DIR/desk-router.yaml" \
+    --parameter-overrides "RouterAmiId=${ROUTER_AMI}" \
+    --capabilities CAPABILITY_NAMED_IAM
+fi
 
 # Build metadata for frontend (displayed in UI)
 export VITE_BUILD_AT=$(date +"%b %d, %Y %H:%M %Z")

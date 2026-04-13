@@ -30,6 +30,8 @@ def get_connection_argv(
     remote_command: str | None = None,
     key_timeout: int = 300,
     verbose_callback: Callable[[str, float | None], None] | None = None,
+    *,
+    infra: bool = False,
 ) -> list[str]:
     """Resolve workstation, wait for SSM, inject public key via SSM, set AWS env, build SSH argv.
 
@@ -60,7 +62,9 @@ def get_connection_argv(
     vb("get_connection_argv: resolve workstation")
     t0 = time.perf_counter()
     try:
-        instance_id = resolve_workstation(workstation, region=region, profile=profile)
+        instance_id = resolve_workstation(
+            workstation, region=region, profile=profile, infra=infra
+        )
         log.info("resolved %s -> %s", workstation, instance_id)
     except ValueError as e:
         log.debug("resolve failed workstation=%s error=%s", workstation, e)
@@ -208,6 +212,12 @@ def get_connection_argv(
     show_default=True,
     help="Seconds to keep the injected SSH key in authorized_keys before it is removed.",
 )
+@click.option(
+    "--infra",
+    is_flag=True,
+    default=False,
+    help="Target the managed router (Name=router, Type=router). Required to connect to the router.",
+)
 def connect(
     workstation: str,
     user: str,
@@ -217,6 +227,7 @@ def connect(
     forwards: tuple[str, ...],
     forward_agent: bool,
     key_timeout: int,
+    infra: bool,
 ) -> None:
     """Connect to a workstation via SSH over SSM tunnel.
 
@@ -224,6 +235,7 @@ def connect(
     removes it after --key-timeout). Uses ~/.ssh/id_ed25519 or id_rsa by default; -i to override.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
+    Use --infra to connect to the managed router instance (see ``desk list --infra``).
     Requires the Session Manager plugin and SSH client to be installed.
 
     AWS region and credential profile come from the environment or desk config.
@@ -243,6 +255,7 @@ def connect(
         forward_agent=forward_agent,
         remote_command=None,
         key_timeout=key_timeout,
+        infra=infra,
     )
     log.info("exec ssh user=%s", user)
     try:

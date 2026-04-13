@@ -13,7 +13,12 @@ from typing import Any
 
 import click
 
-from desk.aws import is_ssm_ready, resolve_workstation, wait_for_ssm_ready
+from desk.aws import (
+    RESERVED_INFRA_WORKSTATION_NAME,
+    is_ssm_ready,
+    resolve_workstation,
+    wait_for_ssm_ready,
+)
 from desk.config import get_desk_settings, get_state_home
 
 DEFAULT_LOCAL_PORT_START = 45000
@@ -199,11 +204,6 @@ def _terminate_route_pid(pid: int, timeout_seconds: float = 5.0) -> bool:
     return not _pid_alive(pid)
 
 
-def _resolve_instance_id(workstation: str, region: str | None, profile: str | None) -> str:
-    """Resolve workstation name to EC2 instance id (raises ValueError if unknown)."""
-    return resolve_workstation(workstation, region=region, profile=profile)
-
-
 def _ensure_instance_ssm_ready(
     instance_id: str,
     *,
@@ -280,6 +280,12 @@ def route_group() -> None:
 )
 @click.option("--local-port-start", type=click.IntRange(1, 65535), default=None, help="Local port range start.")
 @click.option("--local-port-end", type=click.IntRange(1, 65535), default=None, help="Local port range end.")
+@click.option(
+    "--infra",
+    is_flag=True,
+    default=False,
+    help="Target the managed router (required when WORKSTATION is the reserved name router).",
+)
 def route_add(
     workstation: str,
     port: int,
@@ -287,11 +293,16 @@ def route_add(
     wait_timeout: int,
     local_port_start: int | None,
     local_port_end: int | None,
+    infra: bool,
 ) -> None:
     """Add a route to forward WORKSTATION PORT to a local port."""
     aws = get_desk_settings().aws_settings
     region = aws.region
     profile = aws.profile
+    if workstation == RESERVED_INFRA_WORKSTATION_NAME and not infra:
+        raise click.UsageError(
+            "Adding a route to the managed router requires --infra (e.g. desk route add router 8780 --infra)."
+        )
     start, end = _parse_port_range(local_port_start, local_port_end)
     routes = _load_routes()
     duplicate = next((r for r in routes if r.get("workstation") == workstation and r.get("remote_port") == port), None)
@@ -303,7 +314,7 @@ def route_add(
         )
 
     try:
-        instance_id = _resolve_instance_id(workstation, region, profile)
+        instance_id = resolve_workstation(workstation, region=region, profile=profile, infra=infra)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
 
@@ -325,6 +336,8 @@ def route_add(
         region=region,
         profile=profile,
     )
+    if infra:
+        route["infra"] = True
     routes.append(route)
     _save_routes(routes)
     _notify_web_router_after_route_change()
@@ -396,9 +409,10 @@ def _refresh_stale_routes(
 
         ws = str(r.get("workstation", ""))
         port = int(r.get("remote_port", 0) or 0)
+        infra = bool(r.get("infra"))
 
         try:
-            instance_id = _resolve_instance_id(ws, region, profile)
+            instance_id = resolve_workstation(ws, region=region, profile=profile, infra=infra)
         except ValueError as exc:
             failures.append((ws, port, str(exc)))
             new_routes.append(r)

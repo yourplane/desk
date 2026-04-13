@@ -39,8 +39,9 @@ function errorMessage(res: Response, text: string): string {
   return text?.trim() || `Request failed (${res.status})`
 }
 
-export async function listInstances(): Promise<Instance[]> {
-  const res = await fetchWithAuthRetry('/api/workstations', { headers: authHeaders() })
+export async function listInstances(options?: { infra?: boolean }): Promise<Instance[]> {
+  const q = options?.infra ? '?infra=true' : ''
+  const res = await fetchWithAuthRetry(`/api/workstations${q}`, { headers: authHeaders() })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(errorMessage(res, text))
@@ -48,8 +49,12 @@ export async function listInstances(): Promise<Instance[]> {
   return res.json()
 }
 
-export async function startInstance(name: string): Promise<{ instance_id: string; shutdown_at?: string | null }> {
-  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/start`, {
+export async function startInstance(
+  name: string,
+  options?: { infra?: boolean },
+): Promise<{ instance_id: string; shutdown_at?: string | null }> {
+  const q = options?.infra ? '?infra=true' : ''
+  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/start${q}`, {
     method: 'POST',
     headers: authHeaders(),
   })
@@ -67,8 +72,9 @@ export async function startInstance(name: string): Promise<{ instance_id: string
   return res.json()
 }
 
-export async function stopInstance(name: string): Promise<{ instance_id: string }> {
-  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/stop`, {
+export async function stopInstance(name: string, options?: { infra?: boolean }): Promise<{ instance_id: string }> {
+  const q = options?.infra ? '?infra=true' : ''
+  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/stop${q}`, {
     method: 'POST',
     headers: authHeaders(),
   })
@@ -86,8 +92,9 @@ export async function stopInstance(name: string): Promise<{ instance_id: string 
   return res.json()
 }
 
-export async function killInstance(name: string): Promise<{ instance_id: string }> {
-  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/kill`, {
+export async function killInstance(name: string, options?: { infra?: boolean }): Promise<{ instance_id: string }> {
+  const q = options?.infra ? '?infra=true' : ''
+  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/kill${q}`, {
     method: 'POST',
     headers: authHeaders(),
   })

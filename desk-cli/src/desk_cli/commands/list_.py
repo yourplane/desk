@@ -80,11 +80,18 @@ def _format_shutdown(shutdown_at: str | None, state: str = "running") -> tuple[s
     show_default=True,
     help="Output format.",
 )
-def list_cmd(output: str) -> None:
-    """List workstation instances.
+@click.option(
+    "--infra",
+    is_flag=True,
+    default=False,
+    help="List managed router instance(s) (Type=router) instead of workstations.",
+)
+def list_cmd(output: str, infra: bool) -> None:
+    """List workstation instances, or router infra with --infra.
 
-    Shows EC2 instances tagged Type=workstation with their instance ID,
-    name, and state. Connect with: desk connect <name-or-id>
+    By default shows EC2 instances tagged Type=workstation with their instance ID,
+    name, state, and shutdown. Use ``--infra`` to list only the managed router(s)
+    (Type=router). Connect with: desk connect <name-or-id> or desk connect --infra router.
 
     AWS region and credential profile come from the environment
     (``AWS_REGION``, ``AWS_PROFILE``) or the desk config file.
@@ -93,10 +100,10 @@ def list_cmd(output: str) -> None:
     region = aws.region
     profile = aws.profile
 
-    workstations = list_workstations(region=region, profile=profile)
+    workstations: list[Workstation] = list_workstations(region=region, profile=profile, infra=infra)
 
     if not workstations:
-        click.echo("No workstations found.")
+        click.echo("No router instances found." if infra else "No workstations found.")
         return
 
     if output == "plain":
@@ -130,7 +137,7 @@ def list_cmd(output: str) -> None:
     click.echo(header)
     click.echo("-" * len(header))
 
-    for w, (shutdown_label, shutdown_raw_len) in zip(workstations, shutdown_labels):
+    for w, (shutdown_label, _) in zip(workstations, shutdown_labels):
         name = w.name or "-"
         state = _color_state(w.state)
         # Pad state by raw length (no ANSI) so columns align

@@ -1116,7 +1116,7 @@ def test_desk_ami_create_success(
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with(
         "main", region=None, profile=None,
-        states=["pending", "running", "stopping", "stopped"]
+        states=["pending", "running", "stopping", "stopped"],
     )
     mock_create_ami.assert_called_once_with(
         instance_id="i-abc123",
@@ -1446,7 +1446,7 @@ def test_desk_connect_resolves_and_execs_ssh(
     runner = CliRunner()
     result = runner.invoke(cli, ["connect", "max"])
 
-    mock_resolve.assert_called_once_with("max", region=None, profile=None)
+    mock_resolve.assert_called_once_with("max", region=None, profile=None, infra=False)
     mock_execvp.assert_called_once()
     args = mock_execvp.call_args[0][1]
     assert args[0] == "ssh"
@@ -1700,7 +1700,7 @@ def test_desk_stop_by_name(mock_resolve: object, mock_stop: object) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["stop", "max"])
     assert result.exit_code == 0
-    mock_resolve.assert_called_once_with("max", region=None, profile=None)
+    mock_resolve.assert_called_once_with("max", region=None, profile=None, infra=False)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
     assert "Stopped" in result.output
 
@@ -1714,7 +1714,7 @@ def test_desk_stop_by_instance_id(mock_resolve: object, mock_stop: object) -> No
     runner = CliRunner()
     result = runner.invoke(cli, ["stop", "i-abc123"])
     assert result.exit_code == 0
-    mock_resolve.assert_called_once_with("i-abc123", region=None, profile=None)
+    mock_resolve.assert_called_once_with("i-abc123", region=None, profile=None, infra=False)
     mock_stop.assert_called_once_with("i-abc123", region=None, profile=None)
 
 
@@ -1748,7 +1748,11 @@ def test_desk_kill_with_yes_flag(mock_resolve: object, mock_terminate: object) -
     result = runner.invoke(cli, ["kill", "max", "--yes"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with(
-        "max", region=None, profile=None, states=["pending", "running", "stopping", "stopped"]
+        "max",
+        region=None,
+        profile=None,
+        states=["pending", "running", "stopping", "stopped"],
+        infra=False,
     )
     mock_terminate.assert_called_once_with("i-abc123", region=None, profile=None)
     assert "Terminated" in result.output
@@ -1809,9 +1813,9 @@ def test_desk_start_by_name(
     result = runner.invoke(cli, ["start", "max"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with(
-        "max", region=None, profile=None, states=["stopped"]
+        "max", region=None, profile=None, states=["stopped"], infra=False
     )
-    mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None)
+    mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None, infra=False)
     assert "Started" in result.output
 
 
@@ -1827,9 +1831,9 @@ def test_desk_start_by_instance_id(
     result = runner.invoke(cli, ["start", "i-abc123"])
     assert result.exit_code == 0
     mock_resolve.assert_called_once_with(
-        "i-abc123", region=None, profile=None, states=["stopped"]
+        "i-abc123", region=None, profile=None, states=["stopped"], infra=False
     )
-    mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None)
+    mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None, infra=False)
 
 
 @patch("desk_cli.commands.start.resolve_workstation")
@@ -2654,7 +2658,7 @@ def test_desk_start_sets_shutdown_tag(
     runner = CliRunner()
     result = runner.invoke(cli, ["start", "main"])
     assert result.exit_code == 0
-    mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None)
+    mock_start.assert_called_once_with("i-abc123", shutdown_after="4h", region=None, profile=None, infra=False)
 
 
 @patch("desk_cli.commands.start.start_workstation")
@@ -2669,7 +2673,7 @@ def test_desk_start_custom_shutdown_hours(
     runner = CliRunner()
     result = runner.invoke(cli, ["start", "main", "--shutdown", "8"])
     assert result.exit_code == 0
-    mock_start.assert_called_once_with("i-abc123", shutdown_after="8", region=None, profile=None)
+    mock_start.assert_called_once_with("i-abc123", shutdown_after="8", region=None, profile=None, infra=False)
 
 
 @patch("desk_cli.commands.start.start_workstation")
@@ -2684,7 +2688,7 @@ def test_desk_start_shutdown_zero_skips_tag(
     runner = CliRunner()
     result = runner.invoke(cli, ["start", "main", "--shutdown", "0"])
     assert result.exit_code == 0
-    mock_start.assert_called_once_with("i-abc123", shutdown_after="0", region=None, profile=None)
+    mock_start.assert_called_once_with("i-abc123", shutdown_after="0", region=None, profile=None, infra=False)
 
 
 @patch("desk_cli.commands.create.create_workstation")

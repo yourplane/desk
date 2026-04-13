@@ -1,6 +1,6 @@
 # desk-infra
 
-CloudFormation templates and Lambda functions for desk: VPC/networking and auto-stop reaper.
+CloudFormation templates and Lambda functions for desk: VPC/networking, optional managed **router** ASG, and auto-stop reaper.
 
 Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) for building and deploying the Lambda. Build uses `uv pip install` to install desk-sdk into the Lambda package.
 
@@ -8,7 +8,7 @@ Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/
 
 ## Deploy CloudFormation stacks
 
-Deploy in this order: VPC first, then the reaper Lambda.
+Deploy in this order: **VPC** first, optionally the **router ASG**, then the **reaper** Lambda.
 
 ### 1. VPC and networking
 
@@ -30,7 +30,27 @@ The template provides:
 
 `desk create` (CLI) uses the stack outputs automatically.
 
-### 2. Reaper Lambda (auto-stop)
+### 2. Router ASG (optional, single managed `router` instance)
+
+The template `desk-router.yaml` keeps **one** private EC2 instance in an Auto Scaling Group. It is tagged `Type=router` and `Name=router` (the name `router` is reserved for CLI/API workstation creation). The AMI ID is set **at deploy time** only — **redeploy this stack** after publishing a new `router-ami-*` image to roll out upgrades.
+
+Pick the latest matching AMI, then deploy (from the repo root; set region/profile as needed):
+
+```bash
+ROUTER_AMI="$(aws ec2 describe-images --owners self \
+  --filters "Name=name,Values=router-ami-*" \
+  --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text)"
+
+aws cloudformation deploy \
+  --stack-name desk-router \
+  --template-file desk-infra/desk-router.yaml \
+  --parameter-overrides "RouterAmiId=${ROUTER_AMI}" \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+The router uses the same VPC private subnets and NAT as workstations but a **dedicated security group** (no inbound from other instances). Session Manager reaches it over outbound HTTPS via the NAT. `desk stop --infra router` stops the instance; the ASG typically **replaces** it (useful as a controlled restart).
+
+### 3. Reaper Lambda (auto-stop)
 
 The reaper runs every 10 minutes and stops workstations past their `desk:shutdown-at` time.
 
@@ -72,7 +92,7 @@ aws logs get-log-events --log-group-name /aws/lambda/desk-reaper --log-stream-na
 ## Lint CloudFormation
 
 ```bash
-cfn-lint desk-infra/desk-vpc.yaml desk-infra/desk-reaper.yaml
+cfn-lint desk-infra/desk-vpc.yaml desk-infra/desk-router.yaml desk-infra/desk-reaper.yaml
 ```
 
 Run from the repo root, or pass paths to the templates from your current directory.

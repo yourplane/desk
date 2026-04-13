@@ -16,6 +16,10 @@ from botocore.exceptions import ClientError
 # Tag key used to store the scheduled shutdown time (ISO 8601 UTC).
 TAG_SHUTDOWN_AT = "desk:shutdown-at"
 
+# Managed ASG router uses Name=router and Type=router. Workstations must not use this name.
+RESERVED_INFRA_WORKSTATION_NAME = "router"
+TAG_TYPE_ROUTER = "router"
+
 # AMI build pipeline: whether desk ami build tests have passed (used when resolving ami_prefix).
 AMI_TAG_BUILD_STATUS = "desk:ami-build-status"
 AMI_BUILD_STATUS_UNTESTED = "untested"
@@ -417,6 +421,12 @@ def create_workstation(
     """
     from desk.config import get_desk_settings
 
+    if name.strip() == RESERVED_INFRA_WORKSTATION_NAME:
+        raise ValueError(
+            f"The name '{RESERVED_INFRA_WORKSTATION_NAME}' is reserved for the managed router instance. "
+            "Choose a different workstation name."
+        )
+
     existing = list_workstations(region=region, profile=profile)
     duplicates = [w for w in existing if w.name == name and w.state != "terminated"]
     if duplicates:
@@ -465,7 +475,7 @@ def create_workstation(
 
 @dataclass
 class Workstation:
-    """EC2 instance identified as a desk workstation."""
+    """EC2 instance identified as a desk workstation or infra (router)."""
 
     instance_id: str
     name: str
@@ -478,13 +488,18 @@ def list_workstations(
     profile: str | None = None,
     *,
     states: list[str] | None = None,
+    infra: bool = False,
 ) -> list[Workstation]:
-    """List EC2 instances tagged Type=workstation. Optionally filter by state(s)."""
+    """List EC2 instances tagged Type=workstation, or Type=router when ``infra`` is True.
+
+    Optionally filter by instance state(s).
+    """
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
-    workstations: list[Workstation] = []
-    filters = [{"Name": "tag:Type", "Values": ["workstation"]}]
+    type_value = TAG_TYPE_ROUTER if infra else "workstation"
+    result: list[Workstation] = []
+    filters = [{"Name": "tag:Type", "Values": [type_value]}]
     if states:
         filters.append({"Name": "instance-state-name", "Values": states})
 
@@ -493,7 +508,7 @@ def list_workstations(
         for reservation in page.get("Reservations", []):
             for instance in reservation.get("Instances", []):
                 tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
-                workstations.append(
+                result.append(
                     Workstation(
                         instance_id=instance["InstanceId"],
                         name=tags.get("Name", ""),
@@ -502,7 +517,7 @@ def list_workstations(
                     )
                 )
 
-    return workstations
+    return result
 
 
 def resolve_workstation(
@@ -511,25 +526,28 @@ def resolve_workstation(
     profile: str | None = None,
     *,
     states: list[str] | None = None,
+    infra: bool = False,
 ) -> str:
-    """Resolve workstation name or instance ID to instance ID. Raises ValueError if not found.
+    """Resolve workstation or infra name/instance ID to instance ID. Raises ValueError if not found.
 
-    When resolving by name, considers instances in the given states (default:
-    running and pending). Errors if multiple instances share the same name.
+    Set ``infra=True`` for managed router instances (Type=router). When resolving by name,
+    considers instances in the given states (default: running and pending).
+    Errors if multiple instances share the same name.
     """
     if states is None:
         states = ["running", "pending"]
 
+    not_found = f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations."
+
     if name_or_id.startswith("i-"):
-        workstations = list_workstations(region=region, profile=profile)
-        for w in workstations:
+        instances = list_workstations(region=region, profile=profile, infra=infra)
+        for w in instances:
             if w.instance_id == name_or_id:
                 return w.instance_id
-        raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
+        raise ValueError(not_found)
 
-    # Resolve by name with given states filter
     matching_state = list_workstations(
-        region=region, profile=profile, states=states
+        region=region, profile=profile, states=states, infra=infra
     )
     matches = [w for w in matching_state if w.name == name_or_id]
     if len(matches) > 1:
@@ -541,7 +559,7 @@ def resolve_workstation(
     if len(matches) == 1:
         return matches[0].instance_id
 
-    raise ValueError(f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations.")
+    raise ValueError(not_found)
 
 
 def is_ssm_ready(
@@ -683,9 +701,16 @@ def start_workstation(
     shutdown_after: str,
     region: str | None = None,
     profile: str | None = None,
+    *,
+    infra: bool = False,
 ) -> tuple[str, str | None]:
-    """Start a workstation: start instance and set auto-stop. Returns (instance_id, shutdown_at or None)."""
+    """Start a workstation: start instance and set auto-stop. Returns (instance_id, shutdown_at or None).
+
+    With ``infra=True``, starts without setting auto-stop (for managed router instances).
+    """
     _start_instance(instance_id, region=region, profile=profile)
+    if infra:
+        return (instance_id, None)
     shutdown_at = _maybe_set_shutdown_tag(
         instance_id, shutdown_after=shutdown_after, region=region, profile=profile
     )

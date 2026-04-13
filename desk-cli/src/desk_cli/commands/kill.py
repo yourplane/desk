@@ -18,13 +18,21 @@ from desk.config import get_desk_settings
     is_flag=True,
     help="Skip confirmation prompt.",
 )
+@click.option(
+    "--infra",
+    is_flag=True,
+    default=False,
+    help="Target the managed router (Type=router).",
+)
 def kill(
     workstation: str,
     yes: bool,
+    infra: bool,
 ) -> None:
     """Terminate a workstation instance.
 
     WORKSTATION can be the instance ID (e.g. i-abc123) or the workstation name.
+    Use --infra to terminate the managed router (the ASG will typically launch a replacement).
 
     This permanently destroys the instance and all data on its root volume.
 
@@ -40,6 +48,7 @@ def kill(
             region=region,
             profile=profile,
             states=["pending", "running", "stopping", "stopped"],
+            infra=infra,
         )
     except ValueError as e:
         raise click.UsageError(str(e)) from e

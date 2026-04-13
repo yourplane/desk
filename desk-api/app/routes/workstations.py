@@ -146,16 +146,16 @@ def create_workstation_route(body: CreateWorkstationBody):
 
 
 @router.get("/workstations")
-def list_workstations_route():
-    """List workstations (EC2 instances tagged Type=workstation)."""
+def list_workstations_route(infra: bool = False):
+    """List workstations (Type=workstation) or router infra (Type=router) when infra=true."""
     region, profile = _region_profile()
-    logger.info("list_workstations: region=%s profile=%s", region, profile)
+    logger.info("list_workstations: region=%s profile=%s infra=%s", region, profile, infra)
     try:
-        workstations = list_workstations(region=region, profile=profile)
+        workstations = list_workstations(region=region, profile=profile, infra=infra)
     except Exception as e:
         logger.exception("list_workstations failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
-    logger.info("list_workstations: returning %d workstations", len(workstations))
+    logger.info("list_workstations: returning %d instances", len(workstations))
     return [
         {
             "instance_id": w.instance_id,
@@ -168,29 +168,27 @@ def list_workstations_route():
 
 
 @router.post("/workstations/{name}/start")
-def start_workstation_by_name(name: str):
-    """Start a stopped workstation by name or instance ID. Sets auto-stop to 4 hours."""
+def start_workstation_by_name(name: str, infra: bool = False):
+    """Start a stopped workstation by name or instance ID. Sets auto-stop to 4 hours (ignored for infra)."""
     region, profile = _region_profile()
     try:
         instance_id = resolve_workstation(
-            name, region=region, profile=profile, states=["stopped"]
+            name, region=region, profile=profile, states=["stopped"], infra=infra
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     instance_id, shutdown_at = start_workstation(
-        instance_id, shutdown_after="4h", region=region, profile=profile
+        instance_id, shutdown_after="4h", region=region, profile=profile, infra=infra
     )
     return {"instance_id": instance_id, "shutdown_at": shutdown_at}
 
 
 @router.post("/workstations/{name}/stop")
-def stop_workstation_by_name(name: str):
-    """Stop a running workstation by name or instance ID."""
+def stop_workstation_by_name(name: str, infra: bool = False):
+    """Stop a running workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
-        instance_id = resolve_workstation(
-            name, region=region, profile=profile
-        )
+        instance_id = resolve_workstation(name, region=region, profile=profile, infra=infra)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     stop_instance(instance_id, region=region, profile=profile)
@@ -198,8 +196,8 @@ def stop_workstation_by_name(name: str):
 
 
 @router.post("/workstations/{name}/kill")
-def kill_instance_by_name(name: str):
-    """Permanently terminate a workstation by name or instance ID."""
+def kill_instance_by_name(name: str, infra: bool = False):
+    """Permanently terminate a workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
         instance_id = resolve_workstation(
@@ -207,6 +205,7 @@ def kill_instance_by_name(name: str):
             region=region,
             profile=profile,
             states=["pending", "running", "stopping", "stopped"],
+            infra=infra,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

@@ -12,7 +12,12 @@ from typing import Any
 
 import click
 
-from desk.aws import get_desk_data_bucket, is_ssm_ready, resolve_workstation, wait_for_ssm_ready
+from desk.aws import (
+    get_desk_data_bucket,
+    is_ssm_ready,
+    resolve_workstation,
+    wait_for_ssm_ready,
+)
 from desk.config import get_desk_settings
 from desk.web_routes import list_all_web_routes
 
