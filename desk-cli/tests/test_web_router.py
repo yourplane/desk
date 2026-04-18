@@ -40,9 +40,11 @@ def test_desk_web_router_probe_help() -> None:
 
 
 @patch("desk_cli.commands.web_router._http_probe_get")
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
 def test_desk_web_router_probe_suggests_sync_on_caddy_placeholder_404(
     _mock_pid: object,
+    _mock_cmdline: object,
     mock_get: MagicMock,
     tmp_path: Path,
     monkeypatch,
@@ -66,9 +68,11 @@ def test_desk_web_router_probe_suggests_sync_on_caddy_placeholder_404(
 
 @patch("desk_cli.commands.web_router._caddyfile_out_of_sync_with_active_routes", return_value=False)
 @patch("desk_cli.commands.web_router._http_probe_get")
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
 def test_desk_web_router_probe_checks_active_route(
     _mock_pid: object,
+    _mock_cmdline: object,
     mock_get: MagicMock,
     _mock_sync: object,
     tmp_path: Path,
@@ -111,7 +115,9 @@ def test_desk_web_router_sync_writes_and_reloads(
         )
     )
     runner = CliRunner()
-    with patch("desk_cli.commands.route._pid_alive", return_value=True):
+    with patch("desk_cli.commands.route._pid_alive", return_value=True), patch(
+        "desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True
+    ):
         result = runner.invoke(cli, ["web-router", "sync"])
     assert result.exit_code == 0
     assert "Wrote Caddyfile" in result.output
@@ -172,7 +178,9 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     )
 
     runner = CliRunner()
-    with patch("desk_cli.commands.route._pid_alive", return_value=True):
+    with patch("desk_cli.commands.route._pid_alive", return_value=True), patch(
+        "desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True
+    ):
         result = runner.invoke(cli, ["web-router", "start"])
 
     assert result.exit_code == 0
@@ -230,7 +238,9 @@ def test_desk_web_router_start_multi_route_two_hosts(
     )
 
     runner = CliRunner()
-    with patch("desk_cli.commands.route._pid_alive", return_value=True):
+    with patch("desk_cli.commands.route._pid_alive", return_value=True), patch(
+        "desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True
+    ):
         result = runner.invoke(cli, ["web-router", "start"])
 
     assert result.exit_code == 0
@@ -353,9 +363,11 @@ def test_desk_web_router_stop_on_boot_disables_unit(
 @patch("desk_cli.commands.web_router._run_caddy_reload")
 @patch("desk_cli.commands.web_router._systemd_active", return_value=True)
 @patch("desk_cli.commands.web_router._pid_alive", return_value=True)
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
 def test_refresh_runs_caddy_reload_when_systemd_active(
     _mock_which: object,
+    _mock_route_cmdline: object,
     _mock_alive: object,
     _mock_sysd: object,
     _mock_reload: MagicMock,
@@ -390,7 +402,9 @@ def test_refresh_runs_caddy_reload_when_manual_pid_running(
     )
     (tmp_path / "web-router").mkdir()
     (tmp_path / "web-router" / "caddy.pid").write_text("42\n")
-    with patch("desk_cli.commands.web_router._pid_alive", return_value=True):
+    with patch("desk_cli.commands.web_router._pid_alive", return_value=True), patch(
+        "desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True
+    ):
         refresh_web_router_after_route_change()
     _mock_reload.assert_called_once()
 
@@ -410,7 +424,9 @@ def test_refresh_writes_caddyfile_without_reload_when_router_stopped(
     (tmp_path / "routes" / "routes.json").write_text(
         json.dumps([{"workstation": "dev", "remote_port": 80, "local_port": 45001, "pid": 1}])
     )
-    with patch("desk_cli.commands.web_router._pid_alive", return_value=True):
+    with patch("desk_cli.commands.web_router._pid_alive", return_value=True), patch(
+        "desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True
+    ):
         refresh_web_router_after_route_change()
     caddyfile = tmp_path / "web-router" / "Caddyfile"
     assert caddyfile.is_file()

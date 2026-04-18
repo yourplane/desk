@@ -68,6 +68,7 @@ def test_route_sync_pull_removes_routes_not_in_s3(
     _mock_notify.assert_called_once()
 
 
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
 @patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={"main": [8080]})
 @patch("desk_cli.commands.route_sync._start_forward_process", return_value=(12345, "/tmp/route.log"))
@@ -83,6 +84,7 @@ def test_route_sync_pull_adds_missing_routes(
     _mock_start: object,
     _mock_list_s3: object,
     _mock_pid_route: object,
+    _mock_cmdline: object,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -149,11 +151,13 @@ def test_route_sync_pull_refreshes_stale_routes_still_in_s3(
     assert _mock_notify.call_count >= 1
 
 
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={"main": [8080]})
 @patch("desk_cli.commands.route_sync._notify_web_router_after_route_change")
 def test_route_sync_pull_noop_when_already_synced(
     _mock_notify: object,
     _mock_list_s3: object,
+    _mock_cmdline: object,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

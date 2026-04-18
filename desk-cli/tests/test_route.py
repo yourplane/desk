@@ -117,9 +117,11 @@ def test_desk_route_add_rejects_duplicate(tmp_path, monkeypatch) -> None:
 
 @patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
 @patch("desk_cli.commands.route._terminate_route_pid", return_value=True)
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
 def test_desk_route_remove_removes_entry(
     _mock_pid_alive: object,
+    _mock_cmdline: object,
     _mock_terminate: object,
     _mock_refresh: object,
     tmp_path,
@@ -182,9 +184,11 @@ def _pid_alive_stale_then_active(pid: int) -> bool:
 
 
 @patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", side_effect=_pid_alive_stale_then_active)
 def test_desk_route_clear_removes_only_stale(
     _mock_pid_alive: object,
+    _mock_cmdline: object,
     _mock_refresh: object,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -222,8 +226,11 @@ def test_desk_route_clear_removes_only_stale(
     _mock_refresh.assert_called_once()
 
 
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
-def test_desk_route_clear_no_stale(_mock_pid_alive: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_desk_route_clear_no_stale(
+    _mock_pid_alive: object, _mock_cmdline: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """desk route clear prints when nothing is stale."""
     monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
     route_dir = tmp_path / "routes"
@@ -293,8 +300,11 @@ def test_desk_route_refresh_recreates_stale(
     _mock_refresh.assert_called_once()
 
 
+@patch("desk_cli.commands.route._pid_cmdline_looks_like_ssm_forward", return_value=True)
 @patch("desk_cli.commands.route._pid_alive", return_value=True)
-def test_desk_route_refresh_no_stale(_mock_pid_alive: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_desk_route_refresh_no_stale(
+    _mock_pid_alive: object, _mock_cmdline: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """desk route refresh exits cleanly when all routes are active."""
     monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
     route_dir = tmp_path / "routes"

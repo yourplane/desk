@@ -18,6 +18,7 @@
     {"run": "sudo systemctl start user@1000.service"},
     {"run": "sudo -u ubuntu env XDG_RUNTIME_DIR=/run/user/1000 bash -lc 'export DESK_WEB_ROUTER_LISTEN=:8780; desk web-router start --on-boot'"},
     {"run": "sudo -u ubuntu env XDG_RUNTIME_DIR=/run/user/1000 bash -lc 'desk route-sync start --on-boot --interval 10'"},
+    {"run": "sudo -u ubuntu bash -lc 'rm -rf /home/ubuntu/.local/state/desk/routes /home/ubuntu/.local/state/desk/web-router'"},
     {"run": "rm -rf /tmp/router-build"}
   ]
 }

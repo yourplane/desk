@@ -7,6 +7,7 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any
@@ -82,9 +83,29 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _pid_cmdline_looks_like_ssm_forward(pid: int) -> bool:
+    """Linux: true if pid's argv looks like an AWS SSM port-forward (avoids stale PID reuse)."""
+    if sys.platform != "linux":
+        return True
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            raw = f.read()
+    except (OSError, FileNotFoundError):
+        return False
+    if b"session-manager-plugin" in raw:
+        return True
+    if b"aws" in raw and b"start-session" in raw:
+        return True
+    return False
+
+
 def _route_status(route: dict[str, Any]) -> str:
     pid = int(route.get("pid", 0) or 0)
-    return "active" if _pid_alive(pid) else "stale"
+    if not _pid_alive(pid):
+        return "stale"
+    if not _pid_cmdline_looks_like_ssm_forward(pid):
+        return "stale"
+    return "active"
 
 
 def _port_is_available(port: int) -> bool:
