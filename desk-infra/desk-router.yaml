@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Managed desk router - one private EC2 instance in an ASG (Type=router, Name=router)
+Description: Managed desk router - one private EC2 instance in an ASG (Type=router, Name=router), internal ALB for CloudFront VPC origin
 
 Parameters:
   RouterAmiId:
@@ -9,14 +9,94 @@ Parameters:
     Type: String
     Default: t3.small
     Description: Burstable instance; default is enough for a small number of routes and users (override if needed).
+  WebRouterBaseDomain:
+    Type: String
+    Default: ""
+    Description: >-
+      When set (e.g. desk.example.com), instance user-data reconfigures the web router to listen on 0.0.0.0:8780
+      and sets DESK_WEB_ROUTER_BASE_DOMAIN for public {name}-{port} hostnames. Leave empty for local-only router.
+  CloudFrontVpcOriginPrefixListId:
+    Type: String
+    Description: >-
+      EC2 managed prefix list ID for CloudFront VPC origins (com.amazonaws.global.cloudfront.origin-facing.vpc).
+      Required for the internal ALB security group. Look up with deploy.sh or the EC2 console.
 
 Resources:
+  RouterAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: desk-router-alb-sg
+      GroupDescription: Inbound from CloudFront VPC origins only; egress to router targets
+      VpcId: !ImportValue desk-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontVpcOriginPrefixListId
+          Description: CloudFront VPC origin to ALB
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: To targets and health checks
+      Tags:
+        - Key: Name
+          Value: desk-router-alb-sg
+        - Key: desk:managed
+          Value: "true"
+
+  RouterAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: desk-router-alb
+      Type: application
+      Scheme: internal
+      IpAddressType: ipv4
+      Subnets: !Split [",", !ImportValue desk-PrivateSubnetIds]
+      SecurityGroups:
+        - !Ref RouterAlbSecurityGroup
+      Tags:
+        - Key: Name
+          Value: desk-router-alb
+        - Key: desk:managed
+          Value: "true"
+
+  RouterTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: desk-router-tg
+      VpcId: !ImportValue desk-VpcId
+      Port: 8780
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckProtocol: TCP
+      HealthCheckPort: "8780"
+      Tags:
+        - Key: desk:managed
+          Value: "true"
+
+  RouterListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref RouterAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref RouterTargetGroup
+
   RouterSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: desk-router-sg
-      GroupDescription: Desk managed router - no inbound; egress for SSM and NAT (no instance-to-instance access)
+      GroupDescription: Desk managed router - HTTP from internal ALB; egress for SSM and NAT
       VpcId: !ImportValue desk-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8780
+          ToPort: 8780
+          SourceSecurityGroupId: !Ref RouterAlbSecurityGroup
+          Description: Web router from internal ALB
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -98,6 +178,16 @@ Resources:
           - !Ref RouterSecurityGroup
         MetadataOptions:
           HttpTokens: optional
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            sudo -u ubuntu env XDG_RUNTIME_DIR=/run/user/1000 bash -lc '
+              export DESK_WEB_ROUTER_LISTEN=0.0.0.0:8780
+              export DESK_WEB_ROUTER_BASE_DOMAIN=${WebRouterBaseDomain}
+              desk web-router stop 2>/dev/null || true
+              desk web-router start --on-boot
+            '
         TagSpecifications:
           - ResourceType: instance
             Tags:
@@ -120,8 +210,10 @@ Resources:
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
-      HealthCheckType: EC2
+      HealthCheckType: ELB
       HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref RouterTargetGroup
       Tags:
         - Key: Name
           Value: router
@@ -140,3 +232,18 @@ Outputs:
   RouterLaunchTemplateId:
     Description: Launch template for router instances
     Value: !Ref RouterLaunchTemplate
+  RouterAlbDnsName:
+    Description: DNS name of the internal ALB (CloudFront VPC origin)
+    Value: !GetAtt RouterAlb.DNSName
+    Export:
+      Name: desk-router-RouterAlbDnsName
+  RouterAlbArn:
+    Description: ARN of the internal ALB (CloudFront VPC origin endpoint)
+    Value: !Ref RouterAlb
+    Export:
+      Name: desk-router-RouterAlbArn
+  RouterAlbHostedZoneId:
+    Description: Route 53 hosted zone ID for the internal ALB (alias records)
+    Value: !GetAtt RouterAlb.CanonicalHostedZoneID
+    Export:
+      Name: desk-router-RouterAlbHostedZoneId

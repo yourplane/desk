@@ -262,6 +262,82 @@ Resources:
             CloudWatchMetricsEnabled: true
             MetricName: RateLimitRule
 
+  # ---- Public web routes ({name}-{port}.*) via CloudFront VPC origin → internal ALB (desk-router stack) ----
+  DeskWebRouterVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Condition: HasCustomDomain
+    Properties:
+      VpcOriginEndpointConfig:
+        Arn: !ImportValue desk-router-RouterAlbArn
+        Name: !Sub "${AWS::StackName}-desk-web-router-vpc"
+        HTTPPort: 80
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+
+  RouterSubdomainAuthFunction:
+    Type: AWS::CloudFront::Function
+    Condition: HasCustomDomain
+    Properties:
+      Name: !Sub "${AWS::StackName}-router-subdomain-auth"
+      AutoPublish: true
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var hostHeader = request.headers.host;
+          var host = hostHeader ? hostHeader.value : "";
+          var apex = "${CustomDomainName}";
+          if (host.length > 0 && host !== apex && host.endsWith("." + apex)) {
+            var cookie = request.headers.cookie;
+            var has = false;
+            if (cookie && cookie.value) {
+              has = cookie.value.indexOf("desk_token=") >= 0;
+            }
+            if (!has) {
+              return {
+                statusCode: 302,
+                statusDescription: "Found",
+                headers: { location: { value: "https://" + apex + "/" } }
+              };
+            }
+          }
+          return request;
+        }
+      FunctionConfig:
+        Comment: Require desk_token cookie on *.apex hostnames (public web routes)
+        Runtime: cloudfront-js-2.0
+
+  DeskWebRouterDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasCustomDomain
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} public web routes (*.${CustomDomainName})"
+        HttpVersion: http2and3
+        Origins:
+          - Id: DeskRouterAlbVpcOrigin
+            DomainName: !ImportValue desk-router-RouterAlbDnsName
+            VpcOriginConfig:
+              VpcOriginId: !Ref DeskWebRouterVpcOrigin
+        DefaultCacheBehavior:
+          TargetOriginId: DeskRouterAlbVpcOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt RouterSubdomainAuthFunction.FunctionMetadata.FunctionARN
+        Aliases:
+          - !Sub "*.${CustomDomainName}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AcmCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        WebACLId: !GetAtt WafRule.Arn
+
   # ---- CloudFront ----
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -361,3 +437,11 @@ Outputs:
     Value: !Ref UserPoolDomain
   ApiEndpoint:
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  WebRouterCloudFrontDomain:
+    Condition: HasCustomDomain
+    Description: DNS target for wildcard public web routes (*.CustomDomainName) — create Route 53 ALIAS *.apex → this
+    Value: !GetAtt DeskWebRouterDistribution.DomainName
+  WebRouterCloudFrontURL:
+    Condition: HasCustomDomain
+    Description: Example base URL for web routes (host is {name}-{port}.CustomDomainName)
+    Value: !Sub "https://example.${CustomDomainName}/"

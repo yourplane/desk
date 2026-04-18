@@ -30,6 +30,13 @@ const COOKIE_NAME = 'desk_token'
 const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
 const PKCE_VERIFIER_COOKIE = 'desk_pkce_verifier'
 
+/** Optional `Domain=` for desk_token (e.g. .desk.example.com) so subdomains receive the cookie. */
+function cookieDomainAttr(): string {
+  const d = (import.meta.env.VITE_COOKIE_DOMAIN as string | undefined)?.trim()
+  if (!d) return ''
+  return `; Domain=${d}`
+}
+
 export function isAuthEnabled(): boolean {
   if (!CONFIG.userPoolId || !CONFIG.clientId || !CONFIG.domain) return false
   if (import.meta.env.VITE_COGNITO_REDIRECT_URI) return true
@@ -53,7 +60,7 @@ function setIdToken(token: string): void {
   sessionStorage.setItem(TOKEN_KEY, token)
   const maxAge = 3600
   const secure = window.location.protocol === 'https:' ? '; Secure' : ''
-  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`
+  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${secure}${cookieDomainAttr()}`
 }
 
 function getRefreshToken(): string | null {
@@ -81,7 +88,7 @@ function clearToken(): void {
     // ignore
   }
   sessionStorage.removeItem(PKCE_VERIFIER_KEY)
-  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
+  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0${cookieDomainAttr()}`
   document.cookie = `${PKCE_VERIFIER_COOKIE}=; path=/; max-age=0`
 }
 

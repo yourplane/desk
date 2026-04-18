@@ -2,6 +2,7 @@
 # Build and deploy the desk web app stack using SAM for the Lambda.
 # Usage: ./deploy.sh [stack-name] [aws-profile]
 # Optional env: DESK_CUSTOM_DOMAIN_NAME, DESK_ACM_CERTIFICATE_ARN (both required together; ACM must be in us-east-1).
+# ACM for the app should include SANs for the apex and *.apex (e.g. desk.example.com and *.desk.example.com) for public web routes.
 # Also deploys the desk-router CloudFormation stack (latest self-owned router-ami-* AMI) when present.
 # Requires VPC stack "desk" (exports for subnets). Builds frontend after stack deploy, syncs S3, invalidates CloudFront.
 set -e
@@ -26,19 +27,33 @@ echo "==> Deploying desk-router stack..."
 ROUTER_AMI=$(aws ec2 describe-images --owners self \
   --filters "Name=name,Values=router-ami-*" \
   --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text 2>/dev/null || true)
+CLOUDFRONT_VPC_PL=$(aws ec2 describe-managed-prefix-lists \
+  --filters "Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing.vpc" \
+  --query 'PrefixLists[0].PrefixListId' --output text 2>/dev/null || true)
 if [ -z "$ROUTER_AMI" ] || [ "$ROUTER_AMI" = "None" ]; then
   echo "Warning: No self-owned router-ami-* AMI found; skipping desk-router deploy." >&2
+elif [ -z "$CLOUDFRONT_VPC_PL" ] || [ "$CLOUDFRONT_VPC_PL" = "None" ]; then
+  echo "Error: Could not resolve EC2 managed prefix list com.amazonaws.global.cloudfront.origin-facing.vpc (needed for desk-router ALB)." >&2
+  exit 1
 else
   aws cloudformation deploy \
     --stack-name desk-router \
     --template-file "$INFRA_DIR/desk-router.yaml" \
-    --parameter-overrides "RouterAmiId=${ROUTER_AMI}" \
+    --parameter-overrides \
+      "RouterAmiId=${ROUTER_AMI}" \
+      "CloudFrontVpcOriginPrefixListId=${CLOUDFRONT_VPC_PL}" \
+      "WebRouterBaseDomain=${DESK_CUSTOM_DOMAIN_NAME:-}" \
     --capabilities CAPABILITY_NAMED_IAM
 fi
 
 # Build metadata for frontend (displayed in UI)
 export VITE_BUILD_AT=$(date +"%b %d, %Y %H:%M %Z")
 export VITE_BUILD_SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)
+# Public web routes (subdomain links + cookie Domain for *.apex)
+if [ -n "${DESK_CUSTOM_DOMAIN_NAME:-}" ]; then
+  export VITE_COOKIE_DOMAIN=".${DESK_CUSTOM_DOMAIN_NAME}"
+  export VITE_WEB_ROUTER_HOST_SUFFIX="${DESK_CUSTOM_DOMAIN_NAME}"
+fi
 
 # 1. SAM build and deploy (Cognito callback URLs are derived in the template from CloudFront + optional custom domain)
 echo "==> SAM build..."

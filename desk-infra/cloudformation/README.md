@@ -52,6 +52,17 @@ export AWS_REGION=us-east-1
 
 Stack outputs include **`CanonicalAppURL`** (custom HTTPS URL when configured, otherwise CloudFront), **`CloudFrontURL`**, and **`CloudFrontDomain`** (DNS target for the distribution).
 
+## Public web routes (custom domain only)
+
+When **`DESK_CUSTOM_DOMAIN_NAME`** is set and the ACM certificate includes **`*.your-apex`** (e.g. `*.desk.example.com`) as well as the apex:
+
+1. The **`desk-router`** stack creates an **internal ALB** in front of the router ASG (HTTP from CloudFront VPC origins to port **8780** on the instance). Deploy passes the **CloudFront VPC origin** managed prefix list into the ALB security group.
+2. This stack adds a **second CloudFront distribution** whose alias is **`*.CustomDomainName`** (e.g. `*.desk.example.com`). It uses a **VPC origin** to that internal ALB. A **CloudFront Function** on viewer-request requires the **`desk_token`** cookie; otherwise it redirects to the SPA origin.
+3. **DNS:** Create a **wildcard** record (e.g. Route 53 **A/ALIAS**) for **`*.desk.example.com`** pointing to the **`WebRouterCloudFrontDomain`** output (not the apex distribution). Point the **apex** `desk.example.com` at the main app distribution as before.
+4. The frontend build sets **`VITE_WEB_ROUTER_HOST_SUFFIX`** and **`VITE_COOKIE_DOMAIN`** when a custom domain is configured so port chips link to **`https://{name}-{port}.your-apex/`** and the auth cookie is visible on those hosts.
+
+Without a custom domain, public web route links are not generated; local/router-only behavior is unchanged.
+
 ## Local development
 
 Unaffected. Run `npm run dev` and `uvicorn app.main:app --reload`; no auth when `VITE_COGNITO_*` is unset.
