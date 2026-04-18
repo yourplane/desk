@@ -27,6 +27,8 @@ function getRedirectUri(): string {
 const TOKEN_KEY = 'desk_id_token'
 const REFRESH_TOKEN_KEY = 'desk_refresh_token'
 const COOKIE_NAME = 'desk_token'
+/** Short cookie (SHA-256 hex of id_token) so CloudFront can gate web-router when `desk_token` exceeds browser size limits. */
+const WEB_GATE_COOKIE = 'desk_web_gate'
 const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
 const PKCE_VERIFIER_COOKIE = 'desk_pkce_verifier'
 
@@ -78,14 +80,19 @@ export function getToken(): string | null {
   return isIdTokenExpired(token) ? null : token
 }
 
-function setIdToken(token: string): void {
+async function setIdToken(token: string): Promise<void> {
   sessionStorage.setItem(TOKEN_KEY, token)
   const maxAge = 3600
-  // Drop a stale host-only desk_token on the apex so it does not shadow the Domain= cookie on subdomains.
+  // Drop stale host-only cookies on the apex so they do not shadow Domain= cookies on subdomains.
   if (effectiveCookieDomain()) {
     document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
+    document.cookie = `${WEB_GATE_COOKIE}=; path=/; max-age=0`
   }
   document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}${sameSiteAndSecureAttrs()}${cookieDomainAttr()}`
+  if (effectiveCookieDomain()) {
+    const gate = await sha256HexLower(token)
+    document.cookie = `${WEB_GATE_COOKIE}=${gate}; path=/; max-age=${maxAge}${sameSiteAndSecureAttrs()}${cookieDomainAttr()}`
+  }
 }
 
 function getRefreshToken(): string | null {
@@ -115,6 +122,8 @@ function clearToken(): void {
   sessionStorage.removeItem(PKCE_VERIFIER_KEY)
   document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
   document.cookie = `${COOKIE_NAME}=; path=/; max-age=0${cookieDomainAttr()}`
+  document.cookie = `${WEB_GATE_COOKIE}=; path=/; max-age=0`
+  document.cookie = `${WEB_GATE_COOKIE}=; path=/; max-age=0${cookieDomainAttr()}`
   document.cookie = `${PKCE_VERIFIER_COOKIE}=; path=/; max-age=0`
 }
 
@@ -203,7 +212,7 @@ async function refreshIdToken(): Promise<boolean> {
       clearToken()
       return false
     }
-    setIdToken(idToken)
+    await setIdToken(idToken)
     const newRefresh = data.refresh_token as string | undefined
     if (newRefresh) setRefreshToken(newRefresh)
     return true
@@ -222,7 +231,7 @@ export async function ensureAuth(): Promise<boolean> {
   if (token) {
     // New tabs for public web routes only send cookies (not sessionStorage). Re-set the cookie so
     // Domain= matches *.apex (fixes host-only cookies from older builds or pre–cookie-domain deploys).
-    if (effectiveCookieDomain()) setIdToken(token)
+    if (effectiveCookieDomain()) await setIdToken(token)
     return true
   }
   if (await refreshIdToken()) return true
@@ -276,7 +285,7 @@ export async function handleCallback(): Promise<boolean> {
   const data = await res.json()
   const idToken = data.id_token as string | undefined
   if (!idToken) return false
-  setIdToken(idToken)
+  await setIdToken(idToken)
   const refreshToken = data.refresh_token as string | undefined
   if (refreshToken) setRefreshToken(refreshToken)
   clearPkceVerifier()
@@ -301,6 +310,14 @@ function randomString(length: number): string {
   crypto.getRandomValues(bytes)
   for (let i = 0; i < length; i++) s += chars[bytes[i]! % chars.length]
   return s
+}
+
+async function sha256HexLower(input: string): Promise<string> {
+  const buf = new TextEncoder().encode(input)
+  const hash = await crypto.subtle.digest('SHA-256', buf)
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 async function sha256Base64Url(input: string): Promise<string> {
