@@ -25,7 +25,10 @@ _ENV_LISTEN = "DESK_WEB_ROUTER_LISTEN"
 # Local-only admin API for `caddy reload` (route updates); avoid default :2019 conflicts.
 DEFAULT_ADMIN_ADDR = "127.0.0.1:29789"
 _ENV_ADMIN = "DESK_WEB_ROUTER_ADMIN"
-# Workstation segment for {ws}-{remote_port}.localhost (no dots in ws; see task comms).
+# Suffix after the route label `{ws}-{remote_port}.<base>` for URLs and browser Host (default dev DNS).
+_ENV_BASE_DOMAIN = "DESK_WEB_ROUTER_BASE_DOMAIN"
+_DEFAULT_BASE_DOMAIN = "localhost"
+# Workstation segment for {ws}-{remote_port}.<base> (no dots in ws; single DNS label).
 _SUBDOMAIN_WS_SAFE = re.compile(r"^[a-zA-Z0-9_-]+$")
 # RFC 1035: one DNS label is at most 63 octets.
 _MAX_DNS_LABEL_LEN = 63
@@ -81,8 +84,14 @@ def _listen_port() -> int:
     raise RuntimeError(f"cannot parse listen port from {addr!r}")
 
 
-def _route_hostname(workstation: str, remote_port: int) -> str:
-    """DNS hostname ``{ws}-{remote_port}.localhost`` for Caddy host matching and browser URLs."""
+def _route_base_domain() -> str:
+    """DNS suffix for route FQDNs (e.g. ``localhost`` or ``router.example.com``)."""
+    raw = (os.environ.get(_ENV_BASE_DOMAIN) or _DEFAULT_BASE_DOMAIN).strip()
+    return raw or _DEFAULT_BASE_DOMAIN
+
+
+def _route_label(workstation: str, remote_port: int) -> str:
+    """First DNS label ``{ws}-{remote_port}`` shared by Caddy matching and FQDNs."""
     ws = str(workstation).strip()
     if not _SUBDOMAIN_WS_SAFE.fullmatch(ws):
         raise click.ClickException(
@@ -98,12 +107,22 @@ def _route_hostname(workstation: str, remote_port: int) -> str:
             f"Workstation and port produce a hostname label longer than {_MAX_DNS_LABEL_LEN} "
             f"characters: {label!r}"
         )
-    return f"{label}.localhost"
+    return label
+
+
+def _route_fqdn(workstation: str, remote_port: int) -> str:
+    """Full hostname ``{ws}-{remote_port}.<DESK_WEB_ROUTER_BASE_DOMAIN>`` for URLs and probes."""
+    return f"{_route_label(workstation, remote_port)}.{_route_base_domain()}"
+
+
+def _route_host_header_regexp_pattern(label: str) -> str:
+    """Regex for the ``Host`` header: first label fixed, any suffix (``label.anything``)."""
+    return f"^{re.escape(label)}\\."
 
 
 def _browser_route_url(workstation: str, remote_port: int) -> str:
-    """Full http URL users should open (``{workstation}-{port}.localhost`` + current listen port)."""
-    host = _route_hostname(workstation, remote_port)
+    """Full http URL users should open (route FQDN + current listen port)."""
+    host = _route_fqdn(workstation, remote_port)
     return f"http://{host}:{_listen_port()}/"
 
 
@@ -156,7 +175,7 @@ def _site_block_opening_lines(listen: str) -> list[str]:
 
     Listing ``http://127.0.0.1:<port>`` (or ``localhost`` / ``[::1]``) as the site address
     makes Caddy wrap all routes in a ``host`` matcher for those names only, which breaks
-    host-based routing (``Host: {ws}-{port}.localhost``). Use ``http://:<port>`` plus
+    host-based routing (``Host: {ws}-{port}.<anything>``). Use ``http://:<port>`` plus
     ``bind`` so the socket listens on loopback without restricting ``Host``.
     """
     addr = listen.strip()
@@ -229,15 +248,15 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         if not ws or remote < 1 or local < 1:
             continue
         try:
-            hostname = _route_hostname(ws, remote)
+            label = _route_label(ws, remote)
         except click.ClickException:
             continue
         safe = _matcher_safe_name(str(ws), remote)
-        route_entries.append((hostname, f"{bind}:{local}", safe))
+        route_entries.append((label, f"{bind}:{local}", safe))
 
     lines.append(
-        "    # Routes: Host {workstation}-{remote_port}.localhost — bind address is independent "
-        "(see DESK_WEB_ROUTER_LISTEN)."
+        "    # Routes: match Host header first label {workstation}-{remote_port} (any DNS suffix); "
+        "bind address is independent (see DESK_WEB_ROUTER_LISTEN)."
     )
     lines.append("")
 
@@ -246,9 +265,10 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     lines.append("    }")
     lines.append("")
 
-    for hostname, upstream, safe in route_entries:
+    for label, upstream, safe in route_entries:
         matcher = f"desk_route_{safe}"
-        lines.append(f"    @{matcher} host {hostname}")
+        pat = _route_host_header_regexp_pattern(label)
+        lines.append(f"    @{matcher} header_regexp Host {pat}")
         lines.append(f"    handle @{matcher} {{")
         lines.extend(_reverse_proxy_block_lines(upstream))
         lines.append("    }")
@@ -347,6 +367,8 @@ def _systemd_env_lines() -> str:
         lines.append(f"Environment={_ENV_LISTEN}={listen.replace('%', '%%')}")
     if admin := os.environ.get(_ENV_ADMIN):
         lines.append(f"Environment={_ENV_ADMIN}={admin.replace('%', '%%')}")
+    if base := os.environ.get(_ENV_BASE_DOMAIN):
+        lines.append(f"Environment={_ENV_BASE_DOMAIN}={base.replace('%', '%%')}")
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -471,7 +493,7 @@ def _apply_caddyfile_from_active_routes() -> tuple[str, int]:
 
 
 def _caddyfile_out_of_sync_with_active_routes() -> bool:
-    """True if the Caddyfile is missing a ``host`` matcher for any active route."""
+    """True if the Caddyfile is missing a ``header_regexp Host`` route for any active route."""
     active = _active_routes()
     if not active:
         return False
@@ -486,10 +508,11 @@ def _caddyfile_out_of_sync_with_active_routes() -> bool:
         ws = str(r.get("workstation", ""))
         rp = int(r.get("remote_port", 0) or 0)
         try:
-            host = _route_hostname(ws, rp)
+            label = _route_label(ws, rp)
         except click.ClickException:
             continue
-        if f"host {host}" not in text:
+        pat = _route_host_header_regexp_pattern(label)
+        if f"header_regexp Host {pat}" not in text:
             return True
     return False
 
@@ -589,10 +612,11 @@ def web_router_start(on_boot: bool, foreground: bool) -> None:
         _start_systemd_service()
         display = _sanitize_listen_for_display(listen)
         lp = _listen_port()
+        bd = _route_base_domain()
         click.echo("Web router configured to run under systemd (user session).")
         click.echo(
             f"Listening on http://{display} — routes at "
-            f"http://<workstation>-<remote_port>.localhost:{lp}/…"
+            f"http://<workstation>-<remote_port>.{bd}:{lp}/…"
         )
         click.echo(f"Caddy access log: {access_log}")
         click.echo(f"Caddyfile: {caddyfile}")
@@ -616,10 +640,11 @@ def web_router_start(on_boot: bool, foreground: bool) -> None:
     _write_router_pid(pid)
     display = _sanitize_listen_for_display(listen)
     lp = _listen_port()
+    bd = _route_base_domain()
     click.echo(f"Web router started (pid {pid}), listening on http://{display}")
     click.echo(
-        f"Routes: http://<workstation>-<remote_port>.localhost:{lp}/… "
-        f"(example: http://dev-5001.localhost:{lp}/)"
+        f"Routes: http://<workstation>-<remote_port>.{bd}:{lp}/… "
+        f"(example: http://dev-5001.{bd}:{lp}/)"
     )
     click.echo(f"Caddy access log: {access_log}")
     click.echo(f"Caddyfile: {caddyfile}")
@@ -728,10 +753,11 @@ def web_router_probe(timeout: float) -> None:
     listen = _listen_address()
     display = _sanitize_listen_for_display(listen)
     lp = _listen_port()
+    bd = _route_base_domain()
 
     click.echo(
         f"Probe base URL: {base} (listen {listen}, bind URL http://{display}; "
-        f"routes use http://<ws>-<port>.localhost:{lp}/)"
+        f"routes use http://<ws>-<port>.{bd}:{lp}/)"
     )
     click.echo("")
 

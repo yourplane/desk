@@ -15,24 +15,28 @@ Copy `config.example` to `~/.config/desk/config.ini` (or set `DESK_CONFIG`).
 
 ## Web router
 
-`desk web-router` reverse-proxies active `desk route` forwards by **hostname**. Browser URLs always use the pattern:
+`desk web-router` reverse-proxies active `desk route` forwards by **hostname**. Caddy matches the **`Host` header on the first DNS label only** (`<workstation>-<remote_port>`), so the suffix after that label can be anything (e.g. `.localhost` for local dev or `.router.example.com` behind an ALB). It does not need a fixed “base hostname” in the config.
 
-`http://<workstation>-<remote_port>.localhost:<listen_port>/…`
+Browser URLs and probes use:
 
-`<listen_port>` comes from `DESK_WEB_ROUTER_LISTEN` (default `127.0.0.1:8780` → `8780`). The address you bind is independent: open `http://dev-5001.localhost:8780/` in the browser even when the server listens only on `127.0.0.1:8780` (modern resolvers map `*.localhost` to loopback).
+`http://<workstation>-<remote_port>.<base>:<listen_port>/…`
 
-Workstation names must be a single DNS label: letters, digits, `_`, and `-` (no dots). Each host maps to one local upstream, so dev servers that use root paths (`/`, `/@vite/client`, WebSockets, …) work without extra path prefixes or cookies.
+`<base>` comes from **`DESK_WEB_ROUTER_BASE_DOMAIN`** (default `localhost`). Examples: `localhost` → `http://dev-5001.localhost:8780/…`; `router.example.com` → `http://dev-5001.router.example.com:8780/…`.
+
+`<listen_port>` comes from `DESK_WEB_ROUTER_LISTEN` (default `127.0.0.1:8780` → `8780`). The bind address is independent of the route hostname: open the URL above in the browser even when Caddy listens only on loopback (for `*.localhost`, modern resolvers map to loopback).
+
+Workstation names must be a single DNS label: letters, digits, `_`, and `-` (no dots). Each route label maps to one local upstream, so dev servers that use root paths (`/`, `/@vite/client`, WebSockets, …) work without extra path prefixes or cookies.
 
 If something still blocks requests (e.g. Vite host checks), `header_up Host` preserves the browser host; you may still need `server.allowedHosts: true` (or similar) in the dev server config.
 
-**Blank page for a URL path under the route (e.g. `/desk-frontend/`) while `/` and `/README.md` work:** the app’s HTML often references **root-absolute** assets (`/src/…`, `/favicon.svg`, …). The browser resolves those against `http://<ws>-<port>.localhost:<listen_port>/`, not under the subpath, so scripts and styles 404 and the page looks empty. This is normal for plain `http.server` from a parent directory. Use a dev server whose document root is that app (e.g. run Vite on the app port, or `python -m http.server` from inside the app folder), or set the bundler **`base`** (e.g. Vite `base`) so asset URLs match the path you use.
+**Blank page for a URL path under the route (e.g. `/desk-frontend/`) while `/` and `/README.md` work:** the app’s HTML often references **root-absolute** assets (`/src/…`, `/favicon.svg`, …). The browser resolves those against `http://<ws>-<port>.<base>:<listen_port>/`, not under the subpath, so scripts and styles 404 and the page looks empty. This is normal for plain `http.server` from a parent directory. Use a dev server whose document root is that app (e.g. run Vite on the app port, or `python -m http.server` from inside the app folder), or set the bundler **`base`** (e.g. Vite `base`) so asset URLs match the path you use.
 
 ### Debugging
 
-- **`desk web-router probe`** — GETs `/health` on the bind address and each active route at `http://<ws>-<port>.localhost:<listen_port>/`; shows status, length, and a short body preview.
+- **`desk web-router probe`** — GETs `/health` on the bind address and each active route at `http://<ws>-<port>.<DESK_WEB_ROUTER_BASE_DOMAIN>:<listen_port>/`; shows status, length, and a short body preview.
 - **`desk web-router sync`** — Regenerates the Caddyfile from active routes and reloads Caddy when the router is running. Use when probe warns about a stale config.
-- **Inspect the live config:** `DESK_STATE_HOME` defaults to `~/.local/state/desk`; the file is `$DESK_STATE_HOME/web-router/Caddyfile`. Confirm it lists `host <workstation>-<remote_port>.localhost` and `reverse_proxy` to your local ports.
-- **`curl`:** Compare direct upstream vs router, e.g. `curl -sv http://127.0.0.1:<local_port>/…` and `curl -sv http://dev-5001.localhost:8780/`.
+- **Inspect the live config:** `DESK_STATE_HOME` defaults to `~/.local/state/desk`; the file is `$DESK_STATE_HOME/web-router/Caddyfile`. Confirm each route has `header_regexp Host ^<workstation>-<remote_port>\\.` and `reverse_proxy` to your local ports (first-label match; any DNS suffix).
+- **`curl`:** Compare direct upstream vs router, e.g. `curl -sv http://127.0.0.1:<local_port>/…` and `curl -sv http://dev-5001.localhost:8780/` (adjust host to match `DESK_WEB_ROUTER_BASE_DOMAIN`).
 - **WebSockets:** In DevTools → Network, check the failing request: status **101** means upgrade OK; **404** often means the request hit the router without a matching rule (wrong `Host`).
 - **Validate Caddy:** `caddy validate --config ~/.local/state/desk/web-router/Caddyfile --adapter caddyfile` (adjust path). **`caddy adapt --config …`** prints JSON and shows how matchers compile.
 - **Access log:** `tail -f ~/.local/state/desk/web-router/access.log` (path from the `log` block in the Caddyfile).
