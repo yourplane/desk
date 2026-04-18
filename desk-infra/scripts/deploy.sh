@@ -2,6 +2,7 @@
 # Build and deploy the desk web app stack using SAM for the Lambda.
 # Usage: ./deploy.sh [stack-name] [aws-profile]
 # Optional env: DESK_CUSTOM_DOMAIN_NAME, DESK_ACM_CERTIFICATE_ARN (both required together; ACM must be in us-east-1).
+# Optional: DESK_ROUTE53_HOSTED_ZONE_ID (Z... for public zone = CustomDomainName), or DESK_ROUTE53_AUTO_LOOKUP=true.
 # ACM for the app should include SANs for the apex and *.apex (e.g. desk.example.com and *.desk.example.com) for public web routes.
 # Also deploys the desk-router CloudFormation stack (latest self-owned router-ami-* AMI) when present.
 # Requires VPC stack "desk" (exports for subnets). Builds frontend after stack deploy, syncs S3, invalidates CloudFront.
@@ -74,6 +75,17 @@ if [ -n "${DESK_CUSTOM_DOMAIN_NAME:-}" ] || [ -n "${DESK_ACM_CERTIFICATE_ARN:-}"
     "AcmCertificateArn=${DESK_ACM_CERTIFICATE_ARN}"
     "EnableWebRouterCloudFront=${DESK_ENABLE_WEB_ROUTER_CLOUDFRONT:-false}"
   )
+  # Optional: resolve Route 53 hosted zone for CustomDomainName (public zone matching the apex FQDN)
+  if [ "${DESK_ROUTE53_AUTO_LOOKUP:-false}" = "true" ] && [ -z "${DESK_ROUTE53_HOSTED_ZONE_ID:-}" ]; then
+    _zone=$(aws route53 list-hosted-zones-by-name --dns-name "${DESK_CUSTOM_DOMAIN_NAME}." \
+      --query 'HostedZones[0].Id' --output text 2>/dev/null || true)
+    if [ -n "$_zone" ] && [ "$_zone" != "None" ]; then
+      export DESK_ROUTE53_HOSTED_ZONE_ID="${_zone##*/hostedzone/}"
+    fi
+  fi
+  if [ -n "${DESK_ROUTE53_HOSTED_ZONE_ID:-}" ]; then
+    SAM_PARAM_ARGS+=( "Route53HostedZoneId=${DESK_ROUTE53_HOSTED_ZONE_ID}" )
+  fi
 fi
 sam deploy \
   --template-file .aws-sam/build/template.yaml \

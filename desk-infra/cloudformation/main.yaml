@@ -24,6 +24,13 @@ Parameters:
       When "true" and a custom domain is set, deploy the second CloudFront distribution for
       *.CustomDomainName (public web routes to the desk router). Requires ACM to include that wildcard
       as a SAN; leave "false" if the certificate only covers the apex hostname.
+  Route53HostedZoneId:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional public hosted zone ID for CustomDomainName (e.g. Z... for zone desk.example.com). When set
+      with EnableWebRouterCloudFront "true", creates a Route 53 wildcard alias (record name *) so
+      {name}-{port}.CustomDomainName resolves to the web-router CloudFront distribution.
 
 Conditions:
   HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, ""]]
@@ -31,6 +38,11 @@ Conditions:
     !And
     - !Condition HasCustomDomain
     - !Equals [!Ref EnableWebRouterCloudFront, "true"]
+  HasRoute53HostedZone: !Not [!Equals [!Ref Route53HostedZoneId, ""]]
+  DeployWebRouterDns:
+    !And
+    - !Condition DeployWebRouterDistribution
+    - !Condition HasRoute53HostedZone
 
 Rules:
   AcmRequiredWithCustomDomain:
@@ -350,6 +362,19 @@ Resources:
           MinimumProtocolVersion: TLSv1.2_2021
         WebACLId: !GetAtt WafRule.Arn
 
+  # Wildcard DNS: *.CustomDomainName → web-router CloudFront (hosted zone must be for CustomDomainName)
+  WebRouterWildcardDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployWebRouterDns
+    Properties:
+      HostedZoneId: !Ref Route53HostedZoneId
+      Name: "*"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt DeskWebRouterDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
   # ---- CloudFront ----
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -457,3 +482,7 @@ Outputs:
     Condition: DeployWebRouterDistribution
     Description: Example base URL for web routes (host is {name}-{port}.CustomDomainName)
     Value: !Sub "https://example.${CustomDomainName}/"
+  WebRouterWildcardDnsManaged:
+    Condition: DeployWebRouterDns
+    Description: Stack manages Route 53 wildcard (*) in the given zone so *.CustomDomainName resolves to web-router CloudFront
+    Value: "true"

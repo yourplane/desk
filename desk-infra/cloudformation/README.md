@@ -50,6 +50,7 @@ export AWS_REGION=us-east-1
 | `CustomDomainName` | Optional FQDN for the app (e.g. `desk.example.com`). Empty = CloudFront default hostname only. Set via **`DESK_CUSTOM_DOMAIN_NAME`** when using `deploy.sh`. |
 | `AcmCertificateArn` | ACM cert ARN in **us-east-1**, required when `CustomDomainName` is set. Set via **`DESK_ACM_CERTIFICATE_ARN`**. |
 | `EnableWebRouterCloudFront` | `"true"` only if ACM includes **`*.CustomDomainName`**. Set via **`DESK_ENABLE_WEB_ROUTER_CLOUDFRONT`** (default **`false`**). |
+| `Route53HostedZoneId` | Optional **`Z...`** for the **public** hosted zone whose domain name equals **`CustomDomainName`** (e.g. zone `desk.example.com`). When set with web-router CloudFront enabled, the stack creates a **wildcard alias** (`*` record) to the web-router distribution so **`{name}-{port}.desk.example.com`** resolves. Set via **`DESK_ROUTE53_HOSTED_ZONE_ID`**, or set **`DESK_ROUTE53_AUTO_LOOKUP=true`** before **`deploy.sh`** to resolve the zone from **`DESK_CUSTOM_DOMAIN_NAME`**. |
 
 Stack outputs include **`CanonicalAppURL`** (custom HTTPS URL when configured, otherwise CloudFront), **`CloudFrontURL`**, and **`CloudFrontDomain`** (DNS target for the distribution).
 
@@ -61,7 +62,7 @@ When enabled and DNS is in place:
 
 1. The **`desk-router`** stack creates an **internal ALB** in front of the router ASG (HTTP from CloudFront VPC origins to port **8780** on the instance). Deploy passes the **CloudFront VPC origin** managed prefix list into the ALB security group.
 2. This stack adds a **second CloudFront distribution** whose alias is **`*.CustomDomainName`** (e.g. `*.desk.example.com`). It uses a **VPC origin** to that internal ALB. A **CloudFront Function** on viewer-request requires the **`desk_token`** cookie; otherwise it redirects to the SPA origin.
-3. **DNS:** Create a **wildcard** record (e.g. Route 53 **A/ALIAS**) for **`*.desk.example.com`** pointing to the **`WebRouterCloudFrontDomain`** output (not the apex distribution). Point the **apex** `desk.example.com` at the main app distribution as before.
+3. **DNS:** Either set **`DESK_ROUTE53_HOSTED_ZONE_ID`** (or **`DESK_ROUTE53_AUTO_LOOKUP=true`**) so **`deploy.sh`** passes **`Route53HostedZoneId`** and the stack creates a **Route 53** wildcard **alias** (`*` in the `desk.example.com` zone) to **`WebRouterCloudFrontDomain`**, **or** manually create a **wildcard** **A/ALIAS** for **`*.desk.example.com`** pointing at that output. Point the **apex** `desk.example.com` at the main app distribution as before.
 4. The frontend build sets **`VITE_WEB_ROUTER_HOST_SUFFIX`** and **`VITE_COOKIE_DOMAIN`** when a custom domain is configured so port chips link to **`https://{name}-{port}.your-apex/`** and the auth cookie is visible on those hosts.
 
 Without a custom domain, public web route links are not generated; local/router-only behavior is unchanged.
