@@ -75,6 +75,22 @@ function clearToken(): void {
   document.cookie = `${PKCE_VERIFIER_COOKIE}=; path=/; max-age=0`
 }
 
+/** Clear stored tokens and PKCE state (e.g. before retrying login after an OAuth error). */
+export function clearAuthTokens(): void {
+  clearToken()
+}
+
+/**
+ * Cognito redirects to the app with `?error=...&error_description=...` when the authorize
+ * request fails (e.g. invalid_scope). No `code` is present.
+ */
+export function readOAuthAuthorizeError(): { error: string; errorDescription: string } | null {
+  const params = new URLSearchParams(window.location.search)
+  const err = params.get('error')
+  if (!err) return null
+  return { error: err, errorDescription: params.get('error_description') ?? '' }
+}
+
 function parseJwtPayload(token: string): unknown | null {
   const parts = token.split('.')
   if (parts.length < 2) return null
@@ -176,8 +192,9 @@ export async function goToLogin(): Promise<void> {
   const params = new URLSearchParams({
     client_id: CONFIG.clientId!,
     response_type: 'code',
-    // offline_access ensures Cognito returns a refresh_token.
-    scope: 'openid email profile offline_access',
+    // Must match Cognito app client AllowedOAuthScopes (see desk-infra cloudformation).
+    // Refresh tokens still come from the authorization code exchange when the client allows them.
+    scope: 'openid email profile',
     redirect_uri: CONFIG.redirectUri!,
     code_challenge: challenge,
     code_challenge_method: 'S256',
