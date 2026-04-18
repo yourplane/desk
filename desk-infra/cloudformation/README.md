@@ -65,6 +65,11 @@ When enabled and DNS is in place:
 3. **DNS:** Either set **`DESK_ROUTE53_HOSTED_ZONE_ID`** (or **`DESK_ROUTE53_AUTO_LOOKUP=true`**) so **`deploy.sh`** passes **`Route53HostedZoneId`** and the stack creates a **Route 53** wildcard **alias** (`*` in the `desk.example.com` zone) to **`WebRouterCloudFrontDomain`**, **or** manually create a **wildcard** **A/ALIAS** for **`*.desk.example.com`** pointing at that output. Point the **apex** `desk.example.com` at the main app distribution as before.
 4. The frontend build sets **`VITE_WEB_ROUTER_HOST_SUFFIX`** and **`VITE_COOKIE_DOMAIN`** when a custom domain is configured so port chips link to **`https://{name}-{port}.your-apex/`** and the auth cookie is visible on those hosts.
 
+### Troubleshooting: “site can’t be reached” or TLS errors on `*.desk.example.com`
+
+- **Cloudflare (or any proxy) in front of the wildcard:** If the wildcard CNAME targets CloudFront but the record is **proxied** (orange cloud), traffic hits Cloudflare’s edge first. Cloudflare’s default **Universal SSL** cert is usually **`*.yourroot.com`**, which **does not** cover **`dev-5173.desk.yourroot.com`** (you need a cert for **`*.desk.yourroot.com`**). The client then often sees **TLS handshake failures** (`ERR_SSL_VERSION_OR_CIPHER_MISMATCH` / similar), while **direct** requests to CloudFront work. **Fix:** set the wildcard record to **DNS only** (grey cloud) so the name resolves to **CloudFront** and the **ACM** cert on the distribution is used, **or** add a **Cloudflare Advanced Certificate** (or custom cert) for **`*.desk.yourroot.com`** and keep proxy on.
+- **Verify CloudFront directly:** `dig +short dXXX.cloudfront.net` should show **Amazon** IPs (`3.x`, `13.x`, `18.x`, …). If `dig +short dev-5173.desk.example.com` shows **Cloudflare** IPs (`104.21.x`, `172.67.x`), you are not reaching CloudFront from the public resolver until proxy/DNS is adjusted.
+
 Without a custom domain, public web route links are not generated; local/router-only behavior is unchanged.
 
 ## Local development
