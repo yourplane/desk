@@ -192,8 +192,9 @@ export async function goToLogin(): Promise<void> {
   const params = new URLSearchParams({
     client_id: CONFIG.clientId!,
     response_type: 'code',
-    // offline_access ensures Cognito returns a refresh_token.
-    scope: 'openid email profile offline_access',
+    // Must match Cognito app client AllowedOAuthScopes (see desk-infra cloudformation).
+    // Refresh tokens still come from the authorization code exchange when the client allows them.
+    scope: 'openid email profile',
     redirect_uri: CONFIG.redirectUri!,
     code_challenge: challenge,
     code_challenge_method: 'S256',

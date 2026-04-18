@@ -11,7 +11,7 @@
 ## Important details
 
 - **Callback URL**: Must match exactly in Cognito app client and in the frontend build (`VITE_COGNITO_REDIRECT_URI`). Deploy script sets this from stack output when building the frontend.
-- **OAuth scopes**: The frontend requests `openid email profile offline_access` at `/oauth2/authorize`. The Cognito app client’s **Allowed OAuth scopes** must include those values. If they do not (for example `invalid_scope` / `invalid_request` on redirect back), enable them in the console or change the requested scopes in code (dropping `offline_access` means no refresh token from the hosted UI flow).
+- **OAuth scopes**: The frontend requests `openid email profile` at `/oauth2/authorize`, matching **`UserPoolAppClient`** in `cloudformation/main.yaml`. The Cognito app client’s **Allowed OAuth scopes** must include those values. If they do not (for example `invalid_scope` / `invalid_request` on redirect back), align the app client or the authorize `scope` string. Refresh tokens still come from the code exchange when the client has refresh token validity and allowed flows configured.
 - **Authorize errors**: If Cognito rejects the authorize request, it redirects to the callback URL with `?error=...&error_description=...` (no `code`). The app shows a stable error screen instead of looping `ensureAuth` → `goToLogin`.
 - **PKCE verifier**: Stored in sessionStorage and a short-lived cookie when redirecting to login so it survives the redirect back (e.g. same or new tab).
 - **API Gateway JWT**: Issuer = `https://cognito-idp.<region>.amazonaws.com/<UserPoolId>`, Audience = app client ID. The `id_token` from Cognito must have matching `iss` and `aud` claims.

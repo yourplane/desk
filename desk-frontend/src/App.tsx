@@ -92,9 +92,9 @@ function App() {
           {authorizeError.description.trim() || authorizeError.error}
         </p>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
-          If you see <code>invalid_scope</code>, open the Cognito app client and enable the OAuth
-          scopes requested by the app (including <code>offline_access</code> for refresh tokens),
-          then try again.
+          If you see <code>invalid_scope</code>, the Cognito app client must allow the same scopes
+          the app requests (<code>openid</code>, <code>email</code>, <code>profile</code>), then try
+          again.
         </p>
         <button
           type="button"
