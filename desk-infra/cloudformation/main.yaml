@@ -3,10 +3,29 @@ Transform: AWS::Serverless-2016-10-31
 Description: Desk web app - Cognito (basic), Lambda (SAM), API Gateway, S3, CloudFront, WAF. Auth at CloudFront + API Gateway JWT.
 
 Parameters:
-  CognitoCallbackURL:
+  CustomDomainName:
     Type: String
-    Default: "https://placeholder.example.com"
-    Description: Callback URL for Cognito hosted UI (after first deploy, set to CloudFront URL from output and redeploy)
+    Default: ""
+    Description: >-
+      Optional FQDN for the app (e.g. desk.example.com). Leave empty to use only the CloudFront domain.
+      Requires AcmCertificateArn (ACM in us-east-1). Request a cert that also covers *.<apex> if you will use
+      subdomains under the same zone later.
+  AcmCertificateArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ACM certificate ARN in us-east-1 for CustomDomainName (and optional wildcard SANs). Required when
+      CustomDomainName is non-empty.
+
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, ""]]
+
+Rules:
+  AcmRequiredWithCustomDomain:
+    RuleCondition: !Not [!Equals [!Ref CustomDomainName, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AcmCertificateArn, ""]]
+        AssertDescription: AcmCertificateArn must be set when CustomDomainName is non-empty.
 
 Resources:
   # ---- Cognito (basic: username/password, no Google) ----
@@ -41,10 +60,17 @@ Resources:
         - COGNITO
       # Keep refresh tokens long-lived so the SPA can renew the short-lived id_token.
       RefreshTokenValidity: 39
-      CallbackURLs:
-        - !Ref CognitoCallbackURL
-      LogoutURLs:
-        - !Ref CognitoCallbackURL
+      # OAuth redirect URIs: CloudFront default domain always; add custom domain when configured.
+      CallbackURLs: !If
+        - HasCustomDomain
+        - - !Sub "https://${CloudFrontDistribution.DomainName}"
+          - !Sub "https://${CustomDomainName}"
+        - - !Sub "https://${CloudFrontDistribution.DomainName}"
+      LogoutURLs: !If
+        - HasCustomDomain
+        - - !Sub "https://${CloudFrontDistribution.DomainName}"
+          - !Sub "https://${CustomDomainName}"
+        - - !Sub "https://${CloudFrontDistribution.DomainName}"
       AllowedOAuthFlows:
         - code
       AllowedOAuthScopes:
@@ -274,8 +300,16 @@ Resources:
             Compress: true
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
-        ViewerCertificate:
-          CloudFrontDefaultCertificate: true
+        Aliases: !If
+          - HasCustomDomain
+          - - !Ref CustomDomainName
+          - []
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref AcmCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
         WebACLId: !GetAtt WafRule.Arn
         CustomErrorResponses:
           - ErrorCode: 403
@@ -304,11 +338,17 @@ Outputs:
     Description: CloudFront distribution ID
     Value: !Ref CloudFrontDistribution
   CloudFrontDomain:
-    Description: CloudFront domain
+    Description: CloudFront domain (target for a CNAME/ALIAS to this distribution)
     Value: !GetAtt CloudFrontDistribution.DomainName
   CloudFrontURL:
-    Description: App URL
+    Description: App URL on the default CloudFront domain
     Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+  CanonicalAppURL:
+    Description: Primary app URL (custom domain if configured, else CloudFront)
+    Value: !If
+      - HasCustomDomain
+      - !Sub "https://${CustomDomainName}"
+      - !Sub "https://${CloudFrontDistribution.DomainName}"
   FrontendBucketName:
     Value: !Ref FrontendBucket
   DeskDataBucketName:
