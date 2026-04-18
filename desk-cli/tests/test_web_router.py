@@ -89,7 +89,7 @@ def test_desk_web_router_probe_checks_active_route(
     result = runner.invoke(cli, ["web-router", "probe"])
     assert result.exit_code == 0
     assert "GET /health" in result.output
-    assert "http://dev.80.localhost:8780/" in result.output
+    assert "http://dev-80.localhost:8780/" in result.output
     assert mock_get.call_count == 2
 
 
@@ -118,7 +118,7 @@ def test_desk_web_router_sync_writes_and_reloads(
     assert "Reloaded Caddy" in result.output
     cf = tmp_path / "web-router" / "Caddyfile"
     assert cf.is_file()
-    assert "host dev.8080.localhost" in cf.read_text()
+    assert "host dev-8080.localhost" in cf.read_text()
     mock_reload.assert_called_once()
 
 
@@ -177,7 +177,7 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
 
     assert result.exit_code == 0
     assert "4242" in result.output
-    assert "dev.5001.localhost" in result.output
+    assert "dev-5001.localhost" in result.output
     caddyfile = tmp_path / "web-router" / "Caddyfile"
     assert caddyfile.is_file()
     text = caddyfile.read_text()
@@ -187,7 +187,7 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     assert "[::1]" in text
     assert "auto_https off" in text
     assert "admin 127.0.0.1:29789" in text
-    assert "host dev.5001.localhost" in text
+    assert "host dev-5001.localhost" in text
     assert "@desk_route_" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
     assert "header_up Host {http.request.host}" in text
@@ -235,8 +235,8 @@ def test_desk_web_router_start_multi_route_two_hosts(
 
     assert result.exit_code == 0
     text = (tmp_path / "web-router" / "Caddyfile").read_text()
-    assert "host dev.5001.localhost" in text
-    assert "host dev.5002.localhost" in text
+    assert "host dev-5001.localhost" in text
+    assert "host dev-5002.localhost" in text
     assert "reverse_proxy 127.0.0.1:45001" in text
     assert "reverse_proxy 127.0.0.1:45002" in text
 
@@ -414,5 +414,5 @@ def test_refresh_writes_caddyfile_without_reload_when_router_stopped(
         refresh_web_router_after_route_change()
     caddyfile = tmp_path / "web-router" / "Caddyfile"
     assert caddyfile.is_file()
-    assert "host dev.80.localhost" in caddyfile.read_text()
+    assert "host dev-80.localhost" in caddyfile.read_text()
     _mock_reload.assert_not_called()
