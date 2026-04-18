@@ -25,8 +25,10 @@ _ENV_LISTEN = "DESK_WEB_ROUTER_LISTEN"
 # Local-only admin API for `caddy reload` (route updates); avoid default :2019 conflicts.
 DEFAULT_ADMIN_ADDR = "127.0.0.1:29789"
 _ENV_ADMIN = "DESK_WEB_ROUTER_ADMIN"
-# Workstation label for {ws}.{remote_port}.localhost (no dots; see task comms).
+# Workstation segment for {ws}-{remote_port}.localhost (no dots in ws; see task comms).
 _SUBDOMAIN_WS_SAFE = re.compile(r"^[a-zA-Z0-9_-]+$")
+# RFC 1035: one DNS label is at most 63 octets.
+_MAX_DNS_LABEL_LEN = 63
 
 
 def _router_dir() -> str:
@@ -80,7 +82,7 @@ def _listen_port() -> int:
 
 
 def _route_hostname(workstation: str, remote_port: int) -> str:
-    """DNS hostname ``{ws}.{remote_port}.localhost`` for Caddy host matching and browser URLs."""
+    """DNS hostname ``{ws}-{remote_port}.localhost`` for Caddy host matching and browser URLs."""
     ws = str(workstation).strip()
     if not _SUBDOMAIN_WS_SAFE.fullmatch(ws):
         raise click.ClickException(
@@ -90,11 +92,17 @@ def _route_hostname(workstation: str, remote_port: int) -> str:
     port = int(remote_port)
     if port < 1 or port > 65535:
         raise click.ClickException(f"Invalid remote port: {remote_port}")
-    return f"{ws}.{port}.localhost"
+    label = f"{ws}-{port}"
+    if len(label) > _MAX_DNS_LABEL_LEN:
+        raise click.ClickException(
+            f"Workstation and port produce a hostname label longer than {_MAX_DNS_LABEL_LEN} "
+            f"characters: {label!r}"
+        )
+    return f"{label}.localhost"
 
 
 def _browser_route_url(workstation: str, remote_port: int) -> str:
-    """Full http URL users should open (always ``*.localhost`` + current listen port)."""
+    """Full http URL users should open (``{workstation}-{port}.localhost`` + current listen port)."""
     host = _route_hostname(workstation, remote_port)
     return f"http://{host}:{_listen_port()}/"
 
@@ -148,7 +156,7 @@ def _site_block_opening_lines(listen: str) -> list[str]:
 
     Listing ``http://127.0.0.1:<port>`` (or ``localhost`` / ``[::1]``) as the site address
     makes Caddy wrap all routes in a ``host`` matcher for those names only, which breaks
-    subdomain routing (``Host: {ws}.{port}.localhost``). Use ``http://:<port>`` plus
+    host-based routing (``Host: {ws}-{port}.localhost``). Use ``http://:<port>`` plus
     ``bind`` so the socket listens on loopback without restricting ``Host``.
     """
     addr = listen.strip()
@@ -228,7 +236,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         route_entries.append((hostname, f"{bind}:{local}", safe))
 
     lines.append(
-        "    # Routes: Host {workstation}.{remote_port}.localhost — bind address is independent "
+        "    # Routes: Host {workstation}-{remote_port}.localhost — bind address is independent "
         "(see DESK_WEB_ROUTER_LISTEN)."
     )
     lines.append("")
@@ -584,7 +592,7 @@ def web_router_start(on_boot: bool, foreground: bool) -> None:
         click.echo("Web router configured to run under systemd (user session).")
         click.echo(
             f"Listening on http://{display} — routes at "
-            f"http://<workstation>.<remote_port>.localhost:{lp}/…"
+            f"http://<workstation>-<remote_port>.localhost:{lp}/…"
         )
         click.echo(f"Caddy access log: {access_log}")
         click.echo(f"Caddyfile: {caddyfile}")
@@ -610,8 +618,8 @@ def web_router_start(on_boot: bool, foreground: bool) -> None:
     lp = _listen_port()
     click.echo(f"Web router started (pid {pid}), listening on http://{display}")
     click.echo(
-        f"Routes: http://<workstation>.<remote_port>.localhost:{lp}/… "
-        f"(example: http://dev.5001.localhost:{lp}/)"
+        f"Routes: http://<workstation>-<remote_port>.localhost:{lp}/… "
+        f"(example: http://dev-5001.localhost:{lp}/)"
     )
     click.echo(f"Caddy access log: {access_log}")
     click.echo(f"Caddyfile: {caddyfile}")
@@ -723,7 +731,7 @@ def web_router_probe(timeout: float) -> None:
 
     click.echo(
         f"Probe base URL: {base} (listen {listen}, bind URL http://{display}; "
-        f"routes use http://<ws>.<port>.localhost:{lp}/)"
+        f"routes use http://<ws>-<port>.localhost:{lp}/)"
     )
     click.echo("")
 
