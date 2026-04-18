@@ -10,6 +10,6 @@
 
 ## Important details
 
-- **Callback URL**: Must match exactly in Cognito app client and in the frontend build (`VITE_COGNITO_REDIRECT_URI`). Deploy script sets this from stack output when building the frontend.
+- **Callback URL**: Must match exactly in the Cognito app client and in the OAuth request. The CloudFormation template registers the CloudFront URL and, when a custom domain is configured, that HTTPS origin as well. The SPA uses **`window.location.origin`** as `redirect_uri` unless **`VITE_COGNITO_REDIRECT_URI`** is set (override for tests or special layouts).
 - **PKCE verifier**: Stored in sessionStorage and a short-lived cookie when redirecting to login so it survives the redirect back (e.g. same or new tab).
 - **API Gateway JWT**: Issuer = `https://cognito-idp.<region>.amazonaws.com/<UserPoolId>`, Audience = app client ID. The `id_token` from Cognito must have matching `iss` and `aud` claims.

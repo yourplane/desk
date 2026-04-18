@@ -14,7 +14,14 @@ const CONFIG = {
   userPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID as string | undefined,
   clientId: import.meta.env.VITE_COGNITO_CLIENT_ID as string | undefined,
   domain: import.meta.env.VITE_COGNITO_DOMAIN as string | undefined,
-  redirectUri: import.meta.env.VITE_COGNITO_REDIRECT_URI as string | undefined,
+}
+
+/** OAuth redirect_uri: optional env override; otherwise current origin (supports CloudFront + custom domain). */
+function getRedirectUri(): string {
+  const fromEnv = import.meta.env.VITE_COGNITO_REDIRECT_URI as string | undefined
+  if (fromEnv) return fromEnv
+  if (typeof window !== 'undefined') return window.location.origin
+  return ''
 }
 
 const TOKEN_KEY = 'desk_id_token'
@@ -24,7 +31,10 @@ const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
 const PKCE_VERIFIER_COOKIE = 'desk_pkce_verifier'
 
 export function isAuthEnabled(): boolean {
-  return !!(CONFIG.userPoolId && CONFIG.clientId && CONFIG.domain && CONFIG.redirectUri)
+  if (!CONFIG.userPoolId || !CONFIG.clientId || !CONFIG.domain) return false
+  if (import.meta.env.VITE_COGNITO_REDIRECT_URI) return true
+  if (typeof window !== 'undefined') return true
+  return false
 }
 
 export function getToken(): string | null {
@@ -178,7 +188,7 @@ export async function goToLogin(): Promise<void> {
     response_type: 'code',
     // offline_access ensures Cognito returns a refresh_token.
     scope: 'openid email profile offline_access',
-    redirect_uri: CONFIG.redirectUri!,
+    redirect_uri: getRedirectUri(),
     code_challenge: challenge,
     code_challenge_method: 'S256',
   })
@@ -198,7 +208,7 @@ export async function handleCallback(): Promise<boolean> {
     grant_type: 'authorization_code',
     client_id: CONFIG.clientId!,
     code,
-    redirect_uri: CONFIG.redirectUri!,
+    redirect_uri: getRedirectUri(),
     code_verifier: verifier,
   })
   const res = await fetch(`${base}/oauth2/token`, {
@@ -222,7 +232,7 @@ export function logout(): void {
   if (isAuthEnabled() && CONFIG.domain) {
     const region = import.meta.env.VITE_COGNITO_REGION || 'us-east-1'
     const base = `https://${CONFIG.domain}.auth.${region}.amazoncognito.com`
-    window.location.href = `${base}/logout?client_id=${CONFIG.clientId}&logout_uri=${encodeURIComponent(CONFIG.redirectUri!)}`
+    window.location.href = `${base}/logout?client_id=${CONFIG.clientId}&logout_uri=${encodeURIComponent(getRedirectUri())}`
   }
 }
 
