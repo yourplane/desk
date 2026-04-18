@@ -69,8 +69,14 @@ Resources:
       Protocol: HTTP
       TargetType: instance
       HealthCheckEnabled: true
-      HealthCheckProtocol: TCP
-      HealthCheckPort: "8780"
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckPort: traffic-port
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200,404
       Tags:
         - Key: desk:managed
           Value: "true"
@@ -89,14 +95,8 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: desk-router-sg
-      GroupDescription: Desk managed router - HTTP from internal ALB; egress for SSM and NAT
+      GroupDescription: Desk managed router - no inbound; egress for SSM and NAT (no instance-to-instance access)
       VpcId: !ImportValue desk-VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 8780
-          ToPort: 8780
-          SourceSecurityGroupId: !Ref RouterAlbSecurityGroup
-          Description: Web router from internal ALB
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -106,6 +106,16 @@ Resources:
           Value: desk-router-sg
         - Key: desk:managed
           Value: "true"
+
+  # Separate rule so CloudFormation does not replace the security group (GroupName is fixed).
+  RouterInstanceIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RouterSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8780
+      ToPort: 8780
+      SourceSecurityGroupId: !Ref RouterAlbSecurityGroup
 
   RouterRole:
     Type: AWS::IAM::Role

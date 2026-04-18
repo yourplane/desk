@@ -49,12 +49,15 @@ export AWS_REGION=us-east-1
 |-----------|-------------|
 | `CustomDomainName` | Optional FQDN for the app (e.g. `desk.example.com`). Empty = CloudFront default hostname only. Set via **`DESK_CUSTOM_DOMAIN_NAME`** when using `deploy.sh`. |
 | `AcmCertificateArn` | ACM cert ARN in **us-east-1**, required when `CustomDomainName` is set. Set via **`DESK_ACM_CERTIFICATE_ARN`**. |
+| `EnableWebRouterCloudFront` | `"true"` only if ACM includes **`*.CustomDomainName`**. Set via **`DESK_ENABLE_WEB_ROUTER_CLOUDFRONT`** (default **`false`**). |
 
 Stack outputs include **`CanonicalAppURL`** (custom HTTPS URL when configured, otherwise CloudFront), **`CloudFrontURL`**, and **`CloudFrontDomain`** (DNS target for the distribution).
 
 ## Public web routes (custom domain only)
 
-When **`DESK_CUSTOM_DOMAIN_NAME`** is set and the ACM certificate includes **`*.your-apex`** (e.g. `*.desk.example.com`) as well as the apex:
+Set **`DESK_ENABLE_WEB_ROUTER_CLOUDFRONT=true`** when deploying (together with **`DESK_CUSTOM_DOMAIN_NAME`** and **`DESK_ACM_CERTIFICATE_ARN`**) if the ACM certificate includes a **wildcard SAN** for **`*.your-apex`** (e.g. `*.desk.example.com`). If the certificate only covers the apex hostname, leave this **`false`** (default) or the stack update will fail when CloudFront tries to attach the **`*.apex`** alias.
+
+When enabled and DNS is in place:
 
 1. The **`desk-router`** stack creates an **internal ALB** in front of the router ASG (HTTP from CloudFront VPC origins to port **8780** on the instance). Deploy passes the **CloudFront VPC origin** managed prefix list into the ALB security group.
 2. This stack adds a **second CloudFront distribution** whose alias is **`*.CustomDomainName`** (e.g. `*.desk.example.com`). It uses a **VPC origin** to that internal ALB. A **CloudFront Function** on viewer-request requires the **`desk_token`** cookie; otherwise it redirects to the SPA origin.

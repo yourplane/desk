@@ -27,13 +27,14 @@ echo "==> Deploying desk-router stack..."
 ROUTER_AMI=$(aws ec2 describe-images --owners self \
   --filters "Name=name,Values=router-ami-*" \
   --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text 2>/dev/null || true)
+# CloudFront → origin (ALB) prefix list; name is region/account-specific but this is the standard global name.
 CLOUDFRONT_VPC_PL=$(aws ec2 describe-managed-prefix-lists \
-  --filters "Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing.vpc" \
+  --filters "Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing" \
   --query 'PrefixLists[0].PrefixListId' --output text 2>/dev/null || true)
 if [ -z "$ROUTER_AMI" ] || [ "$ROUTER_AMI" = "None" ]; then
   echo "Warning: No self-owned router-ami-* AMI found; skipping desk-router deploy." >&2
 elif [ -z "$CLOUDFRONT_VPC_PL" ] || [ "$CLOUDFRONT_VPC_PL" = "None" ]; then
-  echo "Error: Could not resolve EC2 managed prefix list com.amazonaws.global.cloudfront.origin-facing.vpc (needed for desk-router ALB)." >&2
+  echo "Error: Could not resolve EC2 managed prefix list com.amazonaws.global.cloudfront.origin-facing (needed for desk-router ALB)." >&2
   exit 1
 else
   aws cloudformation deploy \
@@ -61,10 +62,23 @@ cd "$CLOUDFORMATION_DIR"
 export DESK_SDK_PATH="$REPO_ROOT/desk-sdk"
 sam build --template-file main.yaml
 echo "==> SAM deploy (CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME:-<empty>})..."
+SAM_PARAM_ARGS=()
+if [ -n "${DESK_CUSTOM_DOMAIN_NAME:-}" ] || [ -n "${DESK_ACM_CERTIFICATE_ARN:-}" ]; then
+  if [ -z "${DESK_CUSTOM_DOMAIN_NAME:-}" ] || [ -z "${DESK_ACM_CERTIFICATE_ARN:-}" ]; then
+    echo "Error: set both DESK_CUSTOM_DOMAIN_NAME and DESK_ACM_CERTIFICATE_ARN (ACM in us-east-1), or neither." >&2
+    exit 1
+  fi
+  SAM_PARAM_ARGS=(
+    --parameter-overrides
+    "CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME}"
+    "AcmCertificateArn=${DESK_ACM_CERTIFICATE_ARN}"
+    "EnableWebRouterCloudFront=${DESK_ENABLE_WEB_ROUTER_CLOUDFRONT:-false}"
+  )
+fi
 sam deploy \
   --template-file .aws-sam/build/template.yaml \
   --stack-name "$STACK_NAME" \
-  --parameter-overrides "CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME:-} AcmCertificateArn=${DESK_ACM_CERTIFICATE_ARN:-}" \
+  "${SAM_PARAM_ARGS[@]}" \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --resolve-s3 \
   --no-confirm-changeset \
