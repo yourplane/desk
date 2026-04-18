@@ -30,9 +30,22 @@ const COOKIE_NAME = 'desk_token'
 const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
 const PKCE_VERIFIER_COOKIE = 'desk_pkce_verifier'
 
+/**
+ * Shared cookie domain for `*.CustomDomainName` web-router hosts.
+ * Prefer VITE_COOKIE_DOMAIN; if only VITE_WEB_ROUTER_HOST_SUFFIX is set (e.g. manual build), derive `.suffix`.
+ */
+function effectiveCookieDomain(): string {
+  const explicit = (import.meta.env.VITE_COOKIE_DOMAIN as string | undefined)?.trim()
+  if (explicit) return explicit.startsWith('.') ? explicit : `.${explicit}`
+  const suffix = (import.meta.env.VITE_WEB_ROUTER_HOST_SUFFIX as string | undefined)?.trim()
+  if (!suffix) return ''
+  const host = suffix.replace(/^\./, '')
+  return host ? `.${host}` : ''
+}
+
 /** Optional `Domain=` for desk_token (e.g. .desk.example.com) so subdomains receive the cookie. */
 function cookieDomainAttr(): string {
-  const d = (import.meta.env.VITE_COOKIE_DOMAIN as string | undefined)?.trim()
+  const d = effectiveCookieDomain()
   if (!d) return ''
   return `; Domain=${d}`
 }
@@ -192,7 +205,13 @@ async function refreshIdToken(): Promise<boolean> {
 
 export async function ensureAuth(): Promise<boolean> {
   if (!isAuthEnabled()) return true
-  if (getToken()) return true
+  const token = getToken()
+  if (token) {
+    // New tabs for public web routes only send cookies (not sessionStorage). Re-set the cookie so
+    // Domain= matches *.apex (fixes host-only cookies from older builds or pre–cookie-domain deploys).
+    if (effectiveCookieDomain()) setIdToken(token)
+    return true
+  }
   if (await refreshIdToken()) return true
   goToLogin()
   return false
