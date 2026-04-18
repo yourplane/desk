@@ -1,5 +1,13 @@
-import { useEffect, useState } from 'react'
-import { ensureAuth, getToken, goToLogin, handleCallback, isAuthEnabled } from './auth'
+import { useLayoutEffect, useState } from 'react'
+import {
+  clearAuthTokens,
+  ensureAuth,
+  getToken,
+  goToLogin,
+  handleCallback,
+  isAuthEnabled,
+  readOAuthAuthorizeError,
+} from './auth'
 import { WorkstationsPage } from './pages/WorkstationsPage'
 import { CostTracker } from './pages/CostTracker'
 import { ReaperPage } from './pages/ReaperPage'
@@ -21,11 +29,14 @@ function App() {
   const [ready, setReady] = useState(false)
   const [isCallback, setIsCallback] = useState(false)
   const [callbackFailed, setCallbackFailed] = useState(false)
+  const [authorizeError, setAuthorizeError] = useState<{ error: string; description: string } | null>(
+    null,
+  )
   const [page, setPage] = useState<Page>('workstations')
   const [commandSection, setCommandSection] = useState<CommandSection>('manage')
   const info = buildInfo()
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('code')) {
       setIsCallback(true)
@@ -42,6 +53,15 @@ function App() {
         setIsCallback(false)
       })
       return
+    }
+    if (isAuthEnabled()) {
+      const oauthErr = readOAuthAuthorizeError()
+      if (oauthErr) {
+        setAuthorizeError({ error: oauthErr.error, description: oauthErr.errorDescription })
+        window.history.replaceState({}, '', window.location.pathname || '/')
+        setReady(true)
+        return
+      }
     }
     if (!isAuthEnabled()) {
       setReady(true)
@@ -61,6 +81,33 @@ function App() {
     return (
       <div className="app">
         <p>Redirecting to login…</p>
+      </div>
+    )
+  }
+  if (authorizeError) {
+    return (
+      <div className="app">
+        <h1 className="page-title">Sign-in error</h1>
+        <p role="alert">
+          {authorizeError.description.trim() || authorizeError.error}
+        </p>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
+          If you see <code>invalid_scope</code>, open the Cognito app client and enable the OAuth
+          scopes requested by the app (including <code>offline_access</code> for refresh tokens),
+          then try again.
+        </p>
+        <button
+          type="button"
+          className="btn btn-start"
+          style={{ marginTop: '1rem' }}
+          onClick={() => {
+            clearAuthTokens()
+            setAuthorizeError(null)
+            void goToLogin()
+          }}
+        >
+          Try again
+        </button>
       </div>
     )
   }
