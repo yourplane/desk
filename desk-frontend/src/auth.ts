@@ -50,6 +50,15 @@ function cookieDomainAttr(): string {
   return `; Domain=${d}`
 }
 
+/** Lax is wrong for some nested-subdomain navigations; None+Secure sends desk_token on *.apex web-router tabs. */
+function sameSiteAndSecureAttrs(): string {
+  const https = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  if (effectiveCookieDomain() && https) {
+    return '; SameSite=None; Secure'
+  }
+  return `; SameSite=Lax${https ? '; Secure' : ''}`
+}
+
 export function isAuthEnabled(): boolean {
   if (!CONFIG.userPoolId || !CONFIG.clientId || !CONFIG.domain) return false
   if (import.meta.env.VITE_COGNITO_REDIRECT_URI) return true
@@ -72,8 +81,11 @@ export function getToken(): string | null {
 function setIdToken(token: string): void {
   sessionStorage.setItem(TOKEN_KEY, token)
   const maxAge = 3600
-  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
-  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${secure}${cookieDomainAttr()}`
+  // Drop a stale host-only desk_token on the apex so it does not shadow the Domain= cookie on subdomains.
+  if (effectiveCookieDomain()) {
+    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
+  }
+  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}${sameSiteAndSecureAttrs()}${cookieDomainAttr()}`
 }
 
 function getRefreshToken(): string | null {
@@ -101,6 +113,7 @@ function clearToken(): void {
     // ignore
   }
   sessionStorage.removeItem(PKCE_VERIFIER_KEY)
+  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
   document.cookie = `${COOKIE_NAME}=; path=/; max-age=0${cookieDomainAttr()}`
   document.cookie = `${PKCE_VERIFIER_COOKIE}=; path=/; max-age=0`
 }
