@@ -183,8 +183,7 @@ def test_desk_web_router_start_writes_caddyfile_and_pid(
     text = caddyfile.read_text()
     assert "8780" in text
     assert "http://:8780" in text
-    assert "bind 127.0.0.1" in text
-    assert "[::1]" in text
+    assert "bind 127.0.0.1" not in text
     assert "auto_https off" in text
     assert "admin 127.0.0.1:29789" in text
     assert r"header_regexp Host ^dev\-5001\." in text

@@ -20,7 +20,7 @@ from desk.config import get_state_home
 from desk_cli.commands.route import _load_routes, _logs_dir, _pid_alive, _route_status
 
 UNIT_NAME = "desk-web-router.service"
-DEFAULT_LISTEN = "127.0.0.1:8780"
+DEFAULT_LISTEN = "0.0.0.0:8780"
 _ENV_LISTEN = "DESK_WEB_ROUTER_LISTEN"
 # Local-only admin API for `caddy reload` (route updates); avoid default :2019 conflicts.
 DEFAULT_ADMIN_ADDR = "127.0.0.1:29789"
@@ -63,7 +63,7 @@ def _listen_address() -> str:
     if raw.startswith(":"):
         return raw
     if re.fullmatch(r"\d+", raw):
-        return f"127.0.0.1:{raw}"
+        return f"0.0.0.0:{raw}"
     return raw
 
 
@@ -128,7 +128,9 @@ def _browser_route_url(workstation: str, remote_port: int) -> str:
 
 def _sanitize_listen_for_display(addr: str) -> str:
     if addr.startswith(":"):
-        return f"localhost{addr}"
+        return f"all interfaces{addr}"
+    if addr.startswith("0.0.0.0:"):
+        return addr.replace("0.0.0.0", "all interfaces", 1)
     return addr.replace("127.0.0.1", "localhost", 1)
 
 
@@ -137,6 +139,9 @@ def _probe_base_url() -> str:
     addr = _listen_address()
     if addr.startswith(":"):
         return f"http://127.0.0.1{addr}"
+    if addr.startswith("0.0.0.0:"):
+        port_s = addr.split(":", 1)[1]
+        return f"http://127.0.0.1:{port_s}"
     return f"http://{addr}"
 
 
@@ -175,20 +180,16 @@ def _site_block_opening_lines(listen: str) -> list[str]:
 
     Listing ``http://127.0.0.1:<port>`` (or ``localhost`` / ``[::1]``) as the site address
     makes Caddy wrap all routes in a ``host`` matcher for those names only, which breaks
-    host-based routing (``Host: {ws}-{port}.<anything>``). Use ``http://:<port>`` plus
-    ``bind`` so the socket listens on loopback without restricting ``Host``.
+    host-based routing (``Host: {ws}-{port}.<anything>``). Use ``http://:<port>`` instead;
+    add ``bind`` only when the listen address is explicitly loopback or a specific host.
     """
     addr = listen.strip()
     port = _listen_port()
 
     if addr.startswith(":") or re.fullmatch(r"\d+", addr):
-        # ``:port`` is shorthand for "listen on this port"; for local-only base domains we bind
-        # loopback so Host-based routing still works. For a public suffix (managed router behind
-        # an ALB), we must listen on all interfaces — otherwise the load balancer cannot connect.
-        base = _route_base_domain()
-        if base and base not in (_DEFAULT_BASE_DOMAIN, "localhost"):
-            return [f"http://:{port} {{"]
-        return [f"http://:{port} {{", "    bind 127.0.0.1 [::1]"]
+        # ``:port`` / bare port: listen on all interfaces (no ``bind``) so Host-based routing
+        # works and remote clients (e.g. ALB) can reach the router.
+        return [f"http://:{port} {{"]
 
     if ":" not in addr:
         raise RuntimeError(f"cannot parse listen address: {listen!r}")
