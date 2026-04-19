@@ -52,7 +52,7 @@ function cookieDomainAttr(): string {
   return `; Domain=${d}`
 }
 
-/** Lax is wrong for some nested-subdomain navigations; None+Secure sends desk_token on *.apex web-router tabs. */
+/** SameSite=None+Secure for the small `desk_web_gate` Domain cookie (sent to *.apex web-router hosts). */
 function sameSiteAndSecureAttrs(): string {
   const https = typeof window !== 'undefined' && window.location.protocol === 'https:'
   if (effectiveCookieDomain() && https) {
@@ -83,15 +83,22 @@ export function getToken(): string | null {
 async function setIdToken(token: string): Promise<void> {
   sessionStorage.setItem(TOKEN_KEY, token)
   const maxAge = 3600
-  // Drop stale host-only cookies on the apex so they do not shadow Domain= cookies on subdomains.
+  const https = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  const secureOnly = https ? '; Secure' : ''
+
   if (effectiveCookieDomain()) {
+    // Clear stale variants (host-only and Domain=) so we do not stack duplicates.
     document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`
     document.cookie = `${WEB_GATE_COOKIE}=; path=/; max-age=0`
-  }
-  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}${sameSiteAndSecureAttrs()}${cookieDomainAttr()}`
-  if (effectiveCookieDomain()) {
+    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0${cookieDomainAttr()}`
+    document.cookie = `${WEB_GATE_COOKIE}=; path=/; max-age=0${cookieDomainAttr()}`
+    // Large JWT: host-only on the desk apex (not sent to *.desk — avoids huge Cookie headers at CloudFront).
+    // Web-router hosts only need the small gate cookie (Domain= + SameSite=None).
+    document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${secureOnly}`
     const gate = await sha256HexLower(token)
     document.cookie = `${WEB_GATE_COOKIE}=${gate}; path=/; max-age=${maxAge}${sameSiteAndSecureAttrs()}${cookieDomainAttr()}`
+  } else {
+    document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}${sameSiteAndSecureAttrs()}${cookieDomainAttr()}`
   }
 }
 

@@ -305,20 +305,32 @@ Resources:
       Name: !Sub "${AWS::StackName}-router-subdomain-auth"
       AutoPublish: true
       FunctionCode: !Sub |
+        function cookieHeaderString(headers) {
+          var c = headers.cookie;
+          if (!c) return "";
+          var s = c.value ? c.value : "";
+          if (c.multiValue && c.multiValue.length > 0) {
+            for (var i = 0; i < c.multiValue.length; i++) {
+              if (c.multiValue[i].value) {
+                s = s ? s + "; " + c.multiValue[i].value : c.multiValue[i].value;
+              }
+            }
+          }
+          return s;
+        }
         function handler(event) {
           var request = event.request;
           var hostHeader = request.headers.host;
           var host = hostHeader ? hostHeader.value : "";
           var colon = host.indexOf(":");
           if (colon >= 0) host = host.substring(0, colon);
+          if (host.length > 0 && host.charAt(host.length - 1) === ".") {
+            host = host.substring(0, host.length - 1);
+          }
           var apex = "${CustomDomainName}";
           if (host.length > 0 && host !== apex && host.endsWith("." + apex)) {
-            var cookie = request.headers.cookie;
-            var has = false;
-            if (cookie && cookie.value) {
-              var cv = cookie.value.toLowerCase();
-              has = cv.indexOf("desk_token=") >= 0 || cv.indexOf("desk_web_gate=") >= 0;
-            }
+            var cv = cookieHeaderString(request.headers).toLowerCase();
+            var has = cv.indexOf("desk_token=") >= 0 || cv.indexOf("desk_web_gate=") >= 0;
             if (!has) {
               return {
                 statusCode: 302,
