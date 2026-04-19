@@ -227,11 +227,13 @@ Resources:
           Fn::Base64: !Sub |
             #!/bin/bash
             set -euo pipefail
-            sudo -u ubuntu env XDG_RUNTIME_DIR=/run/user/1000 bash -lc '
+            sudo -u ubuntu env XDG_RUNTIME_DIR=/run/user/1000 AWS_DEFAULT_REGION=${AWS::Region} bash -lc '
               export DESK_WEB_ROUTER_LISTEN=0.0.0.0:8780
               export DESK_WEB_ROUTER_BASE_DOMAIN=${WebRouterBaseDomain}
               desk web-router stop 2>/dev/null || true
               desk web-router start --on-boot
+              desk route-sync stop 2>/dev/null || true
+              desk route-sync start --on-boot --interval 10
             '
         TagSpecifications:
           - ResourceType: instance
