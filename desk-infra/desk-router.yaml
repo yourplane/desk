@@ -9,6 +9,17 @@ Parameters:
     Type: String
     Default: t3.small
     Description: Burstable instance; default is enough for a small number of routes and users (override if needed).
+  DeskWebAppStackName:
+    Type: String
+    Default: desk-web
+    Description: >-
+      Name of the SAM/web-app stack that defines the data bucket (DeskDataBucketName output).
+      Must match the stack used for `sam deploy`; bucket name is {stack}-data-{account}.
+  DeskVpcStackName:
+    Type: String
+    Default: desk
+    Description: >-
+      VPC stack name probed when resolving the data bucket (second candidate after DeskWebAppStackName).
 
 Resources:
   RouterSecurityGroup:
@@ -77,6 +88,30 @@ Resources:
             Action:
               - ssm:TerminateSession
             Resource: "*"
+          # route-sync pull: resolve DESK_DATA_BUCKET via CloudFormation outputs, then read web-routes.json from S3.
+          - Sid: CfnDescribeDeskDataStacks
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+            Resource:
+              - !Sub
+                - "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${WebStack}/*"
+                - WebStack: !Ref DeskWebAppStackName
+              - !Sub
+                - "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${VpcStack}/*"
+                - VpcStack: !Ref DeskVpcStackName
+          - Sid: S3DeskDataBucketRead
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub
+                - "arn:${AWS::Partition}:s3:::${Prefix}-data-${AWS::AccountId}"
+                - Prefix: !Ref DeskWebAppStackName
+              - !Sub
+                - "arn:${AWS::Partition}:s3:::${Prefix}-data-${AWS::AccountId}/*"
+                - Prefix: !Ref DeskWebAppStackName
 
   RouterInstanceProfile:
     Type: AWS::IAM::InstanceProfile
