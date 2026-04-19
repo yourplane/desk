@@ -20,6 +20,17 @@ Parameters:
     Description: >-
       EC2 managed prefix list ID for CloudFront VPC origins (com.amazonaws.global.cloudfront.origin-facing.vpc).
       Required for the internal ALB security group. Look up with deploy.sh or the EC2 console.
+  DeskWebAppStackName:
+    Type: String
+    Default: desk-web
+    Description: >-
+      Name of the SAM/web-app stack that defines the data bucket (DeskDataBucketName output).
+      Must match the stack used for `sam deploy`; bucket name is {stack}-data-{account}.
+  DeskVpcStackName:
+    Type: String
+    Default: desk
+    Description: >-
+      VPC stack name probed when resolving the data bucket (second candidate after DeskWebAppStackName).
 
 Resources:
   RouterAlbSecurityGroup:
@@ -167,6 +178,30 @@ Resources:
             Action:
               - ssm:TerminateSession
             Resource: "*"
+          # route-sync pull: resolve DESK_DATA_BUCKET via CloudFormation outputs, then read web-routes.json from S3.
+          - Sid: CfnDescribeDeskDataStacks
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+            Resource:
+              - !Sub
+                - "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${WebStack}/*"
+                - WebStack: !Ref DeskWebAppStackName
+              - !Sub
+                - "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${VpcStack}/*"
+                - VpcStack: !Ref DeskVpcStackName
+          - Sid: S3DeskDataBucketRead
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub
+                - "arn:${AWS::Partition}:s3:::${Prefix}-data-${AWS::AccountId}"
+                - Prefix: !Ref DeskWebAppStackName
+              - !Sub
+                - "arn:${AWS::Partition}:s3:::${Prefix}-data-${AWS::AccountId}/*"
+                - Prefix: !Ref DeskWebAppStackName
 
   RouterInstanceProfile:
     Type: AWS::IAM::InstanceProfile
