@@ -367,7 +367,8 @@ Resources:
           CachedMethods: [GET, HEAD]
           Compress: true
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          # Managed-AllViewer — forward viewer Host so Caddy can match header_regexp Host ^{ws}-{port}\. (AllViewerExceptHostHeader would send ALB DNS as Host → no route).
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt RouterSubdomainAuthFunction.FunctionMetadata.FunctionARN
