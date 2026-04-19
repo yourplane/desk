@@ -278,7 +278,7 @@ Resources:
           Priority: 1
           Statement:
             RateBasedStatement:
-              Limit: 100
+              Limit: 1000
               AggregateKeyType: IP
           Action: { Block: {} }
           VisibilityConfig:
