@@ -1202,6 +1202,15 @@
   color: var(--text);
 }
 
+a.port-chip-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.port-chip-link:hover {
+  text-decoration: underline;
+}
+
 .port-chip-remove {
   display: inline-flex;
   align-items: center;

@@ -2,6 +2,8 @@
 # Build and deploy the desk web app stack using SAM for the Lambda.
 # Usage: ./deploy.sh [stack-name] [aws-profile]
 # Optional env: DESK_CUSTOM_DOMAIN_NAME, DESK_ACM_CERTIFICATE_ARN (both required together; ACM must be in us-east-1).
+# Optional: DESK_ROUTE53_HOSTED_ZONE_ID (Z... for public zone = CustomDomainName), or DESK_ROUTE53_AUTO_LOOKUP=true.
+# ACM for the app should include SANs for the apex and *.apex (e.g. desk.example.com and *.desk.example.com) for public web routes.
 # Also deploys the desk-router CloudFormation stack (latest self-owned router-ami-* AMI) when present.
 # Requires VPC stack "desk" (exports for subnets). Builds frontend after stack deploy, syncs S3, invalidates CloudFront.
 set -e
@@ -26,19 +28,34 @@ echo "==> Deploying desk-router stack..."
 ROUTER_AMI=$(aws ec2 describe-images --owners self \
   --filters "Name=name,Values=router-ami-*" \
   --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text 2>/dev/null || true)
+# CloudFront → origin (ALB) prefix list; name is region/account-specific but this is the standard global name.
+CLOUDFRONT_VPC_PL=$(aws ec2 describe-managed-prefix-lists \
+  --filters "Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing" \
+  --query 'PrefixLists[0].PrefixListId' --output text 2>/dev/null || true)
 if [ -z "$ROUTER_AMI" ] || [ "$ROUTER_AMI" = "None" ]; then
   echo "Warning: No self-owned router-ami-* AMI found; skipping desk-router deploy." >&2
+elif [ -z "$CLOUDFRONT_VPC_PL" ] || [ "$CLOUDFRONT_VPC_PL" = "None" ]; then
+  echo "Error: Could not resolve EC2 managed prefix list com.amazonaws.global.cloudfront.origin-facing (needed for desk-router ALB)." >&2
+  exit 1
 else
   aws cloudformation deploy \
     --stack-name desk-router \
     --template-file "$INFRA_DIR/desk-router.yaml" \
-    --parameter-overrides "RouterAmiId=${ROUTER_AMI}" \
+    --parameter-overrides \
+      "RouterAmiId=${ROUTER_AMI}" \
+      "CloudFrontVpcOriginPrefixListId=${CLOUDFRONT_VPC_PL}" \
+      "WebRouterBaseDomain=${DESK_CUSTOM_DOMAIN_NAME:-}" \
     --capabilities CAPABILITY_NAMED_IAM
 fi
 
 # Build metadata for frontend (displayed in UI)
 export VITE_BUILD_AT=$(date +"%b %d, %Y %H:%M %Z")
 export VITE_BUILD_SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)
+# Public web routes (subdomain links + cookie Domain for *.apex)
+if [ -n "${DESK_CUSTOM_DOMAIN_NAME:-}" ]; then
+  export VITE_COOKIE_DOMAIN=".${DESK_CUSTOM_DOMAIN_NAME}"
+  export VITE_WEB_ROUTER_HOST_SUFFIX="${DESK_CUSTOM_DOMAIN_NAME}"
+fi
 
 # 1. SAM build and deploy (Cognito callback URLs are derived in the template from CloudFront + optional custom domain)
 echo "==> SAM build..."
@@ -46,10 +63,34 @@ cd "$CLOUDFORMATION_DIR"
 export DESK_SDK_PATH="$REPO_ROOT/desk-sdk"
 sam build --template-file main.yaml
 echo "==> SAM deploy (CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME:-<empty>})..."
+SAM_PARAM_ARGS=()
+if [ -n "${DESK_CUSTOM_DOMAIN_NAME:-}" ] || [ -n "${DESK_ACM_CERTIFICATE_ARN:-}" ]; then
+  if [ -z "${DESK_CUSTOM_DOMAIN_NAME:-}" ] || [ -z "${DESK_ACM_CERTIFICATE_ARN:-}" ]; then
+    echo "Error: set both DESK_CUSTOM_DOMAIN_NAME and DESK_ACM_CERTIFICATE_ARN (ACM in us-east-1), or neither." >&2
+    exit 1
+  fi
+  SAM_PARAM_ARGS=(
+    --parameter-overrides
+    "CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME}"
+    "AcmCertificateArn=${DESK_ACM_CERTIFICATE_ARN}"
+    "EnableWebRouterCloudFront=${DESK_ENABLE_WEB_ROUTER_CLOUDFRONT:-false}"
+  )
+  # Optional: resolve Route 53 hosted zone for CustomDomainName (public zone matching the apex FQDN)
+  if [ "${DESK_ROUTE53_AUTO_LOOKUP:-false}" = "true" ] && [ -z "${DESK_ROUTE53_HOSTED_ZONE_ID:-}" ]; then
+    _zone=$(aws route53 list-hosted-zones-by-name --dns-name "${DESK_CUSTOM_DOMAIN_NAME}." \
+      --query 'HostedZones[0].Id' --output text 2>/dev/null || true)
+    if [ -n "$_zone" ] && [ "$_zone" != "None" ]; then
+      export DESK_ROUTE53_HOSTED_ZONE_ID="${_zone##*/hostedzone/}"
+    fi
+  fi
+  if [ -n "${DESK_ROUTE53_HOSTED_ZONE_ID:-}" ]; then
+    SAM_PARAM_ARGS+=( "Route53HostedZoneId=${DESK_ROUTE53_HOSTED_ZONE_ID}" )
+  fi
+fi
 sam deploy \
   --template-file .aws-sam/build/template.yaml \
   --stack-name "$STACK_NAME" \
-  --parameter-overrides "CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME:-} AcmCertificateArn=${DESK_ACM_CERTIFICATE_ARN:-}" \
+  "${SAM_PARAM_ARGS[@]}" \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --resolve-s3 \
   --no-confirm-changeset \
