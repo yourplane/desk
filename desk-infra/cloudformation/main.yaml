@@ -305,18 +305,21 @@ Resources:
       Name: !Sub "${AWS::StackName}-router-subdomain-auth"
       AutoPublish: true
       FunctionCode: !Sub |
-        function cookieHeaderString(headers) {
-          var c = headers.cookie;
-          if (!c) return "";
-          var s = c.value ? c.value : "";
-          if (c.multiValue && c.multiValue.length > 0) {
-            for (var i = 0; i < c.multiValue.length; i++) {
-              if (c.multiValue[i].value) {
-                s = s ? s + "; " + c.multiValue[i].value : c.multiValue[i].value;
+        function cookieJarHasAuth(jar) {
+          if (!jar) return false;
+          var t = jar.desk_token || jar["desk_token"];
+          var g = jar.desk_web_gate || jar["desk_web_gate"];
+          function present(entry) {
+            if (!entry) return false;
+            if (entry.value && entry.value.length > 0) return true;
+            if (entry.multiValue) {
+              for (var i = 0; i < entry.multiValue.length; i++) {
+                if (entry.multiValue[i].value && entry.multiValue[i].value.length > 0) return true;
               }
             }
+            return false;
           }
-          return s;
+          return present(t) || present(g);
         }
         function handler(event) {
           var request = event.request;
@@ -329,9 +332,8 @@ Resources:
           }
           var apex = "${CustomDomainName}";
           if (host.length > 0 && host !== apex && host.endsWith("." + apex)) {
-            var cv = cookieHeaderString(request.headers).toLowerCase();
-            var has = cv.indexOf("desk_token=") >= 0 || cv.indexOf("desk_web_gate=") >= 0;
-            if (!has) {
+            // Cookie headers are NOT in request.headers; they appear only on request.cookies (see CloudFront Functions event structure).
+            if (!cookieJarHasAuth(request.cookies)) {
               return {
                 statusCode: 302,
                 statusDescription: "Found",
