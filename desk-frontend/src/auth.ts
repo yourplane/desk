@@ -8,10 +8,6 @@
  * - API calls use the id_token, and we refresh on 401s
  *
  * Local dev: no env set, no auth.
- *
- * Cookies set via `document.cookie` cannot use `HttpOnly` (only server `Set-Cookie` can). The SPA
- * reads `desk_token` in JS for `getToken()`; `desk_web_gate` is a hash for CloudFront. Production
- * HTTPS: `Secure` is always appended (required with `SameSite=None` for the gate cookie).
  */
 
 const CONFIG = {
@@ -56,18 +52,13 @@ function cookieDomainAttr(): string {
   return `; Domain=${d}`
 }
 
-/** `; Secure` on HTTPS (omitted on http for local dev). Not combinable with HttpOnly from JS. */
-function secureCookieSuffix(): string {
-  return typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : ''
-}
-
 /** SameSite=None+Secure for the small `desk_web_gate` Domain cookie (sent to *.apex web-router hosts). */
 function sameSiteAndSecureAttrs(): string {
-  const sec = secureCookieSuffix()
-  if (effectiveCookieDomain() && sec) {
+  const https = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  if (effectiveCookieDomain() && https) {
     return '; SameSite=None; Secure'
   }
-  return `; SameSite=Lax${sec}`
+  return `; SameSite=Lax${https ? '; Secure' : ''}`
 }
 
 export function isAuthEnabled(): boolean {
@@ -92,7 +83,8 @@ export function getToken(): string | null {
 async function setIdToken(token: string): Promise<void> {
   sessionStorage.setItem(TOKEN_KEY, token)
   const maxAge = 3600
-  const sec = secureCookieSuffix()
+  const https = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  const secureOnly = https ? '; Secure' : ''
 
   if (effectiveCookieDomain()) {
     // Clear stale variants (host-only and Domain=) so we do not stack duplicates.
@@ -101,8 +93,8 @@ async function setIdToken(token: string): Promise<void> {
     document.cookie = `${COOKIE_NAME}=; path=/; max-age=0${cookieDomainAttr()}`
     document.cookie = `${WEB_GATE_COOKIE}=; path=/; max-age=0${cookieDomainAttr()}`
     // Large JWT: host-only on the desk apex (not sent to *.desk — avoids huge Cookie headers at CloudFront).
-    // Web-router hosts only need the small gate cookie (Domain= + SameSite=None + Secure on HTTPS).
-    document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${sec}`
+    // Web-router hosts only need the small gate cookie (Domain= + SameSite=None).
+    document.cookie = `${COOKIE_NAME}=${encodeURIComponent(token)}; path=/; max-age=${maxAge}; SameSite=Lax${secureOnly}`
     const gate = await sha256HexLower(token)
     document.cookie = `${WEB_GATE_COOKIE}=${gate}; path=/; max-age=${maxAge}${sameSiteAndSecureAttrs()}${cookieDomainAttr()}`
   } else {
@@ -259,7 +251,8 @@ export async function goToLogin(): Promise<void> {
   const verifier = randomString(43)
   const challenge = await sha256Base64Url(verifier)
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier)
-  document.cookie = `${PKCE_VERIFIER_COOKIE}=${encodeURIComponent(verifier)}; path=/; max-age=600; SameSite=Lax${secureCookieSuffix()}`
+  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `${PKCE_VERIFIER_COOKIE}=${encodeURIComponent(verifier)}; path=/; max-age=600; SameSite=Lax${secure}`
   const base = `https://${CONFIG.domain}.auth.${import.meta.env.VITE_COGNITO_REGION || 'us-east-1'}.amazoncognito.com`
   const params = new URLSearchParams({
     client_id: CONFIG.clientId!,
