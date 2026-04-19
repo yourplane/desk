@@ -15,3 +15,7 @@
 - **Authorize errors**: If Cognito rejects the authorize request, it redirects to the callback URL with `?error=...&error_description=...` (no `code`). The app shows a stable error screen instead of looping `ensureAuth` → `goToLogin`.
 - **PKCE verifier**: Stored in sessionStorage and a short-lived cookie when redirecting to login so it survives the redirect back (e.g. same or new tab).
 - **API Gateway JWT**: Issuer = `https://cognito-idp.<region>.amazonaws.com/<UserPoolId>`, Audience = app client ID. The `id_token` from Cognito must have matching `iss` and `aud` claims.
+
+## Public web routes (optional, custom domain)
+
+When the app is built with a **custom apex** (e.g. `desk.example.com`), the deploy script can set **`VITE_COOKIE_DOMAIN`** so the `desk_token` cookie uses **`Domain=.desk.example.com`** (or equivalent). That allows the browser to send the same session cookie on **`{name}-{port}.desk.example.com`** hosts served by a separate CloudFront distribution (see `cloudformation/README.md`). The web app API (`/api/*`) is unchanged (JWT on `Authorization`).

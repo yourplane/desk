@@ -6,7 +6,7 @@ import {
   removeWebRoute,
   type Instance,
 } from '../api/client'
-import { instanceKey, stateColor } from './workstationUtils'
+import { instanceKey, publicWebRouteUrl, stateColor } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
@@ -172,20 +172,37 @@ export function WebRoutesTab() {
                       {canEditWebRoutes ? (
                         <div className="web-routes-editor">
                           <div className="web-routes-chips">
-                            {ports.map((p) => (
-                              <span key={p} className="port-chip">
-                                <span className="port-chip-label">{p}</span>
-                                <button
-                                  type="button"
-                                  className="port-chip-remove"
-                                  disabled={routeBusy}
-                                  onClick={() => onRemoveWebRoute(key, p)}
-                                  title={`Remove port ${p}`}
-                                >
-                                  ×
-                                </button>
-                              </span>
-                            ))}
+                            {ports.map((p) => {
+                              const publicUrl = publicWebRouteUrl(key, p)
+                              return (
+                                <span key={p} className="port-chip">
+                                  {publicUrl ? (
+                                    <a
+                                      className="port-chip-label port-chip-link"
+                                      href={publicUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={`Open web route (new tab): ${publicUrl}`}
+                                    >
+                                      {p}
+                                    </a>
+                                  ) : (
+                                    <span className="port-chip-label" title="Set VITE_WEB_ROUTER_HOST_SUFFIX at build (custom domain) for public links">
+                                      {p}
+                                    </span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="port-chip-remove"
+                                    disabled={routeBusy}
+                                    onClick={() => onRemoveWebRoute(key, p)}
+                                    title={`Remove port ${p}`}
+                                  >
+                                    ×
+                                  </button>
+                                </span>
+                              )
+                            })}
                           </div>
                           <div className="web-routes-add">
                             <input

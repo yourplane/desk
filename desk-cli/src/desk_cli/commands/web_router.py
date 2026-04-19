@@ -182,6 +182,12 @@ def _site_block_opening_lines(listen: str) -> list[str]:
     port = _listen_port()
 
     if addr.startswith(":") or re.fullmatch(r"\d+", addr):
+        # ``:port`` is shorthand for "listen on this port"; for local-only base domains we bind
+        # loopback so Host-based routing still works. For a public suffix (managed router behind
+        # an ALB), we must listen on all interfaces — otherwise the load balancer cannot connect.
+        base = _route_base_domain()
+        if base and base not in (_DEFAULT_BASE_DOMAIN, "localhost"):
+            return [f"http://:{port} {{"]
         return [f"http://:{port} {{", "    bind 127.0.0.1 [::1]"]
 
     if ":" not in addr:
