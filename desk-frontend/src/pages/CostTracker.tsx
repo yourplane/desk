@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
-import { fetchCosts, type CostMonth, type CostSummary } from '../api/client'
+import { useQuery } from '@tanstack/react-query'
+import { fetchCosts, type CostMonth } from '../api/client'
+import { DataFreshnessBar } from '../DataFreshnessBar'
+import { queryKeys } from '../queryKeys'
 import { isAuthEnabled, logout } from '../auth'
 
 function fmtUsd(amount: number): string {
@@ -83,18 +85,24 @@ function buildServiceRows(current: CostMonth | undefined, previous: CostMonth | 
 }
 
 export function CostTracker() {
-  const [data, setData] = useState<CostSummary | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const costsQuery = useQuery({
+    queryKey: queryKeys.costs,
+    queryFn: fetchCosts,
+    staleTime: 60_000,
+  })
 
-  useEffect(() => {
-    setLoading(true)
-    setError(null)
-    fetchCosts()
-      .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false))
-  }, [])
+  const data = costsQuery.data
+  const loading = costsQuery.isPending && costsQuery.data === undefined
+  const error =
+    costsQuery.isError && costsQuery.data === undefined
+      ? costsQuery.error instanceof Error
+        ? costsQuery.error.message
+        : String(costsQuery.error)
+      : null
+  const refreshError =
+    costsQuery.isError && costsQuery.data !== undefined
+      ? 'Could not refresh costs. Showing last successful load.'
+      : null
 
   const pageHeader = (
     <div className="page-header">
@@ -116,7 +124,7 @@ export function CostTracker() {
     )
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="cost-tracker">
         {pageHeader}
@@ -151,6 +159,15 @@ export function CostTracker() {
   return (
     <div className="cost-tracker">
       {pageHeader}
+      <DataFreshnessBar
+        resourceLabel="Cost data"
+        dataUpdatedAt={costsQuery.dataUpdatedAt}
+        isFetching={costsQuery.isFetching}
+        onRefresh={() => void costsQuery.refetch()}
+      />
+      {refreshError && (
+        <p className="refresh-error" role="status">{refreshError}</p>
+      )}
 
       {/* Summary cards */}
       <div className="cost-cards">

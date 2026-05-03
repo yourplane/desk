@@ -1,3 +1,4 @@
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import {
   createWorkstation,
@@ -8,6 +9,9 @@ import {
   killInstance,
   type Instance,
 } from '../api/client'
+import { DataFreshnessBar } from '../DataFreshnessBar'
+import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
+import { queryKeys } from '../queryKeys'
 import { logout } from '../auth'
 import { instanceKey, stateColor } from './workstationUtils'
 
@@ -70,10 +74,8 @@ function toDatetimeLocalValue(isoUtc: string | null): string {
 }
 
 export function InstanceList() {
-  const [instances, setInstances] = useState<Instance[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [refreshError, setRefreshError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+  const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
   const [acting, setActing] = useState<string | null>(null)
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
   const [customTime, setCustomTime] = useState('')
@@ -83,76 +85,44 @@ export function InstanceList() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
-  const loadInFlightRef = useRef(false)
   const actingRef = useRef<string | null>(null)
   actingRef.current = acting
   const [listInfra, setListInfra] = useState(false)
-  const listInfraRef = useRef(false)
-  listInfraRef.current = listInfra
 
-  const load = async (opts?: { isBackgroundRefresh?: boolean }) => {
-    const isBackground = opts?.isBackgroundRefresh === true
-    if (loadInFlightRef.current) return
-    loadInFlightRef.current = true
-    if (!isBackground) {
-      setLoading(true)
-      setError(null)
-    }
-    try {
-      const list = await listInstances({ infra: listInfraRef.current })
-      setInstances(list)
-      setRefreshError(null)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      const fallback = 'Unable to load workstations. Check the browser console or API logs.'
-      if (isBackground) {
-        setRefreshError('Could not refresh. Will retry.')
-        console.error('InstanceList poll failed:', e)
-      } else {
-        setError(!msg.trim() ? fallback : msg)
-        console.error('InstanceList load failed:', e)
-      }
-    } finally {
-      if (!isBackground) setLoading(false)
-      loadInFlightRef.current = false
-    }
-  }
+  const instancesQuery = useQuery({
+    queryKey: queryKeys.workstations(listInfra),
+    queryFn: () => listInstances({ infra: listInfra }),
+    placeholderData: keepPreviousData,
+    staleTime: 5_000,
+    refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
+  })
 
-  useEffect(() => {
-    load()
+  const instances: Instance[] = instancesQuery.data ?? []
+  const blockingError =
+    instancesQuery.isError && instancesQuery.data === undefined
+      ? instancesQuery.error instanceof Error
+        ? instancesQuery.error.message
+        : String(instancesQuery.error)
+      : null
+  const fallbackMsg = 'Unable to load workstations. Check the browser console or API logs.'
+  const error = blockingError && !blockingError.trim() ? fallbackMsg : blockingError
+  const refreshError =
+    instancesQuery.isError && instancesQuery.data !== undefined
+      ? 'Could not refresh. Will retry.'
+      : null
 
-    let intervalId: number | null = null
-    let intervalMs = POLL_INTERVAL_MS
+  const [actionError, setActionError] = useState<string | null>(null)
 
-    const schedule = () => {
-      if (intervalId !== null) window.clearInterval(intervalId)
-      intervalId = window.setInterval(() => {
-        if (loadInFlightRef.current || actingRef.current !== null) return
-        load({ isBackgroundRefresh: true })
-      }, intervalMs)
-    }
-    schedule()
-
-    const onVisibility = () => {
-      intervalMs = document.visibilityState === 'hidden' ? BACKGROUND_POLL_INTERVAL_MS : POLL_INTERVAL_MS
-      schedule()
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility)
-      if (intervalId !== null) window.clearInterval(intervalId)
-    }
-  }, [listInfra])
+  const refetchWorkstations = () => instancesQuery.refetch()
 
   const onStart = async (name: string) => {
     setActing(name)
-    setError(null)
+    setActionError(null)
     try {
       await startInstance(name, { infra: listInfra })
-      await load({ isBackgroundRefresh: true })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(null)
     }
@@ -160,12 +130,12 @@ export function InstanceList() {
 
   const onStop = async (name: string) => {
     setActing(name)
-    setError(null)
+    setActionError(null)
     try {
       await stopInstance(name, { infra: listInfra })
-      await load({ isBackgroundRefresh: true })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(null)
     }
@@ -173,13 +143,13 @@ export function InstanceList() {
 
   const onSetAutoStop = async (name: string, duration: string) => {
     setActing(name)
-    setError(null)
+    setActionError(null)
     setOpenAutoStopFor(null)
     try {
       await setAutoStop(name, { duration })
-      await load({ isBackgroundRefresh: true })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(null)
     }
@@ -188,12 +158,12 @@ export function InstanceList() {
   const onKill = async (name: string) => {
     if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
     setActing(name)
-    setError(null)
+    setActionError(null)
     try {
       await killInstance(name, { infra: listInfra })
-      await load({ isBackgroundRefresh: true })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(null)
     }
@@ -201,13 +171,13 @@ export function InstanceList() {
 
   const onClearAutoStop = async (name: string) => {
     setActing(name)
-    setError(null)
+    setActionError(null)
     setOpenAutoStopFor(null)
     try {
       await setAutoStop(name, { clear: true })
-      await load({ isBackgroundRefresh: true })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(null)
     }
@@ -215,14 +185,14 @@ export function InstanceList() {
 
   const onSetAutoStopAt = async (name: string, localDatetime: string) => {
     setActing(name)
-    setError(null)
+    setActionError(null)
     setOpenAutoStopFor(null)
     try {
       const utcIso = new Date(localDatetime).toISOString()
       await setAutoStop(name, { shutdown_at: utcIso })
-      await load({ isBackgroundRefresh: true })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(null)
     }
@@ -230,7 +200,7 @@ export function InstanceList() {
 
   const onPlus2h = async (name: string, shutdownAt: string | null) => {
     setActing(name)
-    setError(null)
+    setActionError(null)
     setOpenAutoStopFor(null)
     try {
       let totalMinutes = 120
@@ -242,9 +212,9 @@ export function InstanceList() {
         }
       }
       await setAutoStop(name, { duration: buildDurationFromTotalMinutes(totalMinutes) })
-      await load({ isBackgroundRefresh: true })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(null)
     }
@@ -261,7 +231,7 @@ export function InstanceList() {
       setShowCreateForm(false)
       setCreateName('')
       setCreateInstanceType('t3.medium')
-      await load()
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -329,7 +299,7 @@ export function InstanceList() {
     </div>
   )
 
-  if (loading) {
+  if (instancesQuery.isPending && instancesQuery.data === undefined) {
     return <p className="loading">Loading instances…</p>
   }
 
@@ -350,8 +320,17 @@ export function InstanceList() {
 
   return (
     <>
+      <DataFreshnessBar
+        resourceLabel="Workstation list"
+        dataUpdatedAt={instancesQuery.dataUpdatedAt}
+        isFetching={instancesQuery.isFetching}
+        onRefresh={() => void refetchWorkstations()}
+      />
       {refreshError && (
         <p className="refresh-error" role="status">{refreshError}</p>
+      )}
+      {actionError && (
+        <p className="error-message" role="alert">{actionError}</p>
       )}
       <p className="instance-list-toolbar">
         <label className="instance-list-infra-toggle">
@@ -364,7 +343,9 @@ export function InstanceList() {
           List managed router (infra)
         </label>
       </p>
-      <div className="table-wrap">
+      <div
+        className={`table-wrap${instancesQuery.isFetching && instances.length > 0 ? ' table-wrap--revalidating' : ''}`}
+      >
         <table className="instances-table">
           <thead>
             <tr>
