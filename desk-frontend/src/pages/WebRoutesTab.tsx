@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
 import {
   addWebRoute,
   fetchWebRoutesAll,
@@ -6,84 +7,70 @@ import {
   removeWebRoute,
   type Instance,
 } from '../api/client'
+import { DataFreshnessBar } from '../DataFreshnessBar'
+import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
+import { queryKeys } from '../queryKeys'
 import { instanceKey, publicWebRouteUrl, stateColor } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
 
+async function fetchWebRoutesSafe(): Promise<{ routes: Record<string, number[]> }> {
+  try {
+    return await fetchWebRoutesAll()
+  } catch (e) {
+    console.error('fetchWebRoutesAll failed:', e)
+    return { routes: {} }
+  }
+}
+
 export function WebRoutesTab() {
-  const [instances, setInstances] = useState<Instance[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
   const [bannerError, setBannerError] = useState<string | null>(null)
-  const [refreshError, setRefreshError] = useState<string | null>(null)
-  const [webRoutesByName, setWebRoutesByName] = useState<Record<string, number[]>>({})
   const [webRoutesBusy, setWebRoutesBusy] = useState<string | null>(null)
   const [portDraftByKey, setPortDraftByKey] = useState<Record<string, string>>({})
-  const loadInFlightRef = useRef(false)
   const webRoutesBusyRef = useRef<string | null>(null)
   webRoutesBusyRef.current = webRoutesBusy
 
-  const load = async (opts?: { isBackgroundRefresh?: boolean }) => {
-    const isBackground = opts?.isBackgroundRefresh === true
-    if (loadInFlightRef.current) return
-    loadInFlightRef.current = true
-    if (!isBackground) {
-      setLoading(true)
-    }
-    try {
-      const [list, webRes] = await Promise.all([
-        listInstances(),
-        fetchWebRoutesAll().catch((e) => {
-          console.error('fetchWebRoutesAll failed:', e)
-          return { routes: {} as Record<string, number[]> }
-        }),
-      ])
-      setInstances(list)
-      setWebRoutesByName(webRes.routes ?? {})
-      setRefreshError(null)
-      if (!isBackground) setBannerError(null)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      const fallback = 'Unable to load workstations. Check the browser console or API logs.'
-      if (isBackground) {
-        setRefreshError('Could not refresh. Will retry.')
-        console.error('WebRoutesTab poll failed:', e)
-      } else {
-        setBannerError(!msg.trim() ? fallback : msg)
-        console.error('WebRoutesTab load failed:', e)
-      }
-    } finally {
-      if (!isBackground) setLoading(false)
-      loadInFlightRef.current = false
-    }
+  const instancesQuery = useQuery({
+    queryKey: queryKeys.workstations(false),
+    queryFn: () => listInstances(),
+    staleTime: 5_000,
+    refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
+  })
+
+  const webRoutesQuery = useQuery({
+    queryKey: queryKeys.webRoutesAll,
+    queryFn: fetchWebRoutesSafe,
+    staleTime: 5_000,
+    refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
+  })
+
+  const instances: Instance[] = instancesQuery.data ?? []
+  const webRoutesByName = webRoutesQuery.data?.routes ?? {}
+
+  const blockingError =
+    instancesQuery.isError && instancesQuery.data === undefined
+      ? instancesQuery.error instanceof Error
+        ? instancesQuery.error.message
+        : String(instancesQuery.error)
+      : null
+  const fallbackMsg = 'Unable to load workstations. Check the browser console or API logs.'
+  const loadError = blockingError && !blockingError.trim() ? fallbackMsg : blockingError
+
+  const instancesRefreshError =
+    instancesQuery.isError && instancesQuery.data !== undefined
+      ? 'Could not refresh workstation list. Will retry.'
+      : null
+
+  const combinedFetching = instancesQuery.isFetching || webRoutesQuery.isFetching
+  const dataUpdatedAt = Math.max(instancesQuery.dataUpdatedAt ?? 0, webRoutesQuery.dataUpdatedAt ?? 0)
+
+  const refetchAll = () => {
+    void instancesQuery.refetch()
+    void webRoutesQuery.refetch()
   }
-
-  useEffect(() => {
-    load()
-
-    let intervalId: number | null = null
-    let intervalMs = POLL_INTERVAL_MS
-
-    const schedule = () => {
-      if (intervalId !== null) window.clearInterval(intervalId)
-      intervalId = window.setInterval(() => {
-        if (loadInFlightRef.current || webRoutesBusyRef.current !== null) return
-        load({ isBackgroundRefresh: true })
-      }, intervalMs)
-    }
-    schedule()
-
-    const onVisibility = () => {
-      intervalMs = document.visibilityState === 'hidden' ? BACKGROUND_POLL_INTERVAL_MS : POLL_INTERVAL_MS
-      schedule()
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility)
-      if (intervalId !== null) window.clearInterval(intervalId)
-    }
-  }, [])
 
   const onAddWebRoute = async (key: string) => {
     const raw = (portDraftByKey[key] ?? '').trim()
@@ -95,9 +82,9 @@ export function WebRoutesTab() {
     setWebRoutesBusy(key)
     setBannerError(null)
     try {
-      const result = await addWebRoute(key, port)
-      setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
+      await addWebRoute(key, port)
       setPortDraftByKey((prev) => ({ ...prev, [key]: '' }))
+      await queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
     } catch (e) {
       setBannerError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -109,8 +96,8 @@ export function WebRoutesTab() {
     setWebRoutesBusy(key)
     setBannerError(null)
     try {
-      const result = await removeWebRoute(key, port)
-      setWebRoutesByName((prev) => ({ ...prev, [result.name]: result.ports }))
+      await removeWebRoute(key, port)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
     } catch (e) {
       setBannerError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -118,12 +105,29 @@ export function WebRoutesTab() {
     }
   }
 
-  if (loading) {
+  if (instancesQuery.isPending && instancesQuery.data === undefined) {
     return <p className="loading">Loading web routes…</p>
+  }
+
+  if (loadError) {
+    return (
+      <>
+        <p className="error-message" role="alert">{loadError}</p>
+      </>
+    )
   }
 
   return (
     <>
+      <DataFreshnessBar
+        resourceLabel="Web routes & workstations"
+        dataUpdatedAt={dataUpdatedAt || undefined}
+        isFetching={combinedFetching}
+        onRefresh={refetchAll}
+      />
+      {instancesRefreshError && (
+        <p className="refresh-error" role="status">{instancesRefreshError}</p>
+      )}
       {bannerError && (
         <div className="web-routes-banner web-routes-banner--error" role="alert">
           <span className="web-routes-banner-text">{bannerError}</span>
@@ -137,10 +141,9 @@ export function WebRoutesTab() {
           </button>
         </div>
       )}
-      {refreshError && (
-        <p className="refresh-error" role="status">{refreshError}</p>
-      )}
-      <div className="table-wrap">
+      <div
+        className={`table-wrap${combinedFetching && instances.length > 0 ? ' table-wrap--revalidating' : ''}`}
+      >
         <table className="instances-table">
           <thead>
             <tr>

@@ -1,3 +1,4 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createSavedCommand,
@@ -11,6 +12,8 @@ import {
   type SavedCommandItem,
   type SavedCommandParam,
 } from '../api/client'
+import { DataFreshnessBar } from '../DataFreshnessBar'
+import { queryKeys } from '../queryKeys'
 
 const TERMINAL_STATES = new Set(['Success', 'Failed', 'TimedOut', 'Cancelled', 'Cancelling'])
 const POLL_MS = 1500
@@ -93,8 +96,24 @@ interface CommandPageProps {
 export function CommandPage({
   initialSection = 'manage',
 }: CommandPageProps) {
-  const [instances, setInstances] = useState<Instance[]>([])
-  const [loadingInstances, setLoadingInstances] = useState(true)
+  const queryClient = useQueryClient()
+  const instancesQuery = useQuery({
+    queryKey: queryKeys.workstations(false),
+    queryFn: () => listInstances(),
+    staleTime: 5_000,
+    refetchOnMount: 'always',
+  })
+  const savedCommandsQuery = useQuery({
+    queryKey: queryKeys.savedCommands,
+    queryFn: listSavedCommands,
+    staleTime: 60_000,
+    refetchOnMount: 'always',
+  })
+
+  const instances: Instance[] = instancesQuery.data ?? []
+  const loadingInstances = instancesQuery.isPending && instancesQuery.data === undefined
+  const savedCommands: SavedCommandItem[] = savedCommandsQuery.data ?? []
+
   const [selectedWorkstation, setSelectedWorkstation] = useState('')
   const [script, setScript] = useState('')
   const [user, setUser] = useState('ubuntu')
@@ -103,7 +122,6 @@ export function CommandPage({
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
 
   // Saved commands state
-  const [savedCommands, setSavedCommands] = useState<SavedCommandItem[]>([])
   const [selectedSavedId, setSelectedSavedId] = useState('')
   const [paramValues, setParamValues] = useState<Record<string, string>>({})
   const [showSaveForm, setShowSaveForm] = useState(false)
@@ -131,35 +149,18 @@ export function CommandPage({
     ? history.filter((entry) => entry.workstation === selectedWorkstation)
     : history
 
-  // Load instances and saved commands on mount
-  useEffect(() => {
-    let cancelled = false
-    setLoadingInstances(true)
-    listInstances()
-      .then((list) => {
-        if (cancelled) return
-        setInstances(list)
-        const running = list.filter((i) => i.state === 'running' || i.state === 'pending')
-        if (running.length > 0 && !selectedWorkstation) {
-          setSelectedWorkstation(running[0].name && running[0].name !== '-' ? running[0].name : running[0].instance_id)
-        }
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoadingInstances(false) })
-    return () => { cancelled = true }
-  }, [])
-
   useEffect(() => {
     setActiveSection(initialSection)
   }, [initialSection])
 
-  const fetchSavedCommands = useCallback(() => {
-    listSavedCommands()
-      .then(setSavedCommands)
-      .catch(() => {})
-  }, [])
-
-  useEffect(() => { fetchSavedCommands() }, [fetchSavedCommands])
+  useEffect(() => {
+    if (selectedWorkstation) return
+    const running = instances.filter((i) => i.state === 'running' || i.state === 'pending')
+    if (running.length === 0) return
+    const first = running[0]
+    const label = first.name && first.name !== '-' ? first.name : first.instance_id
+    setSelectedWorkstation(label)
+  }, [instances, selectedWorkstation])
 
   const updateHistoryEntry = useCallback((id: string, patch: Partial<HistoryEntry>) => {
     setHistory((prev) => {
@@ -276,7 +277,7 @@ export function CommandPage({
       setSelectedSavedId('')
       setScript('')
       setParamValues({})
-      fetchSavedCommands()
+      await queryClient.invalidateQueries({ queryKey: queryKeys.savedCommands })
     } catch {
       // ignore
     }
@@ -310,7 +311,7 @@ export function CommandPage({
         parameters: params,
       })
       setShowSaveForm(false)
-      fetchSavedCommands()
+      await queryClient.invalidateQueries({ queryKey: queryKeys.savedCommands })
       setSelectedSavedId(created.id)
       const defaults: Record<string, string> = {}
       for (const p of created.parameters) defaults[p.name] = p.default ?? ''
@@ -324,6 +325,12 @@ export function CommandPage({
 
   const detectedParamsForSave = extractParamNames(script)
 
+  const cmdFreshnessUpdatedAt = Math.max(
+    instancesQuery.dataUpdatedAt ?? 0,
+    savedCommandsQuery.dataUpdatedAt ?? 0,
+  )
+  const cmdFreshnessFetching = instancesQuery.isFetching || savedCommandsQuery.isFetching
+
   return (
     <div className="command-page">
       <div className="page-header">
@@ -336,6 +343,15 @@ export function CommandPage({
           </div>
         )}
       </div>
+      <DataFreshnessBar
+        resourceLabel="Workstations & saved commands"
+        dataUpdatedAt={cmdFreshnessUpdatedAt || undefined}
+        isFetching={cmdFreshnessFetching}
+        onRefresh={() => {
+          void instancesQuery.refetch()
+          void savedCommandsQuery.refetch()
+        }}
+      />
 
       <div className="command-subnav">
         <button
