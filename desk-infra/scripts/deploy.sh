@@ -51,11 +51,7 @@ fi
 # Build metadata for frontend (displayed in UI)
 export VITE_BUILD_AT=$(date +"%b %d, %Y %H:%M %Z")
 export VITE_BUILD_SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)
-# Public web routes (subdomain links + cookie Domain for *.apex)
-if [ -n "${DESK_CUSTOM_DOMAIN_NAME:-}" ]; then
-  export VITE_COOKIE_DOMAIN=".${DESK_CUSTOM_DOMAIN_NAME}"
-  export VITE_WEB_ROUTER_HOST_SUFFIX="${DESK_CUSTOM_DOMAIN_NAME}"
-fi
+# VITE_WEB_ROUTER_HOST_SUFFIX / cookie domain: set after SAM deploy from env or stack (see below).
 
 # 1. SAM build and deploy (Cognito callback URLs are derived in the template from CloudFront + optional custom domain)
 echo "==> SAM build..."
@@ -98,11 +94,28 @@ sam deploy \
 
 # 2. Stack outputs for frontend Cognito config (after deploy so values match the template)
 _get() { aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
+_stack_param() {
+  aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+    --query "Stacks[0].Parameters[?ParameterKey=='$1'].ParameterValue | [0]" --output text 2>/dev/null || true
+}
 if _get FrontendBucketName >/dev/null 2>&1; then
   export VITE_COGNITO_USER_POOL_ID=$(_get UserPoolId)
   export VITE_COGNITO_CLIENT_ID=$(_get AppClientId)
   export VITE_COGNITO_DOMAIN=$(_get UserPoolDomain)
   export VITE_COGNITO_REGION=${AWS_REGION:-$(aws configure get region 2>/dev/null)}
+fi
+
+# Public web routes + cookie Domain: use shell env if set, else read CustomDomainName from the stack
+# so `npm run build` still embeds VITE_WEB_ROUTER_HOST_SUFFIX when redeploying without DESK_CUSTOM_DOMAIN_NAME.
+DESK_APEX_FOR_VITE="${DESK_CUSTOM_DOMAIN_NAME:-}"
+if [ -z "$DESK_APEX_FOR_VITE" ] || [ "$DESK_APEX_FOR_VITE" = "None" ]; then
+  DESK_APEX_FOR_VITE=$(_stack_param CustomDomainName)
+  [ "$DESK_APEX_FOR_VITE" = "None" ] && DESK_APEX_FOR_VITE=
+fi
+if [ -n "$DESK_APEX_FOR_VITE" ]; then
+  export VITE_COOKIE_DOMAIN=".${DESK_APEX_FOR_VITE}"
+  export VITE_WEB_ROUTER_HOST_SUFFIX="${DESK_APEX_FOR_VITE}"
+  echo "==> Frontend web-route host suffix: ${VITE_WEB_ROUTER_HOST_SUFFIX}"
 fi
 
 # 3. Build frontend

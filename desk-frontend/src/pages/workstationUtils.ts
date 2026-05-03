@@ -17,9 +17,20 @@ export function webRouteHostnameLabel(workstationKey: string, port: number): str
   return label
 }
 
-/** HTTPS URL for CloudFront → ALB web routes when `VITE_WEB_ROUTER_HOST_SUFFIX` is set (custom domain deploy). */
+/** Apex FQDN for `{name}-{port}.<suffix>` links (build-time env, or current hostname when not on *.cloudfront.net / localhost). */
+function webRouteHostSuffix(): string | null {
+  const fromEnv = (import.meta.env.VITE_WEB_ROUTER_HOST_SUFFIX as string | undefined)?.trim()
+  if (fromEnv) return fromEnv
+  if (typeof window === 'undefined') return null
+  const host = window.location.hostname
+  if (!host || host === 'localhost' || host === '127.0.0.1') return null
+  if (host.endsWith('.cloudfront.net')) return null
+  return host
+}
+
+/** HTTPS URL for CloudFront → ALB web routes when suffix is known (deploy env or same host as the SPA). */
 export function publicWebRouteUrl(workstationKey: string, port: number): string | null {
-  const suffix = (import.meta.env.VITE_WEB_ROUTER_HOST_SUFFIX as string | undefined)?.trim()
+  const suffix = webRouteHostSuffix()
   if (!suffix) return null
   const label = webRouteHostnameLabel(workstationKey, port)
   if (!label) return null
