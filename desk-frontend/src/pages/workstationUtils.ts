@@ -37,6 +37,17 @@ export function publicWebRouteUrl(workstationKey: string, port: number): string 
   return `https://${label}.${suffix}/`
 }
 
+/** Common favicon paths to try for a public web route base URL (trailing slash optional). */
+export function webRouteFaviconCandidates(baseUrl: string): string[] {
+  const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
+  return [
+    `${base}favicon.ico`,
+    `${base}favicon.svg`,
+    `${base}vite.svg`,
+    `${base}apple-touch-icon.png`,
+  ]
+}
+
 export function stateColor(state: string): string {
   switch (state) {
     case 'running':

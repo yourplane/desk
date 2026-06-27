@@ -1238,6 +1238,27 @@
   font-variant-numeric: tabular-nums;
 }
 
+.port-chip-favicon-slot {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.port-chip-favicon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.port-chip-favicon--loading {
+  visibility: hidden;
+}
+
 .port-chip-label {
   color: var(--text);
 }

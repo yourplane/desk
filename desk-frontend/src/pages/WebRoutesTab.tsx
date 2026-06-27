@@ -10,6 +10,7 @@ import {
 import { DataFreshnessBar } from '../DataFreshnessBar'
 import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
 import { queryKeys } from '../queryKeys'
+import { WebRouteFavicon } from '../components/WebRouteFavicon'
 import { instanceKey, publicWebRouteUrl, stateColor } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
@@ -180,15 +181,18 @@ export function WebRoutesTab() {
                               return (
                                 <span key={p} className="port-chip">
                                   {publicUrl ? (
-                                    <a
-                                      className="port-chip-label port-chip-link"
-                                      href={publicUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      title={`Open web route (new tab): ${publicUrl}`}
-                                    >
-                                      {p}
-                                    </a>
+                                    <>
+                                      <WebRouteFavicon baseUrl={publicUrl} />
+                                      <a
+                                        className="port-chip-label port-chip-link"
+                                        href={publicUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        title={`Open web route (new tab): ${publicUrl}`}
+                                      >
+                                        {p}
+                                      </a>
+                                    </>
                                   ) : (
                                     <span className="port-chip-label" title="Set VITE_WEB_ROUTER_HOST_SUFFIX at build (custom domain) for public links">
                                       {p}
