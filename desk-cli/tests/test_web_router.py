@@ -439,9 +439,11 @@ def test_desk_web_router_caddyfile_includes_session_keeper_on_public_domain(
         result = runner.invoke(cli, ["web-router", "start"])
     assert result.exit_code == 0
     text = (tmp_path / "web-router" / "Caddyfile").read_text()
-    assert "handle_response" in text
+    assert "handle_response" not in text
+    assert "order replace after reverse_proxy" in text
+    assert "replace {" in text
     assert "https://desk.example.com/session-keeper.js" in text
-    assert "*text/html*" in text
+    assert "Accept-Encoding identity" in text
 
 
 @patch("desk_cli.commands.web_router._start_caddy_background", return_value=4242)
@@ -466,3 +468,4 @@ def test_desk_web_router_caddyfile_skips_session_keeper_on_localhost(
     text = (tmp_path / "web-router" / "Caddyfile").read_text()
     assert "session-keeper.js" not in text
     assert "handle_response" not in text
+    assert "order replace" not in text

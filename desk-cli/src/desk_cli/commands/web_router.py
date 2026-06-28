@@ -238,7 +238,7 @@ def _site_block_opening_lines(listen: str) -> list[str]:
 def _reverse_proxy_block_lines(
     upstream: str,
     *,
-    session_keeper_script_url: str | None = None,
+    disable_upstream_compression: bool = False,
 ) -> list[str]:
     """Shared reverse_proxy options for dev servers and SSM port-forwarding.
 
@@ -249,25 +249,31 @@ def _reverse_proxy_block_lines(
         f"        reverse_proxy {upstream} {{",
         "            flush_interval -1",
         "            header_up Host {http.request.host}",
-        "            transport http {",
-        "                versions 1.1",
-        "            }",
     ]
-    if session_keeper_script_url:
-        escaped = session_keeper_script_url.replace("\\", "\\\\").replace('"', '\\"')
-        lines.extend(
-            [
-                "            handle_response {",
-                "                @html {",
-                "                    header Content-Type *text/html*",
-                "                    status 2xx",
-                "                }",
-                f'                replace @html </head> "<script src=\\"{escaped}\\"></script></head>" 1',
-                "            }",
-            ]
-        )
-    lines.append("        }")
+    if disable_upstream_compression:
+        lines.append("            header_up Accept-Encoding identity")
+    lines.extend(
+        [
+            "            transport http {",
+            "                versions 1.1",
+            "            }",
+            "        }",
+        ]
+    )
     return lines
+
+
+def _session_keeper_replace_lines(session_keeper_script_url: str) -> list[str]:
+    """Caddy replace-response block (must run after reverse_proxy; see global order)."""
+    escaped = session_keeper_script_url.replace("\\", "\\\\").replace('"', '\\"')
+    return [
+        "        replace {",
+        "            match {",
+        "                header Content-Type *text/html*",
+        "            }",
+        f'            </head> "<script src=\\"{escaped}\\"></script></head>"',
+        "        }",
+    ]
 
 
 def _matcher_safe_name(workstation: str, remote_port: int) -> str:
@@ -283,11 +289,17 @@ def _active_routes() -> list[dict]:
 def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     admin = _admin_address()
     site_opening = _site_block_opening_lines(listen)
-    lines: list[str] = [
+    session_keeper_url = _session_keeper_script_url()
+    global_lines: list[str] = [
         "{",
         f"    admin {admin}",
         "    auto_https off",
-        "}",
+    ]
+    if session_keeper_url:
+        global_lines.append("    order replace after reverse_proxy")
+    global_lines.append("}")
+    lines: list[str] = [
+        *global_lines,
         "",
         *site_opening,
         "    log {",
@@ -322,13 +334,19 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     lines.append("    }")
     lines.append("")
 
-    session_keeper_url = _session_keeper_script_url()
     for label, upstream, safe in route_entries:
         matcher = f"desk_route_{safe}"
         pat = _route_host_header_regexp_pattern(label)
         lines.append(f"    @{matcher} header_regexp Host {pat}")
         lines.append(f"    handle @{matcher} {{")
-        lines.extend(_reverse_proxy_block_lines(upstream, session_keeper_script_url=session_keeper_url))
+        if session_keeper_url:
+            lines.extend(_session_keeper_replace_lines(session_keeper_url))
+        lines.extend(
+            _reverse_proxy_block_lines(
+                upstream,
+                disable_upstream_compression=bool(session_keeper_url),
+            )
+        )
         lines.append("    }")
         lines.append("")
 
