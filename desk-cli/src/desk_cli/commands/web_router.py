@@ -28,6 +28,9 @@ _ENV_ADMIN = "DESK_WEB_ROUTER_ADMIN"
 # Suffix after the route label `{ws}-{remote_port}.<base>` for URLs and browser Host (default dev DNS).
 _ENV_BASE_DOMAIN = "DESK_WEB_ROUTER_BASE_DOMAIN"
 _DEFAULT_BASE_DOMAIN = "localhost"
+# Inject session-keeper.js into proxied HTML so port-only tabs refresh auth cookies.
+_ENV_SESSION_KEEPER = "DESK_WEB_ROUTER_SESSION_KEEPER"
+_ENV_APEX_URL = "DESK_WEB_ROUTER_APEX_URL"
 # Workstation segment for {ws}-{remote_port}.<base> (no dots in ws; single DNS label).
 _SUBDOMAIN_WS_SAFE = re.compile(r"^[a-zA-Z0-9_-]+$")
 # RFC 1035: one DNS label is at most 63 octets.
@@ -88,6 +91,35 @@ def _route_base_domain() -> str:
     """DNS suffix for route FQDNs (e.g. ``localhost`` or ``router.example.com``)."""
     raw = (os.environ.get(_ENV_BASE_DOMAIN) or _DEFAULT_BASE_DOMAIN).strip()
     return raw or _DEFAULT_BASE_DOMAIN
+
+
+def _session_keeper_enabled() -> bool:
+    """True when Caddy should inject the apex session-keeper script into HTML responses."""
+    raw = os.environ.get(_ENV_SESSION_KEEPER)
+    if raw is not None:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    base = _route_base_domain().lower()
+    return base not in ("localhost", "127.0.0.1")
+
+
+def _session_keeper_apex_url() -> str | None:
+    """HTTPS origin for session-keeper.js (desk apex CloudFront)."""
+    raw = (os.environ.get(_ENV_APEX_URL) or "").strip()
+    if raw:
+        return raw.rstrip("/")
+    base = _route_base_domain()
+    if base.lower() in ("localhost", "127.0.0.1"):
+        return None
+    return f"https://{base}"
+
+
+def _session_keeper_script_url() -> str | None:
+    if not _session_keeper_enabled():
+        return None
+    apex = _session_keeper_apex_url()
+    if not apex:
+        return None
+    return f"{apex}/session-keeper.js"
 
 
 def _route_label(workstation: str, remote_port: int) -> str:
@@ -203,21 +235,39 @@ def _site_block_opening_lines(listen: str) -> list[str]:
     return [f"http://:{port} {{", f"    bind {host}"]
 
 
-def _reverse_proxy_block_lines(upstream: str) -> list[str]:
+def _reverse_proxy_block_lines(
+    upstream: str,
+    *,
+    session_keeper_script_url: str | None = None,
+) -> list[str]:
     """Shared reverse_proxy options for dev servers and SSM port-forwarding.
 
     Caddy's default is to set Host to the upstream address; that breaks many dev servers’
     host checks and URL generation when clients connect via desk route (e.g. Host: localhost:45001).
     """
-    return [
+    lines: list[str] = [
         f"        reverse_proxy {upstream} {{",
         "            flush_interval -1",
         "            header_up Host {http.request.host}",
         "            transport http {",
         "                versions 1.1",
         "            }",
-        "        }",
     ]
+    if session_keeper_script_url:
+        escaped = session_keeper_script_url.replace("\\", "\\\\").replace('"', '\\"')
+        lines.extend(
+            [
+                "            handle_response {",
+                "                @html {",
+                "                    header Content-Type *text/html*",
+                "                    status 2xx",
+                "                }",
+                f'                replace @html </head> "<script src=\\"{escaped}\\"></script></head>" 1',
+                "            }",
+            ]
+        )
+    lines.append("        }")
+    return lines
 
 
 def _matcher_safe_name(workstation: str, remote_port: int) -> str:
@@ -272,12 +322,13 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     lines.append("    }")
     lines.append("")
 
+    session_keeper_url = _session_keeper_script_url()
     for label, upstream, safe in route_entries:
         matcher = f"desk_route_{safe}"
         pat = _route_host_header_regexp_pattern(label)
         lines.append(f"    @{matcher} header_regexp Host {pat}")
         lines.append(f"    handle @{matcher} {{")
-        lines.extend(_reverse_proxy_block_lines(upstream))
+        lines.extend(_reverse_proxy_block_lines(upstream, session_keeper_script_url=session_keeper_url))
         lines.append("    }")
         lines.append("")
 
@@ -376,6 +427,10 @@ def _systemd_env_lines() -> str:
         lines.append(f"Environment={_ENV_ADMIN}={admin.replace('%', '%%')}")
     if base := os.environ.get(_ENV_BASE_DOMAIN):
         lines.append(f"Environment={_ENV_BASE_DOMAIN}={base.replace('%', '%%')}")
+    if session_keeper := os.environ.get(_ENV_SESSION_KEEPER):
+        lines.append(f"Environment={_ENV_SESSION_KEEPER}={session_keeper.replace('%', '%%')}")
+    if apex_url := os.environ.get(_ENV_APEX_URL):
+        lines.append(f"Environment={_ENV_APEX_URL}={apex_url.replace('%', '%%')}")
     return "".join(f"{line}\n" for line in lines)
 
 

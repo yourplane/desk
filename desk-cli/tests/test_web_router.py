@@ -415,3 +415,54 @@ def test_refresh_writes_caddyfile_without_reload_when_router_stopped(
     assert caddyfile.is_file()
     assert r"header_regexp Host ^dev\-80\." in caddyfile.read_text()
     _mock_reload.assert_not_called()
+
+
+@patch("desk_cli.commands.web_router._start_caddy_background", return_value=4242)
+@patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
+@patch("desk_cli.commands.web_router._systemd_active", return_value=False)
+def test_desk_web_router_caddyfile_includes_session_keeper_on_public_domain(
+    _mock_sysd: object,
+    _mock_which: object,
+    _mock_bg: object,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Public base domain enables handle_response injection of apex session-keeper.js."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("DESK_WEB_ROUTER_BASE_DOMAIN", "desk.example.com")
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "routes.json").write_text(
+        json.dumps([{"workstation": "dev", "remote_port": 5173, "local_port": 45001, "pid": 1}])
+    )
+    runner = CliRunner()
+    with patch("desk_cli.commands.route._pid_alive", return_value=True):
+        result = runner.invoke(cli, ["web-router", "start"])
+    assert result.exit_code == 0
+    text = (tmp_path / "web-router" / "Caddyfile").read_text()
+    assert "handle_response" in text
+    assert "https://desk.example.com/session-keeper.js" in text
+    assert "*text/html*" in text
+
+
+@patch("desk_cli.commands.web_router._start_caddy_background", return_value=4242)
+@patch("desk_cli.commands.web_router._which_caddy", return_value="/bin/caddy")
+@patch("desk_cli.commands.web_router._systemd_active", return_value=False)
+def test_desk_web_router_caddyfile_skips_session_keeper_on_localhost(
+    _mock_sysd: object,
+    _mock_which: object,
+    _mock_bg: object,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "routes.json").write_text(
+        json.dumps([{"workstation": "dev", "remote_port": 5173, "local_port": 45001, "pid": 1}])
+    )
+    runner = CliRunner()
+    with patch("desk_cli.commands.route._pid_alive", return_value=True):
+        result = runner.invoke(cli, ["web-router", "start"])
+    assert result.exit_code == 0
+    text = (tmp_path / "web-router" / "Caddyfile").read_text()
+    assert "session-keeper.js" not in text
+    assert "handle_response" not in text
