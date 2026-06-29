@@ -17,7 +17,7 @@ import click
 
 from desk.config import get_state_home
 
-from desk_cli.commands.route import _load_routes, _logs_dir, _pid_alive, _route_status
+from desk_cli.commands.route import _load_routes, _logs_dir, _pid_alive, _route_status, desk_tool_path
 
 UNIT_NAME = "desk-web-router.service"
 DEFAULT_LISTEN = "0.0.0.0:8780"
@@ -436,7 +436,7 @@ def _systemd_exec_start_line() -> str:
 
 
 def _systemd_env_lines() -> str:
-    lines: list[str] = []
+    lines: list[str] = [f"Environment=PATH={desk_tool_path().replace('%', '%%')}"]
     if desk_state := os.environ.get("DESK_STATE_HOME"):
         lines.append(f"Environment=DESK_STATE_HOME={desk_state.replace('%', '%%')}")
     if listen := os.environ.get(_ENV_LISTEN):

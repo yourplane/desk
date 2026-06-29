@@ -31,6 +31,7 @@ from desk_cli.commands.route import (
     _save_routes,
     _start_forward_process,
     _terminate_route_pid,
+    desk_tool_path,
 )
 
 SERVICE_UNIT = "desk-route-sync-pull.service"
@@ -105,11 +106,21 @@ def run_route_sync_pull(
         _notify_web_router_after_route_change()
         click.echo(f"Removed {removed} local route(s) not present in S3.")
 
+    refreshed, refresh_failures = _refresh_stale_routes(
+        wait=wait,
+        wait_timeout=wait_timeout,
+        local_port_start=local_port_start,
+        local_port_end=local_port_end,
+        region=region,
+        profile=profile,
+    )
+
     current_keys = {_route_key(r) for r in _load_routes()}
     missing = sorted(desired - current_keys)
     start, end = _parse_port_range(local_port_start, local_port_end)
 
     added = 0
+    add_failures: list[tuple[str, int, str]] = []
     for ws, port in missing:
         routes_now = _load_routes()
         dup = next(
@@ -122,7 +133,9 @@ def run_route_sync_pull(
         try:
             instance_id = resolve_workstation(ws, region=region, profile=profile)
         except ValueError as exc:
-            raise click.UsageError(str(exc)) from exc
+            add_failures.append((ws, port, str(exc)))
+            click.echo(click.style(f"Skipping {ws}:{port}: {exc}", fg="yellow"), err=True)
+            continue
 
         if not is_ssm_ready(instance_id, region=region, profile=profile):
             if not wait:
@@ -160,18 +173,10 @@ def run_route_sync_pull(
         added += 1
         click.echo(f"Added route {ws}:{port} -> 127.0.0.1:{local_port} (pid {pid})")
 
-    refreshed, refresh_failures = _refresh_stale_routes(
-        wait=wait,
-        wait_timeout=wait_timeout,
-        local_port_start=local_port_start,
-        local_port_end=local_port_end,
-        region=region,
-        profile=profile,
-    )
     if refresh_failures:
         raise click.ClickException(f"Failed to refresh {len(refresh_failures)} stale route(s).")
 
-    if removed == 0 and added == 0 and refreshed == 0:
+    if removed == 0 and added == 0 and refreshed == 0 and not add_failures:
         click.echo("Local routes already match S3.")
 
 
@@ -236,7 +241,7 @@ def _timer_unit_path() -> str:
 
 
 def _systemd_env_block_for_pull() -> str:
-    lines: list[str] = []
+    lines: list[str] = [f"Environment=PATH={desk_tool_path().replace('%', '%%')}"]
     if desk_state := os.environ.get("DESK_STATE_HOME"):
         lines.append(f"Environment=DESK_STATE_HOME={desk_state.replace('%', '%%')}")
     return "".join(f"{line}\n" for line in lines)

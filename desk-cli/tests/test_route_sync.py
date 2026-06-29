@@ -298,3 +298,56 @@ def test_route_sync_status_shows_enabled(
     assert result.exit_code == 0
     assert "desk-route-sync-pull.timer" in result.output
     assert "10s" in result.output
+
+
+@patch("desk_cli.commands.route_sync._notify_web_router_after_route_change")
+@patch("desk_cli.commands.route._pid_alive", side_effect=lambda pid: pid != 99999)
+@patch("desk_cli.commands.route._start_forward_process", return_value=(4242, "/tmp/refreshed.log"))
+@patch("desk_cli.commands.route._pick_local_port", return_value=45002)
+@patch("desk_cli.commands.route.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.route.resolve_workstation", return_value="i-dev")
+@patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={"dev": [8080], "foo": [5173]})
+def test_route_sync_pull_skips_unknown_workstation_and_refreshes_stale(
+    _mock_list_s3: object,
+    _mock_resolve_route: object,
+    _mock_ssm_route: object,
+    _mock_pick_route: object,
+    _mock_start_route: object,
+    _mock_alive: object,
+    _mock_notify: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown S3 workstations must not block refreshing stale routes for real workstations."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("DESK_DATA_BUCKET", "bucket")
+    route_dir = tmp_path / "routes"
+    route_dir.mkdir(parents=True, exist_ok=True)
+    (route_dir / "routes.json").write_text(
+        json.dumps(
+            [
+                {
+                    "workstation": "dev",
+                    "remote_port": 8080,
+                    "local_port": 45001,
+                    "pid": 99999,
+                }
+            ]
+        )
+    )
+
+    def resolve_side_effect(ws: str, **_: object) -> str:
+        if ws == "foo":
+            raise ValueError("Workstation 'foo' not found. Run 'desk list' to see workstations.")
+        return "i-dev"
+
+    with patch("desk_cli.commands.route_sync.resolve_workstation", side_effect=resolve_side_effect):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["route-sync", "pull"])
+
+    assert result.exit_code == 0
+    assert "Skipping foo:5173" in result.output
+    assert "Refreshed route dev:8080" in result.output
+    routes = _read_routes(tmp_path)
+    assert len(routes) == 1
+    assert routes[0]["pid"] == 4242

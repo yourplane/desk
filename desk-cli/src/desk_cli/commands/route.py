@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -23,6 +24,38 @@ from desk.config import get_desk_settings, get_state_home
 
 DEFAULT_LOCAL_PORT_START = 45000
 DEFAULT_LOCAL_PORT_END = 45100
+
+
+def desk_tool_path() -> str:
+    """PATH for desk CLI subprocesses and systemd units (includes AWS CLI on router AMIs)."""
+    desk = shutil.which("desk") or ""
+    desk_dir = os.path.dirname(desk) if desk else ""
+    candidates = [
+        desk_dir,
+        "/opt/desk-uv-venv/bin",
+        os.path.expanduser("~/desk/.venv/bin"),
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+    parts: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        path = os.path.expanduser(candidate)
+        if path and path not in seen:
+            seen.add(path)
+            parts.append(path)
+    return ":".join(parts)
+
+
+def _aws_executable() -> str:
+    found = shutil.which("aws")
+    if found:
+        return found
+    for candidate in ("/usr/local/bin/aws", "/usr/bin/aws"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return "aws"
 
 
 def _route_dir() -> str:
@@ -129,7 +162,7 @@ def _parse_port_range(start: int | None, end: int | None) -> tuple[int, int]:
 
 def _build_session_command(instance_id: str, remote_port: int, local_port: int) -> list[str]:
     return [
-        "aws",
+        _aws_executable(),
         "ssm",
         "start-session",
         "--target",
