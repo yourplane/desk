@@ -382,6 +382,15 @@
   background: var(--accent-hover);
 }
 
+.btn-restart {
+  background: var(--state-pending);
+  color: #fff;
+}
+
+.btn-restart:not(:disabled):hover {
+  background: #9a7209;
+}
+
 .btn-stop {
   background: var(--danger);
   color: #fff;

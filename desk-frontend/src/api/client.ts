@@ -92,6 +92,29 @@ export async function stopInstance(name: string, options?: { infra?: boolean }):
   return res.json()
 }
 
+export async function restartInstance(
+  name: string,
+  options?: { infra?: boolean },
+): Promise<{ instance_id: string }> {
+  const q = options?.infra ? '?infra=true' : ''
+  const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/restart${q}`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export async function killInstance(name: string, options?: { infra?: boolean }): Promise<{ instance_id: string }> {
   const q = options?.infra ? '?infra=true' : ''
   const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/kill${q}`, {

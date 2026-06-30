@@ -18,6 +18,7 @@ from desk.aws import (
     resolve_workstation,
     send_ssm_command,
     set_shutdown_tag,
+    reboot_instance,
     start_workstation,
     stop_instance,
     terminate_instance,
@@ -192,6 +193,18 @@ def stop_workstation_by_name(name: str, infra: bool = False):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     stop_instance(instance_id, region=region, profile=profile)
+    return {"instance_id": instance_id}
+
+
+@router.post("/workstations/{name}/restart")
+def restart_workstation_by_name(name: str, infra: bool = False):
+    """Reboot a running workstation or router by name or instance ID."""
+    region, profile = _region_profile()
+    try:
+        instance_id = resolve_workstation(name, region=region, profile=profile, infra=infra)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    reboot_instance(instance_id, region=region, profile=profile)
     return {"instance_id": instance_id}
 
 

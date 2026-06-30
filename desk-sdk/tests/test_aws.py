@@ -33,6 +33,7 @@ from desk.aws import (
     list_workstations,
     resolve_workstation,
     run_workstation,
+    reboot_instance,
     start_workstation,
     stop_instance,
     terminate_instance,
@@ -849,6 +850,18 @@ def test_stop_instance_success(mock_session: MagicMock) -> None:
 
     assert result == "i-abc123"
     mock_ec2.stop_instances.assert_called_once_with(InstanceIds=["i-abc123"])
+
+
+@patch("desk.aws.boto3.Session")
+def test_reboot_instance_success(mock_session: MagicMock) -> None:
+    """reboot_instance calls reboot_instances and returns instance ID."""
+    mock_ec2 = MagicMock()
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = reboot_instance("i-abc123")
+
+    assert result == "i-abc123"
+    mock_ec2.reboot_instances.assert_called_once_with(InstanceIds=["i-abc123"])
 
 
 @patch("desk.aws.boto3.Session")

@@ -6,6 +6,7 @@ import {
   setAutoStop,
   startInstance,
   stopInstance,
+  restartInstance,
   killInstance,
   type Instance,
 } from '../api/client'
@@ -133,6 +134,19 @@ export function InstanceList() {
     setActionError(null)
     try {
       await stopInstance(name, { infra: listInfra })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActing(null)
+    }
+  }
+
+  const onRestart = async (name: string) => {
+    setActing(name)
+    setActionError(null)
+    try {
+      await restartInstance(name, { infra: listInfra })
       await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
@@ -480,14 +494,24 @@ export function InstanceList() {
                       </button>
                     )}
                     {(inst.state === 'running' || inst.state === 'pending') && (
-                      <button
-                        type="button"
-                        className="btn btn-stop"
-                        disabled={acting !== null}
-                        onClick={() => onStop(key)}
-                      >
-                        {acting === key ? '…' : 'Stop'}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-restart"
+                          disabled={acting !== null}
+                          onClick={() => onRestart(key)}
+                        >
+                          {acting === key ? '…' : 'Restart'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-stop"
+                          disabled={acting !== null}
+                          onClick={() => onStop(key)}
+                        >
+                          {acting === key ? '…' : 'Stop'}
+                        </button>
+                      </>
                     )}
                     {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
                       <button

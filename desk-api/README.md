@@ -28,6 +28,7 @@ Running `uvicorn app.main:app` from the repo root without `--project desk-api` w
 - `GET /api/workstations` — list workstations
 - `POST /api/workstations/{name}/start` — start by name or instance ID
 - `POST /api/workstations/{name}/stop` — stop by name or instance ID
+- `POST /api/workstations/{name}/restart` — reboot a running instance by name or instance ID
 - `POST /api/workstations/{name}/kill` — permanently terminate by name or instance ID
 
 AWS region/profile come from env (`AWS_REGION`, `AWS_PROFILE`) or desk config.
