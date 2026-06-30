@@ -7,10 +7,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from desk.aws import (
+    AmiRef,
+    FutureRouterAmiInfo,
     clear_shutdown_tag,
     compute_shutdown_at,
     create_workstation,
+    describe_amis_by_id,
     get_command_invocation,
+    get_future_router_ami_info,
     is_ssm_ready,
     list_workstations,
     parse_duration,
@@ -31,6 +35,43 @@ router = APIRouter(tags=["workstations"])
 def _region_profile():
     aws = get_desk_settings().aws_settings
     return aws.region, aws.profile
+
+
+def _ami_ref_payload(ami: AmiRef) -> dict:
+    return {
+        "image_id": ami.image_id,
+        "name": ami.name,
+        "build_at": ami.build_at,
+    }
+
+
+def _future_router_ami_payload(info: FutureRouterAmiInfo) -> dict:
+    payload: dict = {"status": info.status, "warnings": info.warnings}
+    if info.ami is not None:
+        payload["ami"] = _ami_ref_payload(info.ami)
+    if info.latest is not None:
+        payload["latest"] = _ami_ref_payload(info.latest)
+    if info.deploy is not None:
+        payload["deploy"] = _ami_ref_payload(info.deploy)
+    return payload
+
+
+def _instance_payload(
+    workstation,
+    ami_lookup: dict[str, AmiRef],
+) -> dict:
+    image_id = workstation.image_id or None
+    ami = ami_lookup.get(workstation.image_id) if workstation.image_id else None
+    payload = {
+        "instance_id": workstation.instance_id,
+        "name": workstation.name or "-",
+        "state": workstation.state,
+        "shutdown_at": workstation.shutdown_at,
+        "ami_id": image_id,
+        "ami_name": ami.name if ami else None,
+        "ami_build_at": ami.build_at if ami else None,
+    }
+    return payload
 
 
 class CreateWorkstationBody(BaseModel):
@@ -152,19 +193,21 @@ def list_workstations_route(infra: bool = False):
     logger.info("list_workstations: region=%s profile=%s infra=%s", region, profile, infra)
     try:
         workstations = list_workstations(region=region, profile=profile, infra=infra)
+        image_ids = [w.image_id for w in workstations if w.image_id]
+        ami_lookup = describe_amis_by_id(image_ids, region=region, profile=profile)
+        future_router_ami = (
+            get_future_router_ami_info(region=region, profile=profile) if infra else None
+        )
     except Exception as e:
         logger.exception("list_workstations failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
     logger.info("list_workstations: returning %d instances", len(workstations))
-    return [
-        {
-            "instance_id": w.instance_id,
-            "name": w.name or "-",
-            "state": w.state,
-            "shutdown_at": w.shutdown_at,
-        }
-        for w in workstations
-    ]
+    response: dict = {
+        "instances": [_instance_payload(w, ami_lookup) for w in workstations],
+    }
+    if future_router_ami is not None:
+        response["future_router_ami"] = _future_router_ami_payload(future_router_ami)
+    return response
 
 
 @router.post("/workstations/{name}/start")

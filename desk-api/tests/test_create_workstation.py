@@ -137,18 +137,47 @@ def test_create_workstation_reserved_name_router_rejected() -> None:
     assert "reserved" in resp.json()["detail"].lower()
 
 
+@patch("app.routes.workstations.get_future_router_ami_info")
+@patch("app.routes.workstations.describe_amis_by_id")
 @patch("app.routes.workstations.list_workstations")
-def test_list_workstations_infra(mock_list_workstations: object) -> None:
-    """GET /api/workstations?infra=true lists Type=router instances."""
-    from desk.aws import Workstation
+def test_list_workstations_infra(
+    mock_list_workstations: object,
+    mock_describe_amis: object,
+    mock_future_router: object,
+) -> None:
+    """GET /api/workstations?infra=true lists Type=router instances with AMI metadata."""
+    from desk.aws import AmiRef, FutureRouterAmiInfo, Workstation
 
     mock_list_workstations.return_value = [
-        Workstation(instance_id="i-router1", name="router", state="running"),
+        Workstation(
+            instance_id="i-router1",
+            name="router",
+            state="running",
+            image_id="ami-router",
+        ),
     ]
+    mock_describe_amis.return_value = {
+        "ami-router": AmiRef(
+            image_id="ami-router",
+            name="router-ami-20240601-120000",
+            build_at="2024-06-01T12:00:00.000Z",
+        ),
+    }
+    mock_future_router.return_value = FutureRouterAmiInfo(
+        status="consolidated",
+        ami=AmiRef(
+            image_id="ami-router",
+            name="router-ami-20240601-120000",
+            build_at="2024-06-01T12:00:00.000Z",
+        ),
+    )
     resp = client.get("/api/workstations?infra=true")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 1
-    assert data[0]["instance_id"] == "i-router1"
-    assert data[0]["name"] == "router"
-    assert data[0]["shutdown_at"] is None
+    assert len(data["instances"]) == 1
+    inst = data["instances"][0]
+    assert inst["instance_id"] == "i-router1"
+    assert inst["name"] == "router"
+    assert inst["shutdown_at"] is None
+    assert inst["ami_name"] == "router-ami-20240601-120000"
+    assert data["future_router_ami"]["status"] == "consolidated"

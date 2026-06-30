@@ -5,6 +5,30 @@ export interface Instance {
   name: string
   state: string
   shutdown_at: string | null
+  ami_id?: string | null
+  ami_name?: string | null
+  ami_build_at?: string | null
+}
+
+export interface AmiRef {
+  image_id: string
+  name: string
+  build_at: string
+}
+
+export type FutureRouterAmiStatus = 'consolidated' | 'mismatch' | 'partial' | 'unavailable'
+
+export interface FutureRouterAmiInfo {
+  status: FutureRouterAmiStatus
+  ami?: AmiRef
+  latest?: AmiRef
+  deploy?: AmiRef
+  warnings: string[]
+}
+
+export interface ListInstancesResponse {
+  instances: Instance[]
+  future_router_ami?: FutureRouterAmiInfo
 }
 
 function authHeaders(): HeadersInit {
@@ -39,7 +63,7 @@ function errorMessage(res: Response, text: string): string {
   return text?.trim() || `Request failed (${res.status})`
 }
 
-export async function listInstances(options?: { infra?: boolean }): Promise<Instance[]> {
+export async function listInstances(options?: { infra?: boolean }): Promise<ListInstancesResponse> {
   const q = options?.infra ? '?infra=true' : ''
   const res = await fetchWithAuthRetry(`/api/workstations${q}`, { headers: authHeaders() })
   if (!res.ok) {

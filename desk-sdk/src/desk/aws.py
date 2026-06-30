@@ -481,6 +481,31 @@ class Workstation:
     name: str
     state: str
     shutdown_at: str | None = None
+    image_id: str = ""
+
+
+@dataclass
+class AmiRef:
+    """AMI identity with name and AWS CreationDate."""
+
+    image_id: str
+    name: str
+    build_at: str
+
+
+@dataclass
+class FutureRouterAmiInfo:
+    """Resolved router AMI sources for infra list summary (latest vs deploy)."""
+
+    status: str  # consolidated | mismatch | partial | unavailable
+    ami: AmiRef | None = None
+    latest: AmiRef | None = None
+    deploy: AmiRef | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
+ROUTER_AMI_NAME_PREFIX = "router-ami-"
+ROUTER_LAUNCH_TEMPLATE_NAME = "desk-router-lt"
 
 
 def list_workstations(
@@ -514,6 +539,7 @@ def list_workstations(
                         name=tags.get("Name", ""),
                         state=instance["State"]["Name"],
                         shutdown_at=tags.get(TAG_SHUTDOWN_AT),
+                        image_id=instance.get("ImageId", ""),
                     )
                 )
 
@@ -1039,6 +1065,127 @@ def list_amis(
 
     result.sort(key=lambda a: a.creation_date, reverse=True)
     return result
+
+
+def _ami_ref_from_image(img: dict) -> AmiRef:
+    return AmiRef(
+        image_id=img["ImageId"],
+        name=img.get("Name", "-"),
+        build_at=img.get("CreationDate", ""),
+    )
+
+
+def describe_amis_by_id(
+    image_ids: list[str],
+    region: str | None = None,
+    profile: str | None = None,
+) -> dict[str, AmiRef]:
+    """Describe AMIs by ID. Missing or deregistered IDs are omitted."""
+    unique = list(dict.fromkeys(i for i in image_ids if i))
+    if not unique:
+        return {}
+
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    result: dict[str, AmiRef] = {}
+
+    for image_id in unique:
+        try:
+            resp = ec2.describe_images(ImageIds=[image_id])
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "InvalidAMIID.NotFound":
+                continue
+            raise
+        images = resp.get("Images", [])
+        if images:
+            result[image_id] = _ami_ref_from_image(images[0])
+
+    return result
+
+
+def get_latest_router_ami(
+    region: str | None = None,
+    profile: str | None = None,
+) -> AmiRef | None:
+    """Latest self-owned AMI whose name matches router-ami-* (same logic as deploy.sh)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    response = ec2.describe_images(
+        Owners=["self"],
+        Filters=[{"Name": "name", "Values": [f"{ROUTER_AMI_NAME_PREFIX}*"]}],
+    )
+    images = response.get("Images", [])
+    if not images:
+        return None
+    images.sort(key=lambda x: x.get("CreationDate", ""), reverse=True)
+    return _ami_ref_from_image(images[0])
+
+
+def get_router_launch_template_ami(
+    region: str | None = None,
+    profile: str | None = None,
+) -> AmiRef | None:
+    """AMI on the desk-router launch template ($Latest), if the template exists."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    try:
+        resp = ec2.describe_launch_template_versions(
+            LaunchTemplateName=ROUTER_LAUNCH_TEMPLATE_NAME,
+            Versions=["$Latest"],
+        )
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("InvalidLaunchTemplateName.NotFound", "InvalidLaunchTemplateId.NotFound"):
+            return None
+        raise
+
+    versions = resp.get("LaunchTemplateVersions", [])
+    if not versions:
+        return None
+
+    image_id = versions[0].get("LaunchTemplateData", {}).get("ImageId")
+    if not image_id:
+        return None
+
+    return describe_amis_by_id([image_id], region=region, profile=profile).get(image_id)
+
+
+def get_future_router_ami_info(
+    region: str | None = None,
+    profile: str | None = None,
+) -> FutureRouterAmiInfo:
+    """Compare latest router-ami-* with desk-router launch template AMI for infra UI summary."""
+    latest = get_latest_router_ami(region=region, profile=profile)
+    deploy = get_router_launch_template_ami(region=region, profile=profile)
+
+    if latest is None and deploy is None:
+        return FutureRouterAmiInfo(
+            status="unavailable",
+            warnings=["Router AMI info unavailable."],
+        )
+    if latest is None:
+        return FutureRouterAmiInfo(
+            status="partial",
+            ami=deploy,
+            warnings=["No router-ami-* AMI found in this account."],
+        )
+    if deploy is None:
+        return FutureRouterAmiInfo(
+            status="partial",
+            ami=latest,
+            warnings=["desk-router launch template not found (stack may not be deployed)."],
+        )
+    if latest.image_id == deploy.image_id:
+        return FutureRouterAmiInfo(status="consolidated", ami=latest)
+    return FutureRouterAmiInfo(
+        status="mismatch",
+        latest=latest,
+        deploy=deploy,
+        warnings=[
+            "desk-router deploy is behind the latest router AMI — redeploy desk-router to roll out upgrades."
+        ],
+    )
 
 
 def wait_for_ami_available(
