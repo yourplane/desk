@@ -11,7 +11,6 @@ import shlex
 import tarfile
 import tempfile
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -43,21 +42,32 @@ from desk.aws import (
 )
 from desk_cli import __version__
 from desk.config import get_desk_settings
-
-
-AMI_BUILDS_PREFIX = "ami-builds/"
-AMI_BUILD_ARCHIVE_PREFIX = "ami-build-archive/"
-# Written by `desk ami build step` after the builder instance is launched.
-BUILDER_INSTANCE_KEY = "builder-instance.json"
-# Written after the test instance is launched (from the registered AMI).
-TEST_INSTANCE_KEY = "test-instance.json"
-# Post-recipe AMI registration progress (image id, completion flag).
-AMI_RESULT_KEY = "ami-result.json"
-# SSM Run Command Comment prefix to map invocations to recipe steps (≤100 chars; see _ami_recipe_comment_tag).
-AMI_BUILD_COMMENT_PREFIX = "desk-ami-build:"
-AMI_TEST_COMMENT_PREFIX = "desk-ami-test:"
-# Single tar object per copy step under files/copy/<i>/ (async AMI staging).
-AMI_COPY_BUNDLE_NAME = "bundle.tar"
+from desk.ami_build import (
+    AMI_BUILDS_PREFIX,
+    AMI_BUILD_ARCHIVE_PREFIX,
+    BUILDER_INSTANCE_KEY,
+    TEST_INSTANCE_KEY,
+    AMI_RESULT_KEY,
+    AMI_BUILD_COMMENT_PREFIX,
+    AMI_TEST_COMMENT_PREFIX,
+    AMI_COPY_BUNDLE_NAME,
+    AmiBuildError,
+    AmiBuildNotFoundError,
+    AmiBuildSnapshot as AsyncAmiBuildSnapshot,
+    RecipeEval as AsyncRecipeEval,
+    ami_build_comment_tag as _ami_build_comment_tag,
+    ami_test_comment_tag as _ami_test_comment_tag,
+    archive_ami_build,
+    describe_recipe_step as _describe_recipe_step_for_status,
+    evaluate_build_recipe as _maybe_evaluate_async_recipe,
+    evaluate_test_recipe as _maybe_evaluate_async_test_recipe,
+    expected_async_shell_for_step as _expected_async_shell_for_step,
+    get_build_steps as _get_build_steps,
+    get_test_steps as _get_test_steps,
+    needs_post_builder_test_work as _needs_post_builder_test_work,
+    normalize_build_id as _normalize_build_id_arg,
+    resolve_ami_build_snapshot,
+)
 
 
 @click.group("ami")
@@ -132,59 +142,6 @@ def _load_build_config(path: str) -> dict[str, Any]:
     return data
 
 
-def _get_build_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return normalized list of build steps (each has 'run' or 'copy') from config."""
-    if "build" in config and config.get("build") is not None:
-        return list(config["build"])
-    steps = config.get("steps")
-    if steps is not None:
-        return list(steps)
-    # Legacy: run_before_copy, then all copies, then all runs
-    out: list[dict[str, Any]] = []
-    for cmd in config.get("run_before_copy") or []:
-        out.append({"run": cmd})
-    for item in config.get("copy") or []:
-        out.append({"copy": item})
-    for cmd in config.get("run") or []:
-        out.append({"run": cmd})
-    return out
-
-
-def _get_test_steps(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Optional post-build test steps (same shape as build steps)."""
-    t = config.get("test")
-    if t is None:
-        return []
-    return list(t)
-
-
-def _truncate_status_text(s: str, max_len: int = 100) -> str:
-    t = " ".join(s.split())
-    if len(t) <= max_len:
-        return t
-    return t[: max_len - 3] + "..."
-
-
-def _describe_recipe_step_for_status(step: dict[str, Any]) -> str:
-    """Short human-readable summary of a recipe step for CLI status output."""
-    if "run" in step:
-        rv = step["run"]
-        if not isinstance(rv, str):
-            return "run: (invalid config)"
-        rv = rv.strip()
-        if rv.startswith("s3:/"):
-            return f"run script from {_truncate_status_text(rv)}"
-        return f"run: {_truncate_status_text(rv)}"
-    c = step["copy"]
-    src = str(c.get("source", ""))
-    dst = str(c.get("dest", ""))
-    rec = bool(c.get("recursive", False))
-    extra = " (recursive)" if rec else ""
-    return (
-        f"copy{extra}: {_truncate_status_text(src)} -> {_truncate_status_text(dst)}"
-    )
-
-
 def _registration_ami_name_for_async_build(ami_name: str, build_id: str) -> str:
     """Unique AMI registration name: base ami_name + hyphen + build id (AWS limit 128 chars)."""
     bid = _normalize_build_id_arg(build_id)
@@ -237,38 +194,6 @@ def _s3_uri_for_key(key: str) -> str:
 def _new_build_id() -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{secrets.token_hex(4)}"
-
-
-def _normalize_build_id_arg(arg: str) -> str:
-    s = arg.strip().strip("/")
-    for prefix in (AMI_BUILDS_PREFIX, AMI_BUILD_ARCHIVE_PREFIX):
-        if s.startswith(prefix):
-            s = s[len(prefix) :]
-            break
-    return s.rstrip("/")
-
-
-@dataclass(frozen=True)
-class AsyncAmiBuildSnapshot:
-    """AWS-derived state for `desk ami build status` / `step` (no extra local state)."""
-
-    build_id: str
-    bucket: str
-    s3_prefix: str
-    config: dict[str, Any]
-    recorded_instance_id: str | None
-    ec2_state: str | None
-    ec2_missing: bool
-    ssm_ready: bool | None
-    ami_result: dict[str, Any] | None
-    # Populated in _resolve_async_ami_build_snapshot (one DescribeImages per build when image_id exists).
-    registered_ami_id: str | None
-    registered_ami_state: str | None
-    async_pipeline_fully_complete: bool
-    test_recorded_instance_id: str | None
-    test_ec2_state: str | None
-    test_ec2_missing: bool
-    test_ssm_ready: bool | None
 
 
 def _read_s3_object_json(
@@ -332,69 +257,64 @@ def _workstation_name_for_staged_test(build_id: str) -> str:
     return f"ami-test-{base}"
 
 
-def _needs_post_builder_test_work(snap: AsyncAmiBuildSnapshot) -> bool:
-    """True when the builder is gone but we still need to launch/run the post-AMI test recipe."""
-    if snap.async_pipeline_fully_complete:
-        return False
-    if snap.ami_result and snap.ami_result.get("test_failed"):
-        return False
-    if not _get_test_steps(snap.config):
-        return False
-    if not snap.registered_ami_id or snap.registered_ami_state != "available":
-        return False
-    return True
-
-
-def _move_s3_prefix_within_bucket(
-    bucket: str,
-    src_prefix: str,
-    dest_prefix: str,
-    *,
-    region: str | None,
-    profile: str | None,
-) -> None:
-    """Copy all objects under src_prefix to dest_prefix and delete sources."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    s3 = session.client("s3")
-    paginator = s3.get_paginator("list_objects_v2")
-    pages = list(paginator.paginate(Bucket=bucket, Prefix=src_prefix))
-    keys: list[str] = []
-    for page in pages:
-        for obj in page.get("Contents") or []:
-            keys.append(obj["Key"])
-    if not keys:
-        raise click.ClickException(
-            f"No objects found under s3://{bucket}/{src_prefix}"
-        )
-    for key in keys:
-        suffix = key[len(src_prefix) :]
-        new_key = f"{dest_prefix}{suffix}"
-        s3.copy_object(
-            Bucket=bucket,
-            Key=new_key,
-            CopySource={"Bucket": bucket, "Key": key},
-        )
-        s3.delete_object(Bucket=bucket, Key=key)
-
-
 def _archive_staged_ami_build_prefix(build_id: str, *, stack: str) -> None:
     """Move ami-builds/<id>/ to ami-build-archive/<id>/ (same layout as ``desk ami build cancel``)."""
     aws = get_desk_settings().aws_settings
-    region = aws.region
-    profile = aws.profile
     bid = _normalize_build_id_arg(build_id)
     if not bid:
         raise click.ClickException("Build id is empty.")
     try:
-        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
-    except RuntimeError as e:
+        archive_ami_build(build_id, stack=stack, region=aws.region, profile=aws.profile)
+    except AmiBuildNotFoundError as e:
         raise click.ClickException(str(e)) from e
-    src_prefix = f"{AMI_BUILDS_PREFIX}{bid}/"
-    dest_prefix = f"{AMI_BUILD_ARCHIVE_PREFIX}{bid}/"
-    _move_s3_prefix_within_bucket(
-        bucket, src_prefix, dest_prefix, region=region, profile=profile
-    )
-    click.echo(f"Archived AMI build {bid} to s3:/{dest_prefix}")
+    except AmiBuildError as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"Archived AMI build {bid} to s3:/{AMI_BUILD_ARCHIVE_PREFIX}{bid}/")
+
+
+def _tar_member_name_for_single_file(source: str, dest: str) -> str:
+    """Path inside the tarball for a single-file copy (matches final basename on extract)."""
+    if dest.endswith("/") or dest.endswith(os.sep):
+        return os.path.basename(source)
+    d = dest.rstrip("/")
+    base = os.path.basename(d)
+    if not base:
+        return os.path.basename(source)
+    return base
+
+
+def _parent_dir_for_file_copy_dest(dest: str) -> str:
+    """Directory to pass to ``tar -C`` for a single-file copy (handles ``…/`` targets)."""
+    if dest.endswith("/") or dest.endswith(os.sep):
+        return dest.rstrip("/") or "."
+    d = os.path.dirname(dest)
+    return d if d else "."
+
+
+def _write_ami_copy_tarball(
+    resolved: str,
+    dest: str,
+    *,
+    recursive: bool,
+) -> str:
+    """Create a temporary tar file with full permission bits preserved. Caller must unlink."""
+    fd, tmp_path = tempfile.mkstemp(suffix=".tar")
+    os.close(fd)
+    try:
+        with tarfile.open(tmp_path, "w", format=tarfile.GNU_FORMAT) as tf:
+            if os.path.isdir(resolved):
+                assert recursive
+                tf.add(os.path.abspath(resolved), arcname=".", recursive=True)
+            else:
+                arc = _tar_member_name_for_single_file(resolved, dest)
+                tf.add(os.path.abspath(resolved), arcname=arc, recursive=False)
+        return tmp_path
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _stage_ami_build_to_s3(
@@ -664,601 +584,20 @@ def _drive_ami_build_run_loop(
         time.sleep(2)
 
 
-def _safe_get_instance_state(
-    instance_id: str,
-    *,
-    region: str | None,
-    profile: str | None,
-) -> str | None:
-    try:
-        return get_instance_state(instance_id, region=region, profile=profile)
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code == "InvalidInstanceID.NotFound":
-            return None
-        raise
-
-
-def _async_ami_image_id_from_result(ami_result: dict[str, Any] | None) -> str | None:
-    if not ami_result:
-        return None
-    raw = ami_result.get("image_id")
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    return None
-
-
 def _resolve_async_ami_build_snapshot(build_id: str, *, stack: str) -> AsyncAmiBuildSnapshot:
     aws = get_desk_settings().aws_settings
-    region = aws.region
-    profile = aws.profile
-    bid = _normalize_build_id_arg(build_id)
-    if not bid:
-        raise click.ClickException("Build id is empty.")
-
     try:
-        bucket = get_desk_copy_bucket(stack_name=stack, region=region, profile=profile)
-    except RuntimeError as e:
+        return resolve_ami_build_snapshot(
+            build_id,
+            stack=stack,
+            archived=False,
+            region=aws.region,
+            profile=aws.profile,
+        )
+    except AmiBuildNotFoundError as e:
         raise click.ClickException(str(e)) from e
-
-    prefix = f"{AMI_BUILDS_PREFIX}{bid}/"
-    session = boto3.Session(region_name=region, profile_name=profile)
-    s3 = session.client("s3")
-
-    cfg_key = f"{prefix}config.json"
-    config = _read_s3_object_json(s3, bucket, cfg_key)
-    if config is None:
-        raise click.ClickException(
-            f"No staged AMI build found for id {bid!r} "
-            f"(missing {AMI_BUILDS_PREFIX}{bid}/config.json)."
-        )
-
-    builder_key = f"{prefix}{BUILDER_INSTANCE_KEY}"
-    builder_doc = _read_s3_object_json(s3, bucket, builder_key)
-    recorded_id: str | None = None
-    if builder_doc is not None:
-        iid = builder_doc.get("instance_id")
-        if iid is None:
-            recorded_id = None
-        elif not isinstance(iid, str):
-            raise click.ClickException(
-                f"{BUILDER_INSTANCE_KEY} must contain a string 'instance_id'."
-            )
-        elif not iid.strip():
-            raise click.ClickException(
-                f"{BUILDER_INSTANCE_KEY} 'instance_id' must be non-empty."
-            )
-        else:
-            recorded_id = iid.strip()
-
-    ec2_missing = False
-    ec2_state: str | None = None
-    ssm_ready: bool | None = None
-
-    if recorded_id:
-        ec2_state = _safe_get_instance_state(recorded_id, region=region, profile=profile)
-        if ec2_state is None:
-            ec2_missing = True
-        elif ec2_state in ("running", "pending"):
-            ssm_ready = is_ssm_ready(recorded_id, region=region, profile=profile)
-        elif ec2_state in ("stopped", "stopping", "shutting-down"):
-            ssm_ready = False
-        elif ec2_state == "terminated":
-            ssm_ready = None
-
-    result_key = f"{prefix}{AMI_RESULT_KEY}"
-    ami_result = _read_s3_object_json(s3, bucket, result_key)
-
-    test_key = f"{prefix}{TEST_INSTANCE_KEY}"
-    test_doc = _read_s3_object_json(s3, bucket, test_key)
-    test_recorded_id: str | None = None
-    if test_doc is not None:
-        tid = test_doc.get("instance_id")
-        if tid is None:
-            test_recorded_id = None
-        elif not isinstance(tid, str):
-            raise click.ClickException(
-                f"{TEST_INSTANCE_KEY} must contain a string 'instance_id'."
-            )
-        elif not tid.strip():
-            raise click.ClickException(
-                f"{TEST_INSTANCE_KEY} 'instance_id' must be non-empty."
-            )
-        else:
-            test_recorded_id = tid.strip()
-
-    test_ec2_missing = False
-    test_ec2_state: str | None = None
-    test_ssm_ready: bool | None = None
-    if test_recorded_id:
-        test_ec2_state = _safe_get_instance_state(
-            test_recorded_id, region=region, profile=profile
-        )
-        if test_ec2_state is None:
-            test_ec2_missing = True
-        elif test_ec2_state in ("running", "pending"):
-            test_ssm_ready = is_ssm_ready(test_recorded_id, region=region, profile=profile)
-        elif test_ec2_state in ("stopped", "stopping", "shutting-down"):
-            test_ssm_ready = False
-        elif test_ec2_state == "terminated":
-            test_ssm_ready = None
-
-    reg_image_id = _async_ami_image_id_from_result(ami_result)
-    reg_ami_state: str | None = None
-    if reg_image_id:
-        reg_ami_state = get_ami_state(reg_image_id, region=region, profile=profile)
-
-    test_steps_list = _get_test_steps(config)
-    has_test_recipe = len(test_steps_list) > 0
-
-    # Completion: explicit flag, or legacy no-test builds (AMI available, builder gone).
-    pipeline_done = False
-    if ami_result and ami_result.get("pipeline_complete") is True and reg_image_id:
-        pipeline_done = True
-    elif (
-        not has_test_recipe
-        and reg_image_id
-        and reg_ami_state == "available"
-        and (ec2_state == "terminated" or ec2_missing)
-    ):
-        pipeline_done = True
-
-    return AsyncAmiBuildSnapshot(
-        build_id=bid,
-        bucket=bucket,
-        s3_prefix=prefix,
-        config=config,
-        recorded_instance_id=recorded_id,
-        ec2_state=ec2_state,
-        ec2_missing=ec2_missing,
-        ssm_ready=ssm_ready,
-        ami_result=ami_result,
-        registered_ami_id=reg_image_id,
-        registered_ami_state=reg_ami_state,
-        async_pipeline_fully_complete=pipeline_done,
-        test_recorded_instance_id=test_recorded_id,
-        test_ec2_state=test_ec2_state,
-        test_ec2_missing=test_ec2_missing,
-        test_ssm_ready=test_ssm_ready,
-    )
-
-
-def _ami_recipe_comment_tag(build_id: str, step_index: int, kind: str, prefix: str) -> str:
-    """SSM Comment value correlating an invocation to a recipe step (AWS max 100 chars)."""
-    bid = _normalize_build_id_arg(build_id)
-    base = f"{prefix}{bid}:{step_index}:{kind}"
-    if len(base) <= 100:
-        return base
-    short = hashlib.sha256(bid.encode()).hexdigest()[:12]
-    return f"{prefix}{short}:{step_index}:{kind}"
-
-
-def _ami_build_comment_tag(build_id: str, step_index: int, kind: str) -> str:
-    return _ami_recipe_comment_tag(build_id, step_index, kind, AMI_BUILD_COMMENT_PREFIX)
-
-
-def _ami_test_comment_tag(build_id: str, step_index: int, kind: str) -> str:
-    return _ami_recipe_comment_tag(build_id, step_index, kind, AMI_TEST_COMMENT_PREFIX)
-
-
-def _parse_ami_recipe_comment(
-    comment: str | None, build_id: str, prefix: str
-) -> tuple[int, str] | None:
-    if not comment or not comment.startswith(prefix):
-        return None
-    bid = _normalize_build_id_arg(build_id)
-    rest = comment[len(prefix) :]
-    parts = rest.split(":")
-    if len(parts) < 3:
-        return None
-    try:
-        step_index = int(parts[-2])
-        kind = parts[-1]
-    except (ValueError, IndexError):
-        return None
-    id_part = ":".join(parts[:-2])
-    if id_part == bid:
-        return (step_index, kind)
-    if id_part == hashlib.sha256(bid.encode()).hexdigest()[:12]:
-        return (step_index, kind)
-    return None
-
-
-def _parse_ami_build_comment(comment: str | None, build_id: str) -> tuple[int, str] | None:
-    return _parse_ami_recipe_comment(comment, build_id, AMI_BUILD_COMMENT_PREFIX)
-
-
-def _parse_ami_test_comment(comment: str | None, build_id: str) -> tuple[int, str] | None:
-    return _parse_ami_recipe_comment(comment, build_id, AMI_TEST_COMMENT_PREFIX)
-
-
-def _normalize_shell_for_compare(cmd: str) -> str:
-    return " ".join(cmd.split())
-
-
-def _staged_s3_object_key(src: str) -> str:
-    s = src.strip()
-    if not s.startswith("s3:/"):
-        raise click.ClickException(
-            f"Staged copy source must be s3:/… (got {src!r}). Re-run `desk ami build create`."
-        )
-    return s[4:].lstrip("/")
-
-
-def _tar_member_name_for_single_file(source: str, dest: str) -> str:
-    """Path inside the tarball for a single-file copy (matches final basename on extract)."""
-    if dest.endswith("/") or dest.endswith(os.sep):
-        return os.path.basename(source)
-    d = dest.rstrip("/")
-    base = os.path.basename(d)
-    if not base:
-        return os.path.basename(source)
-    return base
-
-
-def _parent_dir_for_file_copy_dest(dest: str) -> str:
-    """Directory to pass to ``tar -C`` for a single-file copy (handles ``…/`` targets)."""
-    if dest.endswith("/") or dest.endswith(os.sep):
-        return dest.rstrip("/") or "."
-    d = os.path.dirname(dest)
-    return d if d else "."
-
-
-def _write_ami_copy_tarball(
-    resolved: str,
-    dest: str,
-    *,
-    recursive: bool,
-) -> str:
-    """Create a temporary tar file with full permission bits preserved. Caller must unlink."""
-    fd, tmp_path = tempfile.mkstemp(suffix=".tar")
-    os.close(fd)
-    try:
-        with tarfile.open(tmp_path, "w", format=tarfile.GNU_FORMAT) as tf:
-            if os.path.isdir(resolved):
-                assert recursive
-                tf.add(os.path.abspath(resolved), arcname=".", recursive=True)
-            else:
-                arc = _tar_member_name_for_single_file(resolved, dest)
-                tf.add(os.path.abspath(resolved), arcname=arc, recursive=False)
-        return tmp_path
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def _async_shell_for_copy_step(
-    copy_item: dict[str, Any],
-    *,
-    bucket: str,
-    region: str | None,
-    profile: str | None,
-) -> str:
-    """Download a staged tar bundle via ``curl`` and extract with ``tar`` (preserves modes)."""
-    src = copy_item["source"]
-    raw_dest = copy_item["dest"]
-    recursive = copy_item.get("recursive", False)
-    key = _staged_s3_object_key(src)
-    url = generate_presigned_get_object_url(
-        bucket, key, region=region, profile=profile
-    )
-    lines = [
-        "set -eu",
-        "TMP=$(mktemp)",
-        "trap 'rm -f \"$TMP\"' EXIT",
-        f"curl -fsSL {shlex.quote(url)} -o \"$TMP\"",
-    ]
-    if recursive:
-        dest = raw_dest.rstrip("/")
-        lines.append(f"install -d -m 0755 {shlex.quote(dest)}")
-        lines.append(f'tar -xf "$TMP" -C {shlex.quote(dest)}')
-    else:
-        dest_dir = _parent_dir_for_file_copy_dest(raw_dest)
-        lines.append(f"install -d -m 0755 {shlex.quote(dest_dir)}")
-        lines.append(f'tar -xf "$TMP" -C {shlex.quote(dest_dir)}')
-    return "\n".join(lines) + "\n"
-
-
-def _async_shell_for_run_step(
-    run_value: str,
-    step_index: int,
-    *,
-    bucket: str,
-    region: str | None,
-    profile: str | None,
-) -> str:
-    rv = run_value.strip()
-    if rv.startswith("s3:/"):
-        key = _staged_s3_object_key(rv)
-        tmp = f"/tmp/desk-ami-run-{step_index}.sh"
-        url = generate_presigned_get_object_url(
-            bucket, key, region=region, profile=profile
-        )
-        return (
-            "set -eu\n"
-            f"curl -fsSL {shlex.quote(url)} -o {shlex.quote(tmp)}\n"
-            f"bash {shlex.quote(tmp)}\n"
-        )
-    return rv
-
-
-def _expected_async_shell_for_step(
-    step: dict[str, Any],
-    step_index: int,
-    *,
-    bucket: str,
-    region: str | None,
-    profile: str | None,
-) -> str:
-    if "run" in step:
-        return _async_shell_for_run_step(
-            step["run"], step_index, bucket=bucket, region=region, profile=profile
-        )
-    return _async_shell_for_copy_step(
-        step["copy"], bucket=bucket, region=region, profile=profile
-    )
-
-
-@dataclass(frozen=True)
-class AsyncRecipeEval:
-    """Derived from SSM Run Command history for the builder instance."""
-
-    total_steps: int
-    steps: tuple[dict[str, Any], ...]
-    blocked: bool
-    blocked_step_index: int | None
-    blocked_command_id: str | None
-    last_error: str | None
-    in_progress_step_index: int | None
-    in_progress_command_id: str | None
-    next_step_index: int | None
-    recipe_complete: bool
-
-
-def _invocation_step_failed(status: str, exit_code: int | None) -> bool:
-    if status in ("Failed", "TimedOut", "Cancelled", "Cancelling"):
-        return True
-    if status == "Success":
-        if exit_code is None:
-            return False
-        return exit_code != 0
-    return False
-
-
-def _invocation_step_succeeded(status: str, exit_code: int | None) -> bool:
-    return status == "Success" and (exit_code is None or exit_code == 0)
-
-
-def _map_invocation_to_step_index(
-    command_id: str,
-    *,
-    build_id: str,
-    steps: list[dict[str, Any]],
-    bucket: str,
-    region: str | None,
-    profile: str | None,
-    comment_prefix: str,
-) -> int | None:
-    try:
-        cmd_doc = get_ssm_command(command_id, region=region, profile=profile)
-    except (ClientError, RuntimeError):
-        return None
-    if cmd_doc.get("DocumentName") != "AWS-RunShellScript":
-        return None
-    params = cmd_doc.get("Parameters") or {}
-    commands = params.get("commands")
-    if not commands or not isinstance(commands, list):
-        return None
-    shell = commands[0] if commands else ""
-    parsed = _parse_ami_recipe_comment(cmd_doc.get("Comment"), build_id, comment_prefix)
-    if parsed is not None:
-        return parsed[0]
-    norm = _normalize_shell_for_compare(shell)
-    for i, step in enumerate(steps):
-        try:
-            expected = _expected_async_shell_for_step(
-                step, i, bucket=bucket, region=region, profile=profile
-            )
-        except click.ClickException:
-            continue
-        if norm == _normalize_shell_for_compare(expected):
-            return i
-    return None
-
-
-def _evaluate_async_recipe(
-    instance_id: str,
-    *,
-    build_id: str,
-    steps: list[dict[str, Any]],
-    bucket: str,
-    region: str | None,
-    profile: str | None,
-    comment_prefix: str,
-) -> AsyncRecipeEval:
-    n = len(steps)
-    if n == 0:
-        return AsyncRecipeEval(
-            total_steps=0,
-            steps=tuple(),
-            blocked=False,
-            blocked_step_index=None,
-            blocked_command_id=None,
-            last_error=None,
-            in_progress_step_index=None,
-            in_progress_command_id=None,
-            next_step_index=None,
-            recipe_complete=True,
-        )
-
-    inv_rows = list_command_invocations_for_instance(
-        instance_id, region=region, profile=profile
-    )
-    # Latest invocation wins per step index (RequestedDateTime ascending list).
-    by_step: dict[int, dict[str, Any]] = {}
-    for row in inv_rows:
-        cid = row.get("CommandId")
-        if not cid:
-            continue
-        step_i = _map_invocation_to_step_index(
-            cid,
-            build_id=build_id,
-            steps=steps,
-            bucket=bucket,
-            region=region,
-            profile=profile,
-            comment_prefix=comment_prefix,
-        )
-        if step_i is None:
-            continue
-        prev = by_step.get(step_i)
-        if prev is None or (row.get("RequestedDateTime") or "") >= (
-            prev.get("RequestedDateTime") or ""
-        ):
-            by_step[step_i] = dict(row)
-
-    terminal = ("Success", "Failed", "TimedOut", "Cancelled", "Cancelling")
-
-    def enrich(row: dict[str, Any]) -> tuple[str, int | None, str]:
-        st = row.get("Status") or ""
-        cid = row.get("CommandId") or ""
-        exit_code: int | None = None
-        stderr = ""
-        if cid and st in terminal:
-            try:
-                inv = get_command_invocation(
-                    cid, instance_id, region=region, profile=profile
-                )
-                exit_code = inv.exit_code
-                stderr = inv.stderr or ""
-            except ClientError:
-                pass
-        return st, exit_code, stderr
-
-    for i in range(n):
-        row = by_step.get(i)
-        if row is None:
-            return AsyncRecipeEval(
-                total_steps=n,
-                steps=tuple(steps),
-                blocked=False,
-                blocked_step_index=None,
-                blocked_command_id=None,
-                last_error=None,
-                in_progress_step_index=None,
-                in_progress_command_id=None,
-                next_step_index=i,
-                recipe_complete=False,
-            )
-        st, exit_code, stderr = enrich(row)
-        cid = row.get("CommandId")
-        if st in ("Pending", "InProgress", "Delayed", "PendingDeletion"):
-            return AsyncRecipeEval(
-                total_steps=n,
-                steps=tuple(steps),
-                blocked=False,
-                blocked_step_index=None,
-                blocked_command_id=None,
-                last_error=None,
-                in_progress_step_index=i,
-                in_progress_command_id=cid if isinstance(cid, str) else None,
-                next_step_index=None,
-                recipe_complete=False,
-            )
-        if _invocation_step_failed(st, exit_code):
-            detail = f"status={st!r}"
-            if exit_code is not None:
-                detail += f" exit_code={exit_code}"
-            if stderr.strip():
-                detail += f" stderr={stderr.strip()[:2000]}"
-            return AsyncRecipeEval(
-                total_steps=n,
-                steps=tuple(steps),
-                blocked=True,
-                blocked_step_index=i,
-                blocked_command_id=cid if isinstance(cid, str) else None,
-                last_error=detail,
-                in_progress_step_index=None,
-                in_progress_command_id=None,
-                next_step_index=None,
-                recipe_complete=False,
-            )
-        if not _invocation_step_succeeded(st, exit_code):
-            return AsyncRecipeEval(
-                total_steps=n,
-                steps=tuple(steps),
-                blocked=False,
-                blocked_step_index=None,
-                blocked_command_id=None,
-                last_error=None,
-                in_progress_step_index=i,
-                in_progress_command_id=cid if isinstance(cid, str) else None,
-                next_step_index=None,
-                recipe_complete=False,
-            )
-
-    return AsyncRecipeEval(
-        total_steps=n,
-        steps=tuple(steps),
-        blocked=False,
-        blocked_step_index=None,
-        blocked_command_id=None,
-        last_error=None,
-        in_progress_step_index=None,
-        in_progress_command_id=None,
-        next_step_index=None,
-        recipe_complete=True,
-    )
-
-
-def _maybe_evaluate_async_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval | None:
-    """Load SSM build-recipe state when the builder can run steps; otherwise return None."""
-    if not snap.recorded_instance_id:
-        return None
-    if snap.ec2_missing or snap.ec2_state == "terminated":
-        return None
-    if snap.ec2_state not in ("running", "pending"):
-        return None
-    if snap.ssm_ready is not True:
-        return None
-    aws = get_desk_settings().aws_settings
-    return _evaluate_async_recipe(
-        snap.recorded_instance_id,
-        build_id=snap.build_id,
-        steps=_get_build_steps(snap.config),
-        bucket=snap.bucket,
-        region=aws.region,
-        profile=aws.profile,
-        comment_prefix=AMI_BUILD_COMMENT_PREFIX,
-    )
-
-
-def _maybe_evaluate_async_test_recipe(snap: AsyncAmiBuildSnapshot) -> AsyncRecipeEval | None:
-    """Load SSM test-recipe state when the test instance can run steps; otherwise return None."""
-    if not snap.test_recorded_instance_id:
-        return None
-    if snap.test_ec2_missing or snap.test_ec2_state == "terminated":
-        return None
-    if snap.test_ec2_state not in ("running", "pending"):
-        return None
-    if snap.test_ssm_ready is not True:
-        return None
-    steps = _get_test_steps(snap.config)
-    if not steps:
-        return None
-    aws = get_desk_settings().aws_settings
-    return _evaluate_async_recipe(
-        snap.test_recorded_instance_id,
-        build_id=snap.build_id,
-        steps=steps,
-        bucket=snap.bucket,
-        region=aws.region,
-        profile=aws.profile,
-        comment_prefix=AMI_TEST_COMMENT_PREFIX,
-    )
+    except AmiBuildError as e:
+        raise click.ClickException(str(e)) from e
 
 
 def _print_async_post_recipe_section(snap: AsyncAmiBuildSnapshot) -> None:

@@ -459,3 +459,146 @@ export async function setAutoStop(
 
   return parsed as SetAutoStopResult
 }
+
+// ---- AMI builds ----
+
+export interface AmiBuildStatusSummary {
+  phase: string
+  label: string
+}
+
+export interface AmiBuildListItem {
+  build_id: string
+  ami_name: string
+  created_at: string | null
+  status_summary: AmiBuildStatusSummary
+}
+
+export interface AmiBuildListResponse {
+  items: AmiBuildListItem[]
+  page: number
+  page_size: number
+  total: number
+  total_pages: number
+}
+
+export interface AmiBuildRecipeStep {
+  index: number
+  description: string
+}
+
+export interface AmiBuildRecipeDetail {
+  label: string
+  total_steps?: number
+  recipe_complete?: boolean
+  blocked?: boolean
+  blocked_step_index?: number | null
+  blocked_command_id?: string | null
+  last_error?: string | null
+  in_progress_step_index?: number | null
+  in_progress_command_id?: string | null
+  next_step_index?: number | null
+  steps?: AmiBuildRecipeStep[]
+  blocked_step_description?: string
+  in_progress_step_description?: string
+  next_step_description?: string
+  message?: string
+  verbose?: {
+    command_id?: string
+    script?: string
+    stdout?: string
+    stderr?: string
+    status?: string
+    exit_code?: number | null
+    error?: string
+  }
+}
+
+export interface AmiBuildDetail {
+  build_id: string
+  ami_name: string
+  created_at: string | null
+  archived: boolean
+  bucket: string
+  s3_prefix: string
+  status_summary: AmiBuildStatusSummary
+  pipeline_complete: boolean
+  builder: {
+    instance_id: string | null
+    ec2_state: string | null
+    ec2_missing: boolean
+    ssm_ready: boolean | null
+  }
+  registered_ami: {
+    image_id: string | null
+    state: string | null
+  }
+  test_instance: {
+    instance_id: string | null
+    ec2_state: string | null
+    ec2_missing: boolean
+    ssm_ready: boolean | null
+  }
+  test_failed: boolean
+  build_recipe?: AmiBuildRecipeDetail
+  test_recipe?: AmiBuildRecipeDetail
+  post_build?: Record<string, unknown>
+}
+
+export async function listAmiBuilds(options: {
+  archived?: boolean
+  page?: number
+  pageSize?: number
+}): Promise<AmiBuildListResponse> {
+  const params = new URLSearchParams()
+  if (options.archived) params.set('archived', 'true')
+  if (options.page) params.set('page', String(options.page))
+  if (options.pageSize) params.set('page_size', String(options.pageSize))
+  const q = params.toString()
+  const res = await fetchWithAuthRetry(`/api/ami-builds${q ? `?${q}` : ''}`, {
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function getAmiBuildDetail(
+  buildId: string,
+  options?: { archived?: boolean; verbose?: boolean },
+): Promise<AmiBuildDetail> {
+  const params = new URLSearchParams()
+  if (options?.archived) params.set('archived', 'true')
+  if (options?.verbose) params.set('verbose', 'true')
+  const q = params.toString()
+  const res = await fetchWithAuthRetry(
+    `/api/ami-builds/${encodeURIComponent(buildId)}${q ? `?${q}` : ''}`,
+    { headers: authHeaders() },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function cancelAmiBuild(buildId: string): Promise<{ build_id: string; archived: boolean }> {
+  const res = await fetchWithAuthRetry(`/api/ami-builds/${encodeURIComponent(buildId)}/cancel`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text as-is
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}

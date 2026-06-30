@@ -12,9 +12,10 @@ import { WorkstationsPage } from './pages/WorkstationsPage'
 import { CostTracker } from './pages/CostTracker'
 import { ReaperPage } from './pages/ReaperPage'
 import { CommandPage } from './pages/CommandPage'
+import { AmiBuildsPage } from './pages/AmiBuildsPage'
 import './App.css'
 
-type Page = 'workstations' | 'costs' | 'reaper' | 'command'
+type Page = 'workstations' | 'costs' | 'reaper' | 'command' | 'ami-builds'
 type CommandSection = 'manage' | 'run'
 
 function buildInfo(): string | null {
@@ -167,10 +168,18 @@ function App() {
         >
           Command
         </button>
+        <button
+          type="button"
+          className={`app-nav-tab${page === 'ami-builds' ? ' app-nav-tab--active' : ''}`}
+          onClick={() => setPage('ami-builds')}
+        >
+          AMI Builds
+        </button>
       </nav>
       {page === 'workstations' && <WorkstationsPage />}
       {page === 'costs' && <CostTracker />}
       {page === 'reaper' && <ReaperPage />}
+      {page === 'ami-builds' && <AmiBuildsPage />}
       {page === 'command' && (
         <CommandPage
           initialSection={commandSection}

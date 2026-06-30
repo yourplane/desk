@@ -1334,3 +1334,219 @@ a.port-chip-link:hover {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* AMI Builds */
+.ami-page-description {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.ami-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.ami-builds-table .ami-build-row {
+  cursor: pointer;
+}
+
+.ami-builds-table .ami-build-row:hover {
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.ami-builds-table .ami-build-row--expanded {
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.ami-build-id {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8125rem;
+}
+
+.ami-build-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ami-phase {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.ami-phase--complete {
+  color: #15803d;
+}
+
+.ami-phase--failed {
+  color: var(--danger);
+}
+
+.ami-phase--pending {
+  color: var(--text-muted);
+}
+
+.ami-phase--active {
+  color: var(--accent);
+}
+
+.ami-build-detail-row td {
+  background: var(--bg);
+  padding: 1rem 1.25rem !important;
+}
+
+.ami-build-detail {
+  font-size: 0.875rem;
+}
+
+.ami-detail-grid {
+  display: grid;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.ami-detail-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin-bottom: 0.15rem;
+}
+
+.ami-detail-code {
+  font-size: 0.8125rem;
+  word-break: break-all;
+}
+
+.ami-detail-section {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.ami-detail-section-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.ami-detail-message,
+.ami-detail-meta {
+  margin: 0.25rem 0;
+  color: var(--text-muted);
+}
+
+.ami-detail-ok {
+  margin: 0.25rem 0;
+  color: #15803d;
+}
+
+.ami-detail-error {
+  margin: 0.25rem 0;
+  color: var(--danger);
+}
+
+.ami-detail-error-meta {
+  margin: 0.25rem 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.ami-step-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--text-muted);
+}
+
+.ami-verbose-block {
+  margin-top: 0.75rem;
+}
+
+.ami-verbose-label {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ami-verbose-pre {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ami-verbose-pre--stderr {
+  color: var(--danger);
+}
+
+.ami-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.ami-pagination-label {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.ami-empty {
+  color: var(--text-muted);
+  margin: 1rem 0;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn-danger:not(:disabled):hover {
+  background: var(--danger-hover);
+}
+
+.ami-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.ami-confirm-dialog {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 28rem;
+  width: 100%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.ami-confirm-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+}
+
+.ami-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
