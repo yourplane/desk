@@ -115,9 +115,31 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _route_status(route: dict[str, Any]) -> str:
+def _local_forward_listening(local_port: int, *, timeout: float = 0.5) -> bool:
+    """True when the SSM forward is accepting TCP on its local port."""
+    if local_port <= 0:
+        return False
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(("127.0.0.1", local_port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def _route_needs_refresh(route: dict[str, Any]) -> bool:
     pid = int(route.get("pid", 0) or 0)
-    return "active" if _pid_alive(pid) else "stale"
+    if not _pid_alive(pid):
+        return True
+    local_port = int(route.get("local_port", 0) or 0)
+    return not _local_forward_listening(local_port)
+
+
+def _route_status(route: dict[str, Any]) -> str:
+    return "stale" if _route_needs_refresh(route) else "active"
 
 
 def _port_is_available(port: int) -> bool:
@@ -425,10 +447,10 @@ def _refresh_stale_routes(
     region: str | None,
     profile: str | None,
 ) -> tuple[int, list[tuple[str, int, str]]]:
-    """Restart SSM forwards for routes whose process has exited. Returns (refreshed_count, failures)."""
+    """Restart SSM forwards for dead or broken routes. Returns (refreshed_count, failures)."""
     start, end = _parse_port_range(local_port_start, local_port_end)
     routes = _load_routes()
-    if not any(_route_status(r) == "stale" for r in routes):
+    if not any(_route_needs_refresh(r) for r in routes):
         return 0, []
 
     new_routes: list[dict[str, Any]] = []
@@ -436,9 +458,13 @@ def _refresh_stale_routes(
     refreshed = 0
 
     for r in routes:
-        if _route_status(r) == "active":
+        if not _route_needs_refresh(r):
             new_routes.append(r)
             continue
+
+        pid = int(r.get("pid", 0) or 0)
+        if _pid_alive(pid):
+            _terminate_route_pid(pid)
 
         ws = str(r.get("workstation", ""))
         port = int(r.get("remote_port", 0) or 0)
