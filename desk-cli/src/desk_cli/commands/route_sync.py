@@ -176,6 +176,14 @@ def run_route_sync_pull(
     if refresh_failures:
         raise click.ClickException(f"Failed to refresh {len(refresh_failures)} stale route(s).")
 
+    from desk_cli.commands.web_router import (
+        _caddyfile_out_of_sync_with_active_routes,
+        refresh_web_router_after_route_change,
+    )
+
+    if _caddyfile_out_of_sync_with_active_routes():
+        refresh_web_router_after_route_change()
+
     if removed == 0 and added == 0 and refreshed == 0 and not add_failures:
         click.echo("Local routes already match S3.")
 

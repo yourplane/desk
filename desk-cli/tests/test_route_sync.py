@@ -183,6 +183,49 @@ def test_route_sync_pull_noop_when_already_synced(
     _mock_notify.assert_not_called()
 
 
+@patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
+@patch("desk_cli.commands.web_router._caddyfile_out_of_sync_with_active_routes", return_value=True)
+@patch("desk_cli.commands.route._local_forward_listening", return_value=True)
+@patch("desk_cli.commands.route._pid_alive", return_value=True)
+@patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={"main": [8080]})
+@patch("desk_cli.commands.route_sync._notify_web_router_after_route_change")
+def test_route_sync_pull_syncs_caddyfile_when_out_of_sync(
+    _mock_notify: object,
+    _mock_list_s3: object,
+    _mock_pid: object,
+    _mock_listening: object,
+    _mock_out_of_sync: object,
+    _mock_web_sync: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pull reloads Caddy when active routes exist but proxy rules are missing."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("DESK_DATA_BUCKET", "bucket")
+    route_dir = tmp_path / "routes"
+    route_dir.mkdir(parents=True, exist_ok=True)
+    (route_dir / "routes.json").write_text(
+        json.dumps(
+            [
+                {
+                    "workstation": "main",
+                    "instance_id": "i-abc",
+                    "remote_port": 8080,
+                    "local_port": 45001,
+                    "pid": 12345,
+                }
+            ]
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route-sync", "pull"])
+    assert result.exit_code == 0
+    assert "Local routes already match S3." in result.output
+    _mock_web_sync.assert_called_once()
+    _mock_notify.assert_not_called()
+
+
 @patch("desk_cli.commands.route_sync.get_desk_data_bucket", return_value="resolved-bucket")
 @patch("desk_cli.commands.route_sync.list_all_web_routes", return_value={})
 def test_route_sync_pull_resolves_bucket_when_env_unset(

@@ -130,12 +130,32 @@ def _local_forward_listening(local_port: int, *, timeout: float = 0.5) -> bool:
         sock.close()
 
 
-def _route_needs_refresh(route: dict[str, Any]) -> bool:
+def _route_identity(route: dict[str, Any]) -> tuple[str, int]:
+    return (str(route.get("workstation", "")), int(route.get("remote_port", 0) or 0))
+
+
+def _has_local_port_collision(route: dict[str, Any], routes: list[dict[str, Any]]) -> bool:
+    local_port = int(route.get("local_port", 0) or 0)
+    if local_port <= 0:
+        return False
+    rid = _route_identity(route)
+    for other in routes:
+        if _route_identity(other) == rid:
+            continue
+        if int(other.get("local_port", 0) or 0) == local_port:
+            return True
+    return False
+
+
+def _route_needs_refresh(route: dict[str, Any], *, all_routes: list[dict[str, Any]] | None = None) -> bool:
     pid = int(route.get("pid", 0) or 0)
     if not _pid_alive(pid):
         return True
     local_port = int(route.get("local_port", 0) or 0)
-    return not _local_forward_listening(local_port)
+    if not _local_forward_listening(local_port):
+        return True
+    routes = all_routes if all_routes is not None else _load_routes()
+    return _has_local_port_collision(route, routes)
 
 
 def _route_status(route: dict[str, Any]) -> str:
@@ -159,7 +179,7 @@ def _pick_local_port(routes: list[dict[str, Any]], start: int, end: int) -> int:
     used = {
         int(route.get("local_port", 0) or 0)
         for route in routes
-        if _route_status(route) == "active"
+        if int(route.get("local_port", 0) or 0) > 0
     }
     for port in range(start, end + 1):
         if port in used:
@@ -450,7 +470,7 @@ def _refresh_stale_routes(
     """Restart SSM forwards for dead or broken routes. Returns (refreshed_count, failures)."""
     start, end = _parse_port_range(local_port_start, local_port_end)
     routes = _load_routes()
-    if not any(_route_needs_refresh(r) for r in routes):
+    if not any(_route_needs_refresh(r, all_routes=routes) for r in routes):
         return 0, []
 
     new_routes: list[dict[str, Any]] = []
@@ -458,7 +478,7 @@ def _refresh_stale_routes(
     refreshed = 0
 
     for r in routes:
-        if not _route_needs_refresh(r):
+        if not _route_needs_refresh(r, all_routes=routes):
             new_routes.append(r)
             continue
 

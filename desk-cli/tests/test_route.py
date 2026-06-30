@@ -368,6 +368,61 @@ def test_desk_route_refresh_recreates_zombie_forward(
 
 
 @patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
+@patch("desk_cli.commands.route._start_forward_process", side_effect=[(11111, "/a.log"), (22222, "/b.log")])
+@patch("desk_cli.commands.route._pick_local_port", side_effect=[45010, 45011])
+@patch("desk_cli.commands.route._terminate_route_pid", return_value=True)
+@patch("desk_cli.commands.route.is_ssm_ready", return_value=True)
+@patch("desk_cli.commands.route.resolve_workstation", return_value="i-dev")
+@patch("desk_cli.commands.route._local_forward_listening", return_value=True)
+@patch("desk_cli.commands.route._pid_alive", return_value=True)
+def test_desk_route_refresh_recreates_colliding_local_ports(
+    _mock_pid_alive: object,
+    _mock_listening: object,
+    _mock_resolve: object,
+    _mock_ssm_ready: object,
+    _mock_terminate: object,
+    _mock_pick_port: object,
+    _mock_start_forward: object,
+    _mock_refresh: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Routes that share a local port must be recreated with unique ports."""
+    monkeypatch.setenv("DESK_STATE_HOME", str(tmp_path))
+    route_dir = tmp_path / "routes"
+    route_dir.mkdir(parents=True, exist_ok=True)
+    (route_dir / "routes.json").write_text(
+        json.dumps(
+            [
+                {
+                    "workstation": "dev",
+                    "remote_port": 3001,
+                    "local_port": 45000,
+                    "pid": 100,
+                    "instance_id": "i-dev",
+                },
+                {
+                    "workstation": "dev",
+                    "remote_port": 4812,
+                    "local_port": 45000,
+                    "pid": 101,
+                    "instance_id": "i-dev",
+                },
+            ]
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["route", "refresh"])
+    assert result.exit_code == 0
+    assert result.output.count("Refreshed route") == 2
+    routes = _read_routes(tmp_path)
+    ports = {int(r["local_port"]) for r in routes}
+    assert len(ports) == 2
+    _mock_refresh.assert_called_once()
+
+
+@patch("desk_cli.commands.web_router.refresh_web_router_after_route_change")
 @patch("desk_cli.commands.route._start_forward_process", return_value=(88888, "/tmp/ok.log"))
 @patch("desk_cli.commands.route._pick_local_port", return_value=45003)
 @patch("desk_cli.commands.route.is_ssm_ready", return_value=True)
