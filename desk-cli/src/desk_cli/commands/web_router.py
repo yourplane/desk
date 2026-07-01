@@ -17,7 +17,7 @@ import click
 
 from desk.config import get_state_home
 
-from desk_cli.commands.route import _load_routes, _logs_dir, _pid_alive, _route_status
+from desk_cli.commands.route import _load_routes, _logs_dir, _pid_alive, _route_status, desk_tool_path
 
 UNIT_NAME = "desk-web-router.service"
 DEFAULT_LISTEN = "0.0.0.0:8780"
@@ -28,6 +28,9 @@ _ENV_ADMIN = "DESK_WEB_ROUTER_ADMIN"
 # Suffix after the route label `{ws}-{remote_port}.<base>` for URLs and browser Host (default dev DNS).
 _ENV_BASE_DOMAIN = "DESK_WEB_ROUTER_BASE_DOMAIN"
 _DEFAULT_BASE_DOMAIN = "localhost"
+# Inject session-keeper.js into proxied HTML so port-only tabs refresh auth cookies.
+_ENV_SESSION_KEEPER = "DESK_WEB_ROUTER_SESSION_KEEPER"
+_ENV_APEX_URL = "DESK_WEB_ROUTER_APEX_URL"
 # Workstation segment for {ws}-{remote_port}.<base> (no dots in ws; single DNS label).
 _SUBDOMAIN_WS_SAFE = re.compile(r"^[a-zA-Z0-9_-]+$")
 # RFC 1035: one DNS label is at most 63 octets.
@@ -88,6 +91,35 @@ def _route_base_domain() -> str:
     """DNS suffix for route FQDNs (e.g. ``localhost`` or ``router.example.com``)."""
     raw = (os.environ.get(_ENV_BASE_DOMAIN) or _DEFAULT_BASE_DOMAIN).strip()
     return raw or _DEFAULT_BASE_DOMAIN
+
+
+def _session_keeper_enabled() -> bool:
+    """True when Caddy should inject the apex session-keeper script into HTML responses."""
+    raw = os.environ.get(_ENV_SESSION_KEEPER)
+    if raw is not None:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    base = _route_base_domain().lower()
+    return base not in ("localhost", "127.0.0.1")
+
+
+def _session_keeper_apex_url() -> str | None:
+    """HTTPS origin for session-keeper.js (desk apex CloudFront)."""
+    raw = (os.environ.get(_ENV_APEX_URL) or "").strip()
+    if raw:
+        return raw.rstrip("/")
+    base = _route_base_domain()
+    if base.lower() in ("localhost", "127.0.0.1"):
+        return None
+    return f"https://{base}"
+
+
+def _session_keeper_script_url() -> str | None:
+    if not _session_keeper_enabled():
+        return None
+    apex = _session_keeper_apex_url()
+    if not apex:
+        return None
+    return f"{apex}/session-keeper.js"
 
 
 def _route_label(workstation: str, remote_port: int) -> str:
@@ -203,20 +235,66 @@ def _site_block_opening_lines(listen: str) -> list[str]:
     return [f"http://:{port} {{", f"    bind {host}"]
 
 
-def _reverse_proxy_block_lines(upstream: str) -> list[str]:
+def _reverse_proxy_block_lines(
+    upstream: str,
+    *,
+    disable_upstream_compression: bool = False,
+) -> list[str]:
     """Shared reverse_proxy options for dev servers and SSM port-forwarding.
 
     Caddy's default is to set Host to the upstream address; that breaks many dev servers’
     host checks and URL generation when clients connect via desk route (e.g. Host: localhost:45001).
     """
-    return [
+    lines: list[str] = [
         f"        reverse_proxy {upstream} {{",
         "            flush_interval -1",
         "            header_up Host {http.request.host}",
-        "            transport http {",
-        "                versions 1.1",
+    ]
+    if disable_upstream_compression:
+        lines.append("            header_up Accept-Encoding identity")
+    lines.extend(
+        [
+            "            transport http {",
+            "                versions 1.1",
+            "            }",
+            "        }",
+        ]
+    )
+    return lines
+
+
+def _session_keeper_replace_lines(session_keeper_script_url: str) -> list[str]:
+    """Caddy replace-response block (must run after reverse_proxy; see global order)."""
+    escaped = session_keeper_script_url.replace("\\", "\\\\").replace('"', '\\"')
+    return [
+        "        replace {",
+        "            match {",
+        "                header Content-Type *text/html*",
         "            }",
+        f'            </head> "<script src=\\"{escaped}\\"></script></head>"',
         "        }",
+    ]
+
+
+def _desk_apex_cors_lines() -> list[str]:
+    """Allow credentialed CORS from the desk apex so the SPA can probe route HTTP status."""
+    apex = _session_keeper_apex_url()
+    if not apex:
+        return []
+    return [
+        "    @desk_cors_preflight method OPTIONS",
+        "    handle @desk_cors_preflight {",
+        f"        header Access-Control-Allow-Origin {apex!r}",
+        "        header Access-Control-Allow-Credentials true",
+        '        header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"',
+        "        respond 204",
+        "    }",
+        "",
+        "    header {",
+        f"        Access-Control-Allow-Origin {apex!r}",
+        "        Access-Control-Allow-Credentials true",
+        "    }",
+        "",
     ]
 
 
@@ -233,11 +311,17 @@ def _active_routes() -> list[dict]:
 def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
     admin = _admin_address()
     site_opening = _site_block_opening_lines(listen)
-    lines: list[str] = [
+    session_keeper_url = _session_keeper_script_url()
+    global_lines: list[str] = [
         "{",
         f"    admin {admin}",
         "    auto_https off",
-        "}",
+    ]
+    if session_keeper_url:
+        global_lines.append("    order replace after reverse_proxy")
+    global_lines.append("}")
+    lines: list[str] = [
+        *global_lines,
         "",
         *site_opening,
         "    log {",
@@ -246,6 +330,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         "    }",
         "",
     ]
+    lines.extend(_desk_apex_cors_lines())
     route_entries: list[tuple[str, str, str]] = []
     for route in routes:
         ws = route.get("workstation", "")
@@ -277,7 +362,14 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         pat = _route_host_header_regexp_pattern(label)
         lines.append(f"    @{matcher} header_regexp Host {pat}")
         lines.append(f"    handle @{matcher} {{")
-        lines.extend(_reverse_proxy_block_lines(upstream))
+        if session_keeper_url:
+            lines.extend(_session_keeper_replace_lines(session_keeper_url))
+        lines.extend(
+            _reverse_proxy_block_lines(
+                upstream,
+                disable_upstream_compression=bool(session_keeper_url),
+            )
+        )
         lines.append("    }")
         lines.append("")
 
@@ -367,7 +459,7 @@ def _systemd_exec_start_line() -> str:
 
 
 def _systemd_env_lines() -> str:
-    lines: list[str] = []
+    lines: list[str] = [f"Environment=PATH={desk_tool_path().replace('%', '%%')}"]
     if desk_state := os.environ.get("DESK_STATE_HOME"):
         lines.append(f"Environment=DESK_STATE_HOME={desk_state.replace('%', '%%')}")
     if listen := os.environ.get(_ENV_LISTEN):
@@ -376,6 +468,10 @@ def _systemd_env_lines() -> str:
         lines.append(f"Environment={_ENV_ADMIN}={admin.replace('%', '%%')}")
     if base := os.environ.get(_ENV_BASE_DOMAIN):
         lines.append(f"Environment={_ENV_BASE_DOMAIN}={base.replace('%', '%%')}")
+    if session_keeper := os.environ.get(_ENV_SESSION_KEEPER):
+        lines.append(f"Environment={_ENV_SESSION_KEEPER}={session_keeper.replace('%', '%%')}")
+    if apex_url := os.environ.get(_ENV_APEX_URL):
+        lines.append(f"Environment={_ENV_APEX_URL}={apex_url.replace('%', '%%')}")
     return "".join(f"{line}\n" for line in lines)
 
 
