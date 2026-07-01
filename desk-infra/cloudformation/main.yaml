@@ -378,7 +378,10 @@ Resources:
         CorsConfig:
           AccessControlAllowCredentials: true
           AccessControlAllowHeaders:
-            Items: ['*']
+            Items:
+              - Accept
+              - Content-Type
+              - Origin
           AccessControlAllowMethods:
             Items: [GET, HEAD, OPTIONS]
           AccessControlAllowOrigins:
