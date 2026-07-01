@@ -369,6 +369,26 @@ Resources:
         Comment: Require desk_token or desk_web_gate cookie on *.apex hostnames (public web routes)
         Runtime: cloudfront-js-2.0
 
+  WebRouterCorsResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Condition: DeployWebRouterDistribution
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-web-router-cors"
+        CorsConfig:
+          AccessControlAllowCredentials: true
+          AccessControlAllowHeaders:
+            Items:
+              - Accept
+              - Content-Type
+              - Origin
+          AccessControlAllowMethods:
+            Items: [GET, HEAD, OPTIONS]
+          AccessControlAllowOrigins:
+            Items:
+              - !Sub "https://${CustomDomainName}"
+          OriginOverride: true
+
   DeskWebRouterDistribution:
     Type: AWS::CloudFront::Distribution
     Condition: DeployWebRouterDistribution
@@ -391,6 +411,7 @@ Resources:
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
           # Managed-AllViewer — forward viewer Host so Caddy can match header_regexp Host ^{ws}-{port}\. (AllViewerExceptHostHeader would send ALB DNS as Host → no route).
           OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+          ResponseHeadersPolicyId: !Ref WebRouterCorsResponseHeadersPolicy
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt RouterSubdomainAuthFunction.FunctionMetadata.FunctionARN
