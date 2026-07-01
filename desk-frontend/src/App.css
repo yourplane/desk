@@ -1226,6 +1226,26 @@
   align-items: center;
 }
 
+.web-routes-broken {
+  margin-top: 0.1rem;
+}
+
+.web-routes-broken-summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  user-select: none;
+  list-style-position: outside;
+}
+
+.web-routes-broken-summary:hover {
+  color: var(--text);
+}
+
+.web-routes-chips--broken {
+  margin-top: 0.35rem;
+}
+
 .port-chip {
   display: inline-flex;
   align-items: center;

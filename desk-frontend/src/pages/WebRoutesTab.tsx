@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import {
   addWebRoute,
   fetchWebRoutesAll,
@@ -11,6 +11,7 @@ import { DataFreshnessBar } from '../DataFreshnessBar'
 import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
 import { queryKeys } from '../queryKeys'
 import { WebRouteFavicon } from '../components/WebRouteFavicon'
+import type { PortDisplayGroup } from '../portDisplayGroup'
 import { instanceKey, publicWebRouteUrl, stateColor } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
@@ -23,6 +24,158 @@ async function fetchWebRoutesSafe(): Promise<{ routes: Record<string, number[]> 
     console.error('fetchWebRoutesAll failed:', e)
     return { routes: {} }
   }
+}
+
+function PortChip({
+  instanceKey: key,
+  port,
+  routeBusy,
+  onRemove,
+  onDisplayGroupChange,
+}: {
+  instanceKey: string
+  port: number
+  routeBusy: boolean
+  onRemove: (port: number) => void
+  onDisplayGroupChange?: (group: PortDisplayGroup) => void
+}) {
+  const publicUrl = publicWebRouteUrl(key, port)
+
+  return (
+    <span className="port-chip">
+      {publicUrl ? (
+        <>
+          <WebRouteFavicon baseUrl={publicUrl} onDisplayGroupChange={onDisplayGroupChange} />
+          <a
+            className="port-chip-label port-chip-link"
+            href={publicUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open web route (new tab): ${publicUrl}`}
+          >
+            {port}
+          </a>
+        </>
+      ) : (
+        <span className="port-chip-label" title="Set VITE_WEB_ROUTER_HOST_SUFFIX at build (custom domain) for public links">
+          {port}
+        </span>
+      )}
+      <button
+        type="button"
+        className="port-chip-remove"
+        disabled={routeBusy}
+        onClick={() => onRemove(port)}
+        title={`Remove port ${port}`}
+      >
+        ×
+      </button>
+    </span>
+  )
+}
+
+function WebRoutesEditor({
+  instanceKey: key,
+  ports,
+  routeBusy,
+  portDraft,
+  onPortDraftChange,
+  onAdd,
+  onRemove,
+}: {
+  instanceKey: string
+  ports: number[]
+  routeBusy: boolean
+  portDraft: string
+  onPortDraftChange: (value: string) => void
+  onAdd: () => void
+  onRemove: (port: number) => void
+}) {
+  const [chipGroups, setChipGroups] = useState<Record<number, PortDisplayGroup>>({})
+  const chipGroupCallbacksRef = useRef(new Map<number, (group: PortDisplayGroup) => void>())
+
+  const onChipGroupChange = useCallback((port: number, group: PortDisplayGroup) => {
+    setChipGroups((prev) => (prev[port] === group ? prev : { ...prev, [port]: group }))
+  }, [])
+
+  const getChipGroupCallback = useCallback(
+    (port: number) => {
+      let callback = chipGroupCallbacksRef.current.get(port)
+      if (!callback) {
+        callback = (group: PortDisplayGroup) => onChipGroupChange(port, group)
+        chipGroupCallbacksRef.current.set(port, callback)
+      }
+      return callback
+    },
+    [onChipGroupChange],
+  )
+
+  const activePorts = ports.filter((p) => (chipGroups[p] ?? 'active') !== 'broken')
+  const brokenPorts = ports.filter((p) => chipGroups[p] === 'broken')
+
+  return (
+    <div className="web-routes-editor">
+      {activePorts.length > 0 && (
+        <div className="web-routes-chips">
+          {activePorts.map((p) => (
+            <PortChip
+              key={p}
+              instanceKey={key}
+              port={p}
+              routeBusy={routeBusy}
+              onRemove={onRemove}
+              onDisplayGroupChange={getChipGroupCallback(p)}
+            />
+          ))}
+        </div>
+      )}
+      {brokenPorts.length > 0 && (
+        <details className="web-routes-broken">
+          <summary className="web-routes-broken-summary">
+            {brokenPorts.length} unreachable {brokenPorts.length === 1 ? 'route' : 'routes'}
+          </summary>
+          <div className="web-routes-chips web-routes-chips--broken">
+            {brokenPorts.map((p) => (
+              <PortChip
+                key={p}
+                instanceKey={key}
+                port={p}
+                routeBusy={routeBusy}
+                onRemove={onRemove}
+                onDisplayGroupChange={getChipGroupCallback(p)}
+              />
+            ))}
+          </div>
+        </details>
+      )}
+      <div className="web-routes-add">
+        <input
+          type="number"
+          className="web-routes-port-input"
+          min={1}
+          max={65535}
+          placeholder="Port"
+          value={portDraft}
+          disabled={routeBusy}
+          onChange={(e) => onPortDraftChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onAdd()
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="btn btn-secondary btn-web-route-add"
+          disabled={routeBusy}
+          onClick={onAdd}
+        >
+          {routeBusy ? '…' : 'Add'}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 export function WebRoutesTab() {
@@ -174,72 +327,17 @@ export function WebRoutesTab() {
                     </td>
                     <td className="web-routes-cell">
                       {canEditWebRoutes ? (
-                        <div className="web-routes-editor">
-                          <div className="web-routes-chips">
-                            {ports.map((p) => {
-                              const publicUrl = publicWebRouteUrl(key, p)
-                              return (
-                                <span key={p} className="port-chip">
-                                  {publicUrl ? (
-                                    <>
-                                      <WebRouteFavicon baseUrl={publicUrl} />
-                                      <a
-                                        className="port-chip-label port-chip-link"
-                                        href={publicUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        title={`Open web route (new tab): ${publicUrl}`}
-                                      >
-                                        {p}
-                                      </a>
-                                    </>
-                                  ) : (
-                                    <span className="port-chip-label" title="Set VITE_WEB_ROUTER_HOST_SUFFIX at build (custom domain) for public links">
-                                      {p}
-                                    </span>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="port-chip-remove"
-                                    disabled={routeBusy}
-                                    onClick={() => onRemoveWebRoute(key, p)}
-                                    title={`Remove port ${p}`}
-                                  >
-                                    ×
-                                  </button>
-                                </span>
-                              )
-                            })}
-                          </div>
-                          <div className="web-routes-add">
-                            <input
-                              type="number"
-                              className="web-routes-port-input"
-                              min={1}
-                              max={65535}
-                              placeholder="Port"
-                              value={portDraftByKey[key] ?? ''}
-                              disabled={routeBusy}
-                              onChange={(e) =>
-                                setPortDraftByKey((prev) => ({ ...prev, [key]: e.target.value }))
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault()
-                                  void onAddWebRoute(key)
-                                }
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-web-route-add"
-                              disabled={routeBusy}
-                              onClick={() => void onAddWebRoute(key)}
-                            >
-                              {routeBusy ? '…' : 'Add'}
-                            </button>
-                          </div>
-                        </div>
+                        <WebRoutesEditor
+                          instanceKey={key}
+                          ports={ports}
+                          routeBusy={routeBusy}
+                          portDraft={portDraftByKey[key] ?? ''}
+                          onPortDraftChange={(value) =>
+                            setPortDraftByKey((prev) => ({ ...prev, [key]: value }))
+                          }
+                          onAdd={() => void onAddWebRoute(key)}
+                          onRemove={(p) => void onRemoveWebRoute(key, p)}
+                        />
                       ) : (
                         <span className="web-routes-readonly">
                           {ports.length > 0 ? ports.join(', ') : '—'}
