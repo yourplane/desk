@@ -1286,10 +1286,6 @@
   color: var(--text-muted);
 }
 
-.port-chip-favicon-placeholder--dead {
-  color: var(--danger);
-}
-
 .port-chip-label {
   color: var(--text);
 }

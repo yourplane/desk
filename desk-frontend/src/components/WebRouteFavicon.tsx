@@ -39,8 +39,18 @@ function FaviconPlaceholder({ reachability }: { reachability: RouteReachability 
       <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
         <title>{title}</title>
         <path
-          fill="currentColor"
-          d="M5.6 3.1 4.5 2l1.8-1.8 1.1 1.1L8.3 2.4l1.1-1.1L11.2 2l-1.1 1.1 1.1 1.1-1.8 1.8-1.1-1.1-1.1 1.1-1.8-1.8zm4.8 9.8 1.1 1.1-1.8 1.8-1.1-1.1-1.1 1.1-1.8-1.8 1.1-1.1-1.1-1.1 1.8-1.8 1.1 1.1 1.1-1.1 1.8 1.8-1.1 1.1zM6.2 6.2l3.6 3.6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          d="M4 11a4 4 0 0 1 4-6"
+        />
+        <path
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          d="M12 5a4 4 0 0 1-4 6"
         />
       </svg>
     )
