@@ -117,6 +117,18 @@ export function WebRouteFavicon({
 
   useEffect(() => {
     const onRefresh = () => {
+      if (lastSettledGroupRef.current === 'broken') {
+        void probeWebRouteReachability(baseUrl).then((result) => {
+          if (result === 'dead') return
+          setCandidateIndex(0)
+          setLoaded(false)
+          setExhausted(false)
+          setReachability(null)
+          setProbeDone(false)
+          setTick(refreshTick)
+        })
+        return
+      }
       setCandidateIndex(0)
       setLoaded(false)
       setExhausted(false)

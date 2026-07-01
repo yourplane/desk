@@ -92,6 +92,7 @@ function WebRoutesEditor({
   onRemove: (port: number) => void
 }) {
   const [chipGroups, setChipGroups] = useState<Record<number, PortDisplayGroup>>({})
+  const [brokenOpen, setBrokenOpen] = useState(false)
   const chipGroupCallbacksRef = useRef(new Map<number, (group: PortDisplayGroup) => void>())
 
   const onChipGroupChange = useCallback((port: number, group: PortDisplayGroup) => {
@@ -110,44 +111,40 @@ function WebRoutesEditor({
     [onChipGroupChange],
   )
 
-  const activePorts = ports.filter((p) => (chipGroups[p] ?? 'active') !== 'broken')
-  const brokenPorts = ports.filter((p) => chipGroups[p] === 'broken')
+  const brokenCount = ports.filter((p) => chipGroups[p] === 'broken').length
 
   return (
     <div className="web-routes-editor">
-      {activePorts.length > 0 && (
-        <div className="web-routes-chips">
-          {activePorts.map((p) => (
-            <PortChip
+      <div className="web-routes-chip-flow">
+        {ports.map((p) => {
+          const isBroken = chipGroups[p] === 'broken'
+          return (
+            <div
               key={p}
-              instanceKey={key}
-              port={p}
-              routeBusy={routeBusy}
-              onRemove={onRemove}
-              onDisplayGroupChange={getChipGroupCallback(p)}
-            />
-          ))}
-        </div>
-      )}
-      {brokenPorts.length > 0 && (
-        <details className="web-routes-broken">
-          <summary className="web-routes-broken-summary">
-            {brokenPorts.length} unreachable {brokenPorts.length === 1 ? 'route' : 'routes'}
-          </summary>
-          <div className="web-routes-chips web-routes-chips--broken">
-            {brokenPorts.map((p) => (
+              className={`port-chip-slot${isBroken ? ' port-chip-slot--broken' : ''}`}
+              hidden={isBroken && !brokenOpen}
+            >
               <PortChip
-                key={p}
                 instanceKey={key}
                 port={p}
                 routeBusy={routeBusy}
                 onRemove={onRemove}
                 onDisplayGroupChange={getChipGroupCallback(p)}
               />
-            ))}
-          </div>
-        </details>
-      )}
+            </div>
+          )
+        })}
+        {brokenCount > 0 && (
+          <button
+            type="button"
+            className="web-routes-broken-summary"
+            aria-expanded={brokenOpen}
+            onClick={() => setBrokenOpen((open) => !open)}
+          >
+            {brokenCount} unreachable {brokenCount === 1 ? 'route' : 'routes'}
+          </button>
+        )}
+      </div>
       <div className="web-routes-add">
         <input
           type="number"
