@@ -276,6 +276,28 @@ def _session_keeper_replace_lines(session_keeper_script_url: str) -> list[str]:
     ]
 
 
+def _desk_apex_cors_lines() -> list[str]:
+    """Allow credentialed CORS from the desk apex so the SPA can probe route HTTP status."""
+    apex = _session_keeper_apex_url()
+    if not apex:
+        return []
+    return [
+        "    @desk_cors_preflight method OPTIONS",
+        "    handle @desk_cors_preflight {",
+        f"        header Access-Control-Allow-Origin {apex!r}",
+        "        header Access-Control-Allow-Credentials true",
+        '        header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"',
+        "        respond 204",
+        "    }",
+        "",
+        "    header {",
+        f"        Access-Control-Allow-Origin {apex!r}",
+        "        Access-Control-Allow-Credentials true",
+        "    }",
+        "",
+    ]
+
+
 def _matcher_safe_name(workstation: str, remote_port: int) -> str:
     safe = re.sub(r"[^a-zA-Z0-9]", "_", f"{workstation}_{remote_port}").strip("_")
     return safe or "route"
@@ -308,6 +330,7 @@ def _build_caddyfile(*, listen: str, routes: list[dict]) -> str:
         "    }",
         "",
     ]
+    lines.extend(_desk_apex_cors_lines())
     route_entries: list[tuple[str, str, str]] = []
     for route in routes:
         ws = route.get("workstation", "")

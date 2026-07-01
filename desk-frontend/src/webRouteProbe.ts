@@ -9,8 +9,12 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
 }
 
-function isRouterDeadStatus(status: number): boolean {
-  return ROUTER_DEAD_STATUSES.has(status)
+/** Classify an HTTP status from a credentialed CORS probe. */
+export function classifyRouteHttpStatus(status: number): RouteReachability {
+  if (ROUTER_DEAD_STATUSES.has(status) || status === 404) return 'dead'
+  if (status >= 200 && status < 400) return 'live'
+  if (status >= 400) return 'live'
+  return 'unknown'
 }
 
 async function fetchWithTimeout(
@@ -24,7 +28,8 @@ async function fetchWithTimeout(
 
 /**
  * Probe a public web route from the browser when favicons are unavailable.
- * Dead = network failure, timeout, or router 502/504. Unknown = responded but status hidden (CORS).
+ * Uses credentialed CORS requests (desk_web_gate cookie + CloudFront/Caddy ACAO) to read status.
+ * Dead = network failure, timeout, 404, or router 502/504. Unknown = responded but status hidden.
  */
 export async function probeWebRouteReachability(baseUrl: string): Promise<RouteReachability> {
   const url = normalizeBaseUrl(baseUrl)
@@ -33,10 +38,20 @@ export async function probeWebRouteReachability(baseUrl: string): Promise<RouteR
 
   const probeCors = async (method: 'HEAD' | 'GET'): Promise<RouteReachability | null> => {
     try {
-      const response = await fetchWithTimeout(url, { method, mode: 'cors' }, controller.signal)
-      if (isRouterDeadStatus(response.status)) return 'dead'
-      return 'live'
-    } catch (error) {
+      const response = await fetchWithTimeout(
+        url,
+        {
+          method,
+          mode: 'cors',
+          credentials: 'include',
+          redirect: 'manual',
+        },
+        controller.signal,
+      )
+      if (response.type === 'opaqueredirect' || response.status === 0) return 'unknown'
+      if (response.status >= 300 && response.status < 400) return 'unknown'
+      return classifyRouteHttpStatus(response.status)
+    } catch {
       if (controller.signal.aborted) return 'dead'
       return null
     }
@@ -44,7 +59,11 @@ export async function probeWebRouteReachability(baseUrl: string): Promise<RouteR
 
   const probeNoCors = async (method: 'HEAD' | 'GET'): Promise<boolean> => {
     try {
-      await fetchWithTimeout(url, { method, mode: 'no-cors' }, controller.signal)
+      await fetchWithTimeout(
+        url,
+        { method, mode: 'no-cors', credentials: 'include' },
+        controller.signal,
+      )
       return true
     } catch {
       return false
