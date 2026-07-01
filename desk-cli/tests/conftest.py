@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
@@ -45,3 +46,10 @@ def _isolate_desk_config(monkeypatch: pytest.MonkeyPatch) -> None:
             os.unlink(path)
         except OSError:
             pass
+
+
+@pytest.fixture(autouse=True)
+def _default_ssm_forward_listening() -> None:
+    """Treat mocked routes as healthy unless a test overrides forward probing."""
+    with patch("desk_cli.commands.route._local_forward_listening", return_value=True):
+        yield

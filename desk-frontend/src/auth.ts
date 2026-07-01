@@ -32,6 +32,10 @@ const WEB_GATE_COOKIE = 'desk_web_gate'
 const PKCE_VERIFIER_KEY = 'desk_pkce_verifier'
 const PKCE_VERIFIER_COOKIE = 'desk_pkce_verifier'
 
+/** Refresh proactively this long before JWT `exp` (matches reactive 60s buffer spirit). */
+export const PROACTIVE_REFRESH_BEFORE_MS = 5 * 60 * 1000
+const ID_TOKEN_EXPIRY_BUFFER_MS = 60_000
+
 /**
  * Shared cookie domain for `*.CustomDomainName` web-router hosts.
  * Prefer VITE_COOKIE_DOMAIN; if only VITE_WEB_ROUTER_HOST_SUFFIX is set (e.g. manual build), derive `.suffix`.
@@ -80,9 +84,24 @@ export function getToken(): string | null {
   return isIdTokenExpired(token) ? null : token
 }
 
+export function idTokenCookieMaxAgeSeconds(token: string, nowSec = Math.floor(Date.now() / 1000)): number {
+  const payload = parseJwtPayload(token) as { exp?: number } | null
+  const exp = typeof payload?.exp === 'number' ? payload.exp : null
+  if (!exp) return 3600
+  return Math.max(60, exp - nowSec)
+}
+
+export function getProactiveRefreshDelayMs(token: string, nowMs = Date.now()): number | null {
+  const payload = parseJwtPayload(token) as { exp?: number } | null
+  const exp = typeof payload?.exp === 'number' ? payload.exp : null
+  if (!exp) return null
+  const refreshAtMs = exp * 1000 - PROACTIVE_REFRESH_BEFORE_MS
+  return Math.max(0, refreshAtMs - nowMs)
+}
+
 async function setIdToken(token: string): Promise<void> {
   sessionStorage.setItem(TOKEN_KEY, token)
-  const maxAge = 3600
+  const maxAge = idTokenCookieMaxAgeSeconds(token)
   const https = typeof window !== 'undefined' && window.location.protocol === 'https:'
   const secureOnly = https ? '; Secure' : ''
 
@@ -172,7 +191,7 @@ function isIdTokenExpired(token: string): boolean {
   const nowMs = Date.now()
   const expMs = exp * 1000
   // Small buffer so we don't race expiry.
-  return expMs <= nowMs + 60_000
+  return expMs <= nowMs + ID_TOKEN_EXPIRY_BUFFER_MS
 }
 
 function getPkceVerifier(): string | null {
@@ -189,6 +208,54 @@ function clearPkceVerifier(): void {
 
 /** Redirect to Cognito hosted UI if auth is enabled and no token. Call once at app load. */
 let refreshInFlight: Promise<boolean> | null = null
+let proactiveRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let sessionKeeperListenersAttached = false
+
+function logSessionKeeper(message: string, level: 'debug' | 'warn' = 'debug'): void {
+  const prefix = '[desk session-keeper]'
+  if (level === 'warn') console.warn(prefix, message)
+  else console.debug(prefix, message)
+}
+
+export function scheduleProactiveRefresh(): void {
+  if (!isAuthEnabled()) return
+  if (proactiveRefreshTimer !== null) {
+    clearTimeout(proactiveRefreshTimer)
+    proactiveRefreshTimer = null
+  }
+
+  const stored = sessionStorage.getItem(TOKEN_KEY)
+  let delayMs: number | null = null
+  if (stored && !isIdTokenExpired(stored)) {
+    delayMs = getProactiveRefreshDelayMs(stored)
+  } else if (getRefreshToken()) {
+    delayMs = 0
+  } else {
+    return
+  }
+
+  proactiveRefreshTimer = setTimeout(async () => {
+    proactiveRefreshTimer = null
+    const ok = await refreshIdToken()
+    if (ok) {
+      logSessionKeeper('proactive refresh succeeded')
+      scheduleProactiveRefresh()
+    } else {
+      logSessionKeeper('proactive refresh failed', 'warn')
+    }
+  }, delayMs ?? 0)
+}
+
+/** Start background token refresh (desk SPA or apex session-bridge iframe). */
+export function startSessionKeeper(): void {
+  if (!isAuthEnabled()) return
+  scheduleProactiveRefresh()
+  if (sessionKeeperListenersAttached) return
+  sessionKeeperListenersAttached = true
+  document.addEventListener('visibilitychange', () => {
+    scheduleProactiveRefresh()
+  })
+}
 
 async function refreshIdToken(): Promise<boolean> {
   if (!isAuthEnabled()) return false
@@ -222,6 +289,7 @@ async function refreshIdToken(): Promise<boolean> {
     await setIdToken(idToken)
     const newRefresh = data.refresh_token as string | undefined
     if (newRefresh) setRefreshToken(newRefresh)
+    scheduleProactiveRefresh()
     return true
   })()
 
