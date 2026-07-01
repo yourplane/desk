@@ -48,7 +48,7 @@ export function WebRoutesTab() {
     refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
   })
 
-  const instances: Instance[] = instancesQuery.data ?? []
+  const instances: Instance[] = instancesQuery.data?.instances ?? []
   const webRoutesByName = webRoutesQuery.data?.routes ?? {}
 
   const blockingError =

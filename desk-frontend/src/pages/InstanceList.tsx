@@ -7,13 +7,14 @@ import {
   startInstance,
   stopInstance,
   killInstance,
+  type FutureRouterAmiInfo,
   type Instance,
 } from '../api/client'
 import { DataFreshnessBar } from '../DataFreshnessBar'
 import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
 import { queryKeys } from '../queryKeys'
 import { logout } from '../auth'
-import { instanceKey, stateColor } from './workstationUtils'
+import { instanceKey, stateColor, formatAmiLine, instanceAmiSubline, futureRouterAmiSummaryClass } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
@@ -73,6 +74,63 @@ function toDatetimeLocalValue(isoUtc: string | null): string {
   return `${y}-${mo}-${day}T${h}:${mi}`
 }
 
+function FutureRouterAmiSummary({ info }: { info: FutureRouterAmiInfo }) {
+  const className = futureRouterAmiSummaryClass(info)
+
+  if (info.status === 'unavailable') {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__warning">
+          {info.warnings[0] ?? 'Router AMI info unavailable.'}
+        </p>
+      </div>
+    )
+  }
+
+  if (info.status === 'consolidated' && info.ami) {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__line">{formatAmiLine(info.ami)}</p>
+      </div>
+    )
+  }
+
+  if (info.status === 'partial' && info.ami) {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__line">{formatAmiLine(info.ami)}</p>
+        {info.warnings.map((w) => (
+          <p key={w} className="future-router-ami-summary__warning">{w}</p>
+        ))}
+      </div>
+    )
+  }
+
+  if (info.status === 'mismatch' && info.latest && info.deploy) {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__line">
+          <span className="future-router-ami-summary__label">Latest router-ami-*:</span>{' '}
+          {formatAmiLine(info.latest)}
+        </p>
+        <p className="future-router-ami-summary__line">
+          <span className="future-router-ami-summary__label">desk-router deploy:</span>{' '}
+          {formatAmiLine(info.deploy)}
+        </p>
+        {info.warnings.map((w) => (
+          <p key={w} className="future-router-ami-summary__warning">{w}</p>
+        ))}
+      </div>
+    )
+  }
+
+  return null
+}
+
 export function InstanceList() {
   const queryClient = useQueryClient()
   const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
@@ -97,7 +155,8 @@ export function InstanceList() {
     refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
   })
 
-  const instances: Instance[] = instancesQuery.data ?? []
+  const instances: Instance[] = instancesQuery.data?.instances ?? []
+  const futureRouterAmi = instancesQuery.data?.future_router_ami
   const blockingError =
     instancesQuery.isError && instancesQuery.data === undefined
       ? instancesQuery.error instanceof Error
@@ -343,6 +402,9 @@ export function InstanceList() {
           List managed router (infra)
         </label>
       </p>
+      {listInfra && futureRouterAmi && (
+        <FutureRouterAmiSummary info={futureRouterAmi} />
+      )}
       <div
         className={`table-wrap${instancesQuery.isFetching && instances.length > 0 ? ' table-wrap--revalidating' : ''}`}
       >
@@ -367,7 +429,10 @@ export function InstanceList() {
                 const key = instanceKey(inst)
                 return (
                 <tr key={inst.instance_id}>
-                  <td className="name">{key}</td>
+                  <td className="name">
+                    <div>{key}</div>
+                    <div className="instance-ami-subline">{instanceAmiSubline(inst)}</div>
+                  </td>
                   <td>
                     <span className="state-label" style={{ color: stateColor(inst.state) }}>
                       {inst.state}
