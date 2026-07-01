@@ -19,3 +19,13 @@
 ## Public web routes (optional, custom domain)
 
 When the app is built with a **custom apex** (e.g. `desk.example.com`), the deploy script can set **`VITE_COOKIE_DOMAIN`** so the `desk_token` cookie uses **`Domain=.desk.example.com`** (or equivalent). That allows the browser to send the same session cookie on **`{name}-{port}.desk.example.com`** hosts served by a separate CloudFront distribution (see `cloudformation/README.md`). The web app API (`/api/*`) is unchanged (JWT on `Authorization`).
+
+### Session keeper (background credential refresh)
+
+Port-route tabs need a valid **`desk_web_gate`** cookie at CloudFront. Cookies expire with the Cognito **`id_token`** (~1 hour). To avoid redirecting users off their dev app:
+
+1. **Desk SPA** — after login, **`startSessionKeeper()`** schedules **`refreshIdToken()`** ~5 minutes before JWT expiry (including while the tab is in the background).
+2. **Port-only tabs** — the web router injects **`<script src="https://{apex}/session-keeper.js">`** into proxied HTML responses. That script loads a hidden apex iframe (**`/session-bridge.html`**) which refreshes tokens and rewrites **`Domain=`** cookies.
+3. **Fallback** — if cookies are missing at CloudFront, the viewer-request function redirects to **`/session-bridge.html?return=…`** instead of the desk home page; the bridge refreshes and sends the user back.
+
+Refresh still requires a valid **`refresh_token`** in apex **`localStorage`** (same as today). When refresh fails (revoked session, offline), the user must sign in again.

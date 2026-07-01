@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import {
   clearAuthTokens,
   ensureAuth,
@@ -7,6 +7,7 @@ import {
   handleCallback,
   isAuthEnabled,
   readOAuthAuthorizeError,
+  startSessionKeeper,
 } from './auth'
 import { WorkstationsPage } from './pages/WorkstationsPage'
 import { CostTracker } from './pages/CostTracker'
@@ -69,6 +70,11 @@ function App() {
     }
     ensureAuth().then((ok) => setReady(ok))
   }, [])
+
+  useEffect(() => {
+    if (!ready || !isAuthEnabled() || !getToken()) return
+    startSessionKeeper()
+  }, [ready])
 
   if (isCallback) {
     return (

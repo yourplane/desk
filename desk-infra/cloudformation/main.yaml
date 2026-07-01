@@ -334,10 +334,32 @@ Resources:
           if (host.length > 0 && host !== apex && host.endsWith("." + apex)) {
             // Cookie headers are NOT in request.headers; they appear only on request.cookies (see CloudFront Functions event structure).
             if (!cookieJarHasAuth(request.cookies)) {
+              var uri = request.uri || "/";
+              var qs = request.querystring;
+              var qParts = [];
+              if (qs) {
+                for (var key in qs) {
+                  if (!Object.prototype.hasOwnProperty.call(qs, key)) continue;
+                  var entry = qs[key];
+                  if (entry.multiValue) {
+                    for (var qi = 0; qi < entry.multiValue.length; qi++) {
+                      var mv = entry.multiValue[qi];
+                      if (mv && mv.value) {
+                        qParts.push(encodeURIComponent(key) + "=" + encodeURIComponent(mv.value));
+                      }
+                    }
+                  } else if (entry.value) {
+                    qParts.push(encodeURIComponent(key) + "=" + encodeURIComponent(entry.value));
+                  }
+                }
+              }
+              var q = qParts.length > 0 ? "?" + qParts.join("&") : "";
+              var returnUrl = "https://" + host + uri + q;
+              var bridge = "https://" + apex + "/session-bridge.html?return=" + encodeURIComponent(returnUrl);
               return {
                 statusCode: 302,
                 statusDescription: "Found",
-                headers: { location: { value: "https://" + apex + "/" } }
+                headers: { location: { value: bridge } }
               };
             }
           }
