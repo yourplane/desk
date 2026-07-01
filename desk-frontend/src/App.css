@@ -1226,6 +1226,40 @@
   align-items: center;
 }
 
+.web-routes-chip-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.port-chip-slot {
+  order: 0;
+}
+
+.port-chip-slot--broken {
+  order: 2;
+}
+
+.web-routes-broken-summary {
+  order: 1;
+  flex: 0 0 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.web-routes-broken-summary:hover {
+  color: var(--text);
+}
+
 .port-chip {
   display: inline-flex;
   align-items: center;
