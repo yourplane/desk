@@ -1028,6 +1028,14 @@ class AmiInfo:
     build_status: str | None = None
 
 
+def _ami_name_pattern_from_keywords(query: str) -> str | None:
+    """Build an EC2 AMI name wildcard from space-separated keywords (e.g. ubuntu 24.04 -> *ubuntu*24.04*)."""
+    keywords = [part for part in query.split() if part]
+    if not keywords:
+        return None
+    return "*" + "*".join(keywords) + "*"
+
+
 def list_amis(
     region: str | None = None,
     profile: str | None = None,
@@ -1037,37 +1045,42 @@ def list_amis(
 ) -> list[AmiInfo]:
     """
     List AMIs. By default returns only AMIs tagged desk:managed=true (created by desk).
-    When *public_only* is True, searches public AMIs in the region by name (case-insensitive).
+    When *public_only* is True, searches public AMIs in the region by keyword name pattern.
     """
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
     query = name_query.strip() if name_query else ""
+    pattern = _ami_name_pattern_from_keywords(query) if query else None
     filters: list[dict[str, Any]] = []
 
     if public_only:
-        if not query:
+        if not pattern:
             return []
-        patterns = list(dict.fromkeys([f"*{query}*", f"*{query.lower()}*"]))
         filters.extend(
             [
                 {"Name": "is-public", "Values": ["true"]},
                 {"Name": "state", "Values": ["available"]},
-                {"Name": "name", "Values": patterns},
+                {"Name": "name", "Values": [pattern]},
             ]
         )
-        params: dict = {"Filters": filters}
+        paginator = ec2.get_paginator("describe_images")
+        images: list[dict] = []
+        for page in paginator.paginate(
+            Filters=filters,
+            PaginationConfig={"MaxItems": 100, "PageSize": 100},
+        ):
+            images.extend(page.get("Images", []))
     else:
-        params = {"Owners": ["self"]}
+        params: dict = {"Owners": ["self"]}
         if managed_only:
             filters.append({"Name": "tag:desk:managed", "Values": ["true"]})
-        if query:
-            filters.append({"Name": "name", "Values": [f"*{query}*"]})
+        if pattern:
+            filters.append({"Name": "name", "Values": [pattern]})
         if filters:
             params["Filters"] = filters
-
-    response = ec2.describe_images(**params)
-    images = response.get("Images", [])
+        response = ec2.describe_images(**params)
+        images = response.get("Images", [])
 
     def _tag(img: dict, key: str) -> str | None:
         for t in img.get("Tags", []):
@@ -1075,12 +1088,9 @@ def list_amis(
                 return t.get("Value")
         return None
 
-    needle = query.lower()
     result: list[AmiInfo] = []
     for img in images:
         name = img.get("Name", "-")
-        if public_only and needle not in name.lower():
-            continue
         result.append(
             AmiInfo(
                 image_id=img["ImageId"],

@@ -13,6 +13,12 @@ interface CustomAmiSearchProps {
 }
 
 const MIN_QUERY_LEN = 2
+const SEARCH_DEBOUNCE_MS = 300
+
+function isSearchableQuery(query: string): boolean {
+  const trimmed = query.trim()
+  return trimmed.length >= MIN_QUERY_LEN
+}
 
 export function CustomAmiSearch({
   selectedId,
@@ -22,14 +28,22 @@ export function CustomAmiSearch({
   onClear,
 }: CustomAmiSearchProps) {
   const [query, setQuery] = useState(selectedName || '')
+  const [debouncedQuery, setDebouncedQuery] = useState(query.trim())
   const [menuOpen, setMenuOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setDebouncedQuery(query.trim())
+    }, SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(handle)
+  }, [query])
+
   const searchQuery = useQuery({
-    queryKey: [...queryKeys.deskAmis, 'search', query.trim()],
-    queryFn: () => listDeskAmis({ q: query.trim(), publicOnly: true }),
-    enabled: menuOpen && query.trim().length >= MIN_QUERY_LEN,
-    staleTime: 15_000,
+    queryKey: [...queryKeys.deskAmis, 'search', debouncedQuery],
+    queryFn: () => listDeskAmis({ q: debouncedQuery, publicOnly: true }),
+    enabled: menuOpen && isSearchableQuery(debouncedQuery),
+    staleTime: 30_000,
   })
 
   const results = (searchQuery.data ?? []).filter((a) => a.state === 'available')
@@ -56,29 +70,36 @@ export function CustomAmiSearch({
   const pick = (ami: { image_id: string; name: string }) => {
     onSelect(ami)
     setQuery(ami.name)
+    setDebouncedQuery(ami.name)
     setMenuOpen(false)
   }
+
+  const showResults = menuOpen && isSearchableQuery(query.trim())
+  const waitingForDebounce = showResults && debouncedQuery !== query.trim()
 
   return (
     <div className="ami-picker custom-ami-search" ref={containerRef}>
       <input
-        className="create-input"
-        type="search"
-        placeholder="Search public AMIs by name…"
+        className="create-input custom-ami-search-input"
+        type="text"
+        placeholder="Search public AMIs (keywords)…"
         value={query}
         onChange={(e) => onInputChange(e.target.value)}
         onFocus={() => setMenuOpen(true)}
         disabled={disabled}
         autoComplete="off"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
       />
       {selectedId && selectedName && query === selectedName && (
         <p className="create-notice" role="status">
           Selected: {selectedName}
         </p>
       )}
-      {menuOpen && query.trim().length >= MIN_QUERY_LEN && (
+      {showResults && (
         <div className="ami-picker-menu custom-ami-search-menu" role="listbox">
-          {searchQuery.isPending && (
+          {(searchQuery.isPending || waitingForDebounce) && (
             <p className="ami-picker-empty">Searching…</p>
           )}
           {searchQuery.isError && (
@@ -88,22 +109,27 @@ export function CustomAmiSearch({
                 : 'AMI search failed.'}
             </p>
           )}
-          {!searchQuery.isPending && !searchQuery.isError && results.length === 0 && (
+          {!searchQuery.isPending &&
+            !waitingForDebounce &&
+            !searchQuery.isError &&
+            results.length === 0 && (
             <p className="ami-picker-empty">No matching AMIs found.</p>
           )}
-          {results.map((ami) => (
-            <button
-              key={ami.image_id}
-              type="button"
-              className={`ami-picker-option${selectedId === ami.image_id ? ' ami-picker-option--selected' : ''}`}
-              onClick={() => pick(ami)}
-            >
-              <span className="ami-picker-option-label">{ami.name}</span>
-              <span className="ami-picker-option-meta">
-                {formatAmiVersionDate(ami.creation_date)}
-              </span>
-            </button>
-          ))}
+          {!searchQuery.isPending &&
+            !waitingForDebounce &&
+            results.map((ami) => (
+              <button
+                key={ami.image_id}
+                type="button"
+                className={`ami-picker-option${selectedId === ami.image_id ? ' ami-picker-option--selected' : ''}`}
+                onClick={() => pick(ami)}
+              >
+                <span className="ami-picker-option-label">{ami.name}</span>
+                <span className="ami-picker-option-meta">
+                  {formatAmiVersionDate(ami.creation_date)}
+                </span>
+              </button>
+            ))}
         </div>
       )}
       {menuOpen && query.trim().length > 0 && query.trim().length < MIN_QUERY_LEN && (

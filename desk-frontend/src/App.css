@@ -158,6 +158,10 @@
   max-width: 28rem;
 }
 
+.custom-ami-search-input {
+  text-transform: none;
+}
+
 .custom-ami-search-menu {
   position: relative;
   top: auto;
