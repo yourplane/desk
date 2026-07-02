@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -42,6 +43,16 @@ def get_desk_vpc_outputs(
     profile: str | None = None,
 ) -> DeskVpcOutputs:
     """Fetch desk-vpc CloudFormation stack outputs."""
+    return _get_desk_vpc_outputs_impl(stack_name, region, profile)
+
+
+@functools.lru_cache(maxsize=16)
+def _get_desk_vpc_outputs_impl(
+    stack_name: str,
+    region: str | None,
+    profile: str | None,
+) -> DeskVpcOutputs:
+    """Cached VPC stack lookup (warm Lambda containers reuse results)."""
     session = boto3.Session(region_name=region, profile_name=profile)
     cf = session.client("cloudformation")
     resolved_region = session.region_name
@@ -427,8 +438,7 @@ def create_workstation(
             "Choose a different workstation name."
         )
 
-    existing = list_workstations(region=region, profile=profile)
-    duplicates = [w for w in existing if w.name == name and w.state != "terminated"]
+    duplicates = find_workstations_by_name(name, region=region, profile=profile)
     if duplicates:
         states = ", ".join(f"{w.instance_id} ({w.state})" for w in duplicates)
         raise ValueError(
@@ -482,6 +492,40 @@ class Workstation:
     state: str
     shutdown_at: str | None = None
     image_id: str = ""
+
+
+_NON_TERMINATED_WORKSTATION_STATES = ("pending", "running", "stopping", "stopped")
+
+
+def find_workstations_by_name(
+    name: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[Workstation]:
+    """Find non-terminated workstations with the given Name tag (targeted EC2 query)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    filters = [
+        {"Name": "tag:Name", "Values": [name]},
+        {"Name": "tag:Type", "Values": ["workstation"]},
+        {"Name": "instance-state-name", "Values": list(_NON_TERMINATED_WORKSTATION_STATES)},
+    ]
+    result: list[Workstation] = []
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
+        for reservation in page.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+                result.append(
+                    Workstation(
+                        instance_id=instance["InstanceId"],
+                        name=tags.get("Name", ""),
+                        state=instance["State"]["Name"],
+                        shutdown_at=tags.get(TAG_SHUTDOWN_AT),
+                        image_id=instance.get("ImageId", ""),
+                    )
+                )
+    return result
 
 
 @dataclass
@@ -1025,25 +1069,62 @@ class AmiInfo:
     state: str
     creation_date: str
     source_instance: str | None
+    build_status: str | None = None
+
+
+def _ami_name_pattern_from_keywords(query: str) -> str | None:
+    """Build an EC2 AMI name wildcard from space-separated keywords (e.g. ubuntu 24.04 -> *ubuntu*24.04*)."""
+    keywords = [part for part in query.split() if part]
+    if not keywords:
+        return None
+    return "*" + "*".join(keywords) + "*"
 
 
 def list_amis(
     region: str | None = None,
     profile: str | None = None,
     managed_only: bool = True,
+    name_query: str | None = None,
+    public_only: bool = False,
 ) -> list[AmiInfo]:
     """
     List AMIs. By default returns only AMIs tagged desk:managed=true (created by desk).
+    When *public_only* is True, searches public AMIs in the region by keyword name pattern.
     """
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
-    params: dict = {"Owners": ["self"]}
-    if managed_only:
-        params["Filters"] = [{"Name": "tag:desk:managed", "Values": ["true"]}]
+    query = name_query.strip() if name_query else ""
+    pattern = _ami_name_pattern_from_keywords(query) if query else None
+    filters: list[dict[str, Any]] = []
 
-    response = ec2.describe_images(**params)
-    images = response.get("Images", [])
+    if public_only:
+        if not pattern:
+            return []
+        filters.extend(
+            [
+                {"Name": "is-public", "Values": ["true"]},
+                {"Name": "state", "Values": ["available"]},
+                {"Name": "name", "Values": [pattern]},
+            ]
+        )
+        paginator = ec2.get_paginator("describe_images")
+        images: list[dict] = []
+        for page in paginator.paginate(
+            Filters=filters,
+            PaginationConfig={"MaxItems": 100, "PageSize": 100},
+        ):
+            images.extend(page.get("Images", []))
+    else:
+        params: dict = {"Owners": ["self"]}
+        if managed_only:
+            filters.append({"Name": "tag:desk:managed", "Values": ["true"]})
+        if pattern:
+            filters.append({"Name": "name", "Values": [pattern]})
+        if filters:
+            params["Filters"] = filters
+        response = ec2.describe_images(**params)
+        images = response.get("Images", [])
 
     def _tag(img: dict, key: str) -> str | None:
         for t in img.get("Tags", []):
@@ -1053,17 +1134,21 @@ def list_amis(
 
     result: list[AmiInfo] = []
     for img in images:
+        name = img.get("Name", "-")
         result.append(
             AmiInfo(
                 image_id=img["ImageId"],
-                name=img.get("Name", "-"),
+                name=name,
                 state=img.get("State", "unknown"),
                 creation_date=img.get("CreationDate", ""),
                 source_instance=_tag(img, "desk:source-instance"),
+                build_status=_tag(img, AMI_TAG_BUILD_STATUS),
             )
         )
 
     result.sort(key=lambda a: a.creation_date, reverse=True)
+    if public_only:
+        return result[:50]
     return result
 
 

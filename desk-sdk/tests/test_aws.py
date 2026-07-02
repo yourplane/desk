@@ -16,6 +16,7 @@ from desk.aws import (
     create_workstation,
     delete_key_pair,
     describe_amis_by_id,
+    find_workstations_by_name,
     generate_presigned_get_object_url,
     get_ami_state,
     get_desk_copy_bucket,
@@ -387,7 +388,7 @@ def test_run_workstation_success(mock_session: MagicMock) -> None:
 @patch("desk.aws.get_latest_ubuntu_ami")
 @patch("desk.aws.get_desk_vpc_outputs")
 @patch("desk.config.get_desk_settings")
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_success(
     mock_list: MagicMock,
     mock_settings: MagicMock,
@@ -424,7 +425,7 @@ def test_create_workstation_success(
 @patch("desk.aws.get_latest_tested_ami_by_name_prefix")
 @patch("desk.aws.get_desk_vpc_outputs")
 @patch("desk.config.get_desk_settings")
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_uses_ami_prefix(
     mock_list: MagicMock,
     mock_settings: MagicMock,
@@ -454,7 +455,7 @@ def test_create_workstation_uses_ami_prefix(
 @patch("desk.aws.get_latest_ami_by_name_prefix")
 @patch("desk.aws.get_desk_vpc_outputs")
 @patch("desk.config.get_desk_settings")
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_allow_untested_uses_latest_by_prefix(
     mock_list: MagicMock,
     mock_settings: MagicMock,
@@ -485,7 +486,7 @@ def test_create_workstation_allow_untested_uses_latest_by_prefix(
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_desk_vpc_outputs")
 @patch("desk.config.get_desk_settings")
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_raises_when_no_tested_ami(
     mock_list: MagicMock,
     mock_settings: MagicMock,
@@ -513,7 +514,7 @@ def test_create_workstation_raises_when_no_tested_ami(
 @patch("desk.aws.run_workstation")
 @patch("desk.aws.get_desk_vpc_outputs")
 @patch("desk.config.get_desk_settings")
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_explicit_ami(
     mock_list: MagicMock,
     mock_settings: MagicMock,
@@ -537,7 +538,7 @@ def test_create_workstation_explicit_ami(
     assert kw["ami_id"] == "ami-explicit"
 
 
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_rejects_duplicate_running(mock_list: MagicMock) -> None:
     """create_workstation raises ValueError for duplicate running workstation."""
     mock_list.return_value = [
@@ -548,7 +549,7 @@ def test_create_workstation_rejects_duplicate_running(mock_list: MagicMock) -> N
         create_workstation("my-ws")
 
 
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_rejects_duplicate_stopped(mock_list: MagicMock) -> None:
     """create_workstation raises ValueError for duplicate stopped workstation."""
     mock_list.return_value = [
@@ -563,7 +564,7 @@ def test_create_workstation_rejects_duplicate_stopped(mock_list: MagicMock) -> N
 @patch("desk.aws.get_latest_ubuntu_ami")
 @patch("desk.aws.get_desk_vpc_outputs")
 @patch("desk.config.get_desk_settings")
-@patch("desk.aws.list_workstations")
+@patch("desk.aws.find_workstations_by_name")
 def test_create_workstation_allows_terminated_duplicate(
     mock_list: MagicMock,
     mock_settings: MagicMock,
@@ -571,10 +572,8 @@ def test_create_workstation_allows_terminated_duplicate(
     mock_ubuntu_ami: MagicMock,
     mock_run: MagicMock,
 ) -> None:
-    """create_workstation allows name reuse when existing workstation is terminated."""
-    mock_list.return_value = [
-        Workstation(instance_id="i-old", name="my-ws", state="terminated"),
-    ]
+    """create_workstation allows name reuse when no non-terminated duplicate exists."""
+    mock_list.return_value = []
     mock_settings.return_value = MagicMock(ami_prefix=None)
     mock_vpc.return_value = DeskVpcOutputs(
         vpc_id="vpc-1",
@@ -675,6 +674,46 @@ def test_workstation_dataclass() -> None:
     assert w.instance_id == "i-123"
     assert w.name == "my-box"
     assert w.state == "running"
+
+
+@patch("desk.aws.boto3.Session")
+def test_find_workstations_by_name(mock_session: MagicMock) -> None:
+    """find_workstations_by_name queries EC2 by Name/Type tags and non-terminated states."""
+    mock_ec2 = MagicMock()
+    mock_paginator = MagicMock()
+    mock_paginator.paginate.return_value = [
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-dup",
+                            "ImageId": "ami-ws",
+                            "State": {"Name": "running"},
+                            "Tags": [
+                                {"Key": "Name", "Value": "my-ws"},
+                                {"Key": "Type", "Value": "workstation"},
+                                {"Key": "desk:shutdown-at", "Value": "2026-03-20T20:00:00Z"},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+    mock_ec2.get_paginator.return_value = mock_paginator
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = find_workstations_by_name("my-ws")
+
+    assert len(result) == 1
+    assert result[0].instance_id == "i-dup"
+    assert result[0].name == "my-ws"
+    assert result[0].state == "running"
+    assert result[0].shutdown_at == "2026-03-20T20:00:00Z"
+    filters = mock_paginator.paginate.call_args[1]["Filters"]
+    assert {"Name": "tag:Name", "Values": ["my-ws"]} in filters
+    assert {"Name": "tag:Type", "Values": ["workstation"]} in filters
 
 
 @patch("desk.aws.boto3.Session")
@@ -1023,6 +1062,7 @@ def test_list_amis_success(mock_session: MagicMock) -> None:
                 "Tags": [
                     {"Key": "desk:managed", "Value": "true"},
                     {"Key": "desk:source-instance", "Value": "i-aaa"},
+                    {"Key": "desk:ami-build-status", "Value": "tested"},
                 ],
             },
             {
@@ -1047,8 +1087,10 @@ def test_list_amis_success(mock_session: MagicMock) -> None:
     assert result[0].state == "available"
     assert result[0].creation_date == "2025-02-01T12:00:00.000Z"
     assert result[0].source_instance == "i-bbb"
+    assert result[0].build_status is None
     assert result[1].image_id == "ami-old"
     assert result[1].source_instance == "i-aaa"
+    assert result[1].build_status == "tested"
     mock_ec2.describe_images.assert_called_once_with(
         Owners=["self"],
         Filters=[{"Name": "tag:desk:managed", "Values": ["true"]}],
@@ -1094,6 +1136,62 @@ def test_list_amis_all_owned(mock_session: MagicMock) -> None:
     assert result[0].image_id == "ami-any"
     assert result[0].source_instance is None
     mock_ec2.describe_images.assert_called_once_with(Owners=["self"])
+
+
+def test_ami_name_pattern_from_keywords() -> None:
+    from desk.aws import _ami_name_pattern_from_keywords
+
+    assert _ami_name_pattern_from_keywords("ubuntu 24.04") == "*ubuntu*24.04*"
+    assert _ami_name_pattern_from_keywords("ubuntu") == "*ubuntu*"
+    assert _ami_name_pattern_from_keywords("  ") is None
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_amis_public_search_keywords(mock_session: MagicMock) -> None:
+    """list_amis public_only uses keyword wildcard pattern and paginates."""
+    mock_ec2 = MagicMock()
+    mock_paginator = MagicMock()
+    mock_paginator.paginate.return_value = [
+        {
+            "Images": [
+                {
+                    "ImageId": "ami-match",
+                    "Name": "ubuntu/images/hvm-ssd/ubuntu-noble-24.04-amd64-server",
+                    "State": "available",
+                    "CreationDate": "2025-07-01T12:00:00.000Z",
+                    "Tags": [],
+                },
+            ]
+        }
+    ]
+    mock_ec2.get_paginator.return_value = mock_paginator
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_amis(public_only=True, name_query="ubuntu 24.04")
+
+    assert len(result) == 1
+    assert result[0].image_id == "ami-match"
+    mock_ec2.get_paginator.assert_called_once_with("describe_images")
+    call_kwargs = mock_paginator.paginate.call_args.kwargs
+    filters = call_kwargs["Filters"]
+    name_filter = next(f for f in filters if f["Name"] == "name")
+    assert name_filter["Values"] == ["*ubuntu*24.04*"]
+    assert call_kwargs["PaginationConfig"] == {"MaxItems": 100, "PageSize": 100}
+
+
+@patch("desk.aws.boto3.Session")
+def test_list_amis_name_query(mock_session: MagicMock) -> None:
+    """list_amis with name_query adds a wildcard name filter."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {"Images": []}
+    mock_session.return_value.client.return_value = mock_ec2
+
+    list_amis(managed_only=False, name_query="ubuntu")
+
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"],
+        Filters=[{"Name": "name", "Values": ["*ubuntu*"]}],
+    )
 
 
 @patch("desk.aws.boto3.Session")

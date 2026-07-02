@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  createWorkstation,
   listInstances,
   setAutoStop,
   startInstance,
@@ -10,6 +9,7 @@ import {
   type FutureRouterAmiInfo,
   type Instance,
 } from '../api/client'
+import { CreateWorkstationForm } from '../components/CreateWorkstationForm'
 import { DataFreshnessBar } from '../DataFreshnessBar'
 import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
 import { queryKeys } from '../queryKeys'
@@ -138,10 +138,7 @@ export function InstanceList() {
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
   const [customTime, setCustomTime] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [createName, setCreateName] = useState('')
-  const [createInstanceType, setCreateInstanceType] = useState('t3.medium')
-  const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
+  const [optimisticInstances, setOptimisticInstances] = useState<Instance[]>([])
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const actingRef = useRef<string | null>(null)
   actingRef.current = acting
@@ -159,6 +156,11 @@ export function InstanceList() {
   })
 
   const instances: Instance[] = instancesQuery.data?.instances ?? []
+  const displayInstances = useMemo(() => {
+    const serverNames = new Set(instances.map((inst) => inst.name))
+    const pending = optimisticInstances.filter((inst) => !serverNames.has(inst.name))
+    return [...instances, ...pending]
+  }, [instances, optimisticInstances])
   const futureRouterAmi = instancesQuery.data?.future_router_ami
   const instancesLoading =
     instancesQuery.isFetching && instances.length === 0 && !instancesQuery.isError
@@ -176,6 +178,11 @@ export function InstanceList() {
       : null
 
   const [actionError, setActionError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const serverNames = new Set(instances.map((inst) => inst.name))
+    setOptimisticInstances((prev) => prev.filter((inst) => !serverNames.has(inst.name)))
+  }, [instances])
 
   const refetchWorkstations = () => instancesQuery.refetch()
 
@@ -284,24 +291,54 @@ export function InstanceList() {
     }
   }
 
-  const onCreate = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const trimmed = createName.trim()
-    if (!trimmed) return
-    setCreating(true)
-    setCreateError(null)
-    try {
-      await createWorkstation(trimmed, createInstanceType || undefined)
-      setShowCreateForm(false)
-      setCreateName('')
-      setCreateInstanceType('t3.medium')
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCreating(false)
-    }
-  }
+  const createSection = (
+    <div className="create-section">
+      {showCreateForm ? (
+        <CreateWorkstationForm
+          onClose={() => setShowCreateForm(false)}
+          onLaunchStarted={(wsName) => {
+            setActionError(null)
+            setOptimisticInstances((prev) => [
+              ...prev.filter((inst) => inst.name !== wsName),
+              {
+                instance_id: `launching:${wsName}`,
+                name: wsName,
+                state: 'launching',
+                shutdown_at: null,
+              },
+            ])
+          }}
+          onLaunchFinished={({ name: wsName, ok, error, result }) => {
+            if (ok && result) {
+              setOptimisticInstances((prev) =>
+                prev.map((inst) =>
+                  inst.name === wsName
+                    ? {
+                        instance_id: result.instance_id,
+                        name: result.name,
+                        state: result.state || 'pending',
+                        shutdown_at: result.shutdown_at,
+                      }
+                    : inst,
+                ),
+              )
+            } else {
+              setOptimisticInstances((prev) => prev.filter((inst) => inst.name !== wsName))
+              setActionError(error ?? `Failed to launch workstation “${wsName}”.`)
+            }
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="btn btn-start"
+          onClick={() => setShowCreateForm(true)}
+        >
+          Create
+        </button>
+      )}
+    </div>
+  )
 
   useEffect(() => {
     if (openAutoStopFor === null) return
@@ -313,55 +350,6 @@ export function InstanceList() {
     document.addEventListener('click', handleClickOutside)
     return () => document.removeEventListener('click', handleClickOutside)
   }, [openAutoStopFor])
-
-  const createSection = (
-    <div className="create-section">
-      {showCreateForm ? (
-        <form className="create-form" onSubmit={onCreate}>
-          <div className="create-form-fields">
-            <input
-              className="create-input"
-              type="text"
-              placeholder="Workstation name"
-              value={createName}
-              onChange={(e) => setCreateName(e.target.value)}
-              required
-              autoFocus
-              disabled={creating}
-            />
-            <input
-              className="create-input create-input--narrow"
-              type="text"
-              placeholder="Instance type"
-              value={createInstanceType}
-              onChange={(e) => setCreateInstanceType(e.target.value)}
-              disabled={creating}
-            />
-            <button type="submit" className="btn btn-start" disabled={creating || !createName.trim()}>
-              {creating ? 'Creating…' : 'Launch'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => { setShowCreateForm(false); setCreateError(null) }}
-              disabled={creating}
-            >
-              Cancel
-            </button>
-          </div>
-          {createError && <p className="create-error" role="alert">{createError}</p>}
-        </form>
-      ) : (
-        <button
-          type="button"
-          className="btn btn-start"
-          onClick={() => { setShowCreateForm(true); setCreateError(null) }}
-        >
-          Create
-        </button>
-      )}
-    </div>
-  )
 
   if (instancesQuery.isPending && instancesQuery.data === undefined) {
     return <p className="loading">Loading instances…</p>
@@ -420,7 +408,7 @@ export function InstanceList() {
         <FutureRouterAmiSummary info={futureRouterAmi} />
       )}
       <div
-        className={`table-wrap${instancesQuery.isFetching && instances.length > 0 ? ' table-wrap--revalidating' : ''}`}
+        className={`table-wrap${instancesQuery.isFetching && displayInstances.length > 0 ? ' table-wrap--revalidating' : ''}`}
       >
         <table className="instances-table">
           <thead>
@@ -438,15 +426,16 @@ export function InstanceList() {
                   {listInfra ? 'Loading router instances…' : 'Loading workstations…'}
                 </td>
               </tr>
-            ) : instances.length === 0 ? (
+            ) : displayInstances.length === 0 ? (
               <tr>
                 <td colSpan={4} className="empty">
                   {listInfra ? 'No router instances found.' : 'No workstations found.'}
                 </td>
               </tr>
             ) : (
-              instances.map((inst) => {
+              displayInstances.map((inst) => {
                 const key = instanceKey(inst)
+                const isLaunching = inst.state === 'launching'
                 return (
                 <tr key={inst.instance_id}>
                   <td className="name">
@@ -459,7 +448,7 @@ export function InstanceList() {
                     </span>
                   </td>
                   <td className="shutdown">
-                    {listInfra ? (
+                    {listInfra || isLaunching ? (
                       '—'
                     ) : (() => {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
@@ -554,6 +543,10 @@ export function InstanceList() {
                     })()}
                   </td>
                   <td className="actions">
+                    {isLaunching ? (
+                      <span className="actions-placeholder">—</span>
+                    ) : (
+                      <>
                     {inst.state === 'stopped' && (
                       <button
                         type="button"
@@ -583,6 +576,8 @@ export function InstanceList() {
                       >
                         {acting === key ? '…' : 'Kill'}
                       </button>
+                    )}
+                      </>
                     )}
                   </td>
                 </tr>

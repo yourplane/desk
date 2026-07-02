@@ -186,15 +186,53 @@ export async function reapWorkstations(): Promise<ReapResult> {
 export interface CreateWorkstationResult {
   instance_id: string
   name: string
+  state: string
   shutdown_at: string | null
+}
+
+export interface DeskAmi {
+  image_id: string
+  name: string
+  state: string
+  creation_date: string
+  source_instance: string | null
+  build_status: string | null
+}
+
+export async function listDeskAmis(options?: {
+  q?: string
+  managedOnly?: boolean
+  publicOnly?: boolean
+}): Promise<DeskAmi[]> {
+  const params = new URLSearchParams()
+  if (options?.q?.trim()) params.set('q', options.q.trim())
+  if (options?.publicOnly) params.set('public', 'true')
+  else if (options?.managedOnly === false) params.set('managed_only', 'false')
+  const query = params.toString()
+  const res = await fetchWithAuthRetry(`/api/amis${query ? `?${query}` : ''}`, {
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export interface CreateWorkstationOptions {
+  instanceType?: string
+  amiId?: string
+  allowUntestedAmi?: boolean
 }
 
 export async function createWorkstation(
   name: string,
-  instanceType?: string,
+  options?: CreateWorkstationOptions,
 ): Promise<CreateWorkstationResult> {
-  const body: Record<string, string> = { name }
-  if (instanceType) body.instance_type = instanceType
+  const body: Record<string, unknown> = { name }
+  if (options?.instanceType) body.instance_type = options.instanceType
+  if (options?.amiId) body.ami_id = options.amiId
+  if (options?.allowUntestedAmi) body.allow_untested_ami = true
   const res = await fetchWithAuthRetry('/api/workstations', {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
