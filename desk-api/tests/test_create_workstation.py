@@ -181,3 +181,27 @@ def test_list_workstations_infra(
     assert inst["shutdown_at"] is None
     assert inst["ami_name"] == "router-ami-20240601-120000"
     assert data["future_router_ami"]["status"] == "consolidated"
+
+
+@patch("app.routes.workstations.get_future_router_ami_info")
+@patch("app.routes.workstations.describe_amis_by_id")
+@patch("app.routes.workstations.list_workstations")
+def test_list_workstations_infra_future_ami_failure(
+    mock_list_workstations: object,
+    mock_describe_amis: object,
+    mock_future_router: object,
+) -> None:
+    """Infra list still returns instances when future-router AMI lookup fails."""
+    from desk.aws import Workstation
+
+    mock_list_workstations.return_value = [
+        Workstation(instance_id="i-router1", name="router", state="running", image_id="ami-x"),
+    ]
+    mock_describe_amis.return_value = {}
+    mock_future_router.side_effect = RuntimeError("UnauthorizedOperation")
+
+    resp = client.get("/api/workstations?infra=true")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["instances"]) == 1
+    assert data["future_router_ami"]["status"] == "unavailable"

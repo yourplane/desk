@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import {
   createWorkstation,
@@ -150,13 +150,18 @@ export function InstanceList() {
   const instancesQuery = useQuery({
     queryKey: queryKeys.workstations(listInfra),
     queryFn: () => listInstances({ infra: listInfra }),
-    placeholderData: keepPreviousData,
+    placeholderData: (previousData, previousQuery) => {
+      if (previousQuery?.queryKey[1] === listInfra) return previousData
+      return undefined
+    },
     staleTime: 5_000,
     refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
   })
 
   const instances: Instance[] = instancesQuery.data?.instances ?? []
   const futureRouterAmi = instancesQuery.data?.future_router_ami
+  const instancesLoading =
+    instancesQuery.isFetching && instances.length === 0 && !instancesQuery.isError
   const blockingError =
     instancesQuery.isError && instancesQuery.data === undefined
       ? instancesQuery.error instanceof Error
@@ -380,7 +385,7 @@ export function InstanceList() {
   return (
     <>
       <DataFreshnessBar
-        resourceLabel="Workstation list"
+        resourceLabel={listInfra ? 'Router infra list' : 'Workstation list'}
         dataUpdatedAt={instancesQuery.dataUpdatedAt}
         isFetching={instancesQuery.isFetching}
         onRefresh={() => void refetchWorkstations()}
@@ -391,17 +396,26 @@ export function InstanceList() {
       {actionError && (
         <p className="error-message" role="alert">{actionError}</p>
       )}
-      <p className="instance-list-toolbar">
-        <label className="instance-list-infra-toggle">
-          <input
-            type="checkbox"
-            checked={listInfra}
-            onChange={(e) => setListInfra(e.target.checked)}
-          />
-          {' '}
-          List managed router (infra)
-        </label>
-      </p>
+      <div className="instance-list-toolbar">
+        <div className="instance-list-view-toggle" role="group" aria-label="Instance list view">
+          <button
+            type="button"
+            className={`instance-list-view-toggle__btn${!listInfra ? ' instance-list-view-toggle__btn--active' : ''}`}
+            aria-pressed={!listInfra}
+            onClick={() => setListInfra(false)}
+          >
+            Workstations
+          </button>
+          <button
+            type="button"
+            className={`instance-list-view-toggle__btn${listInfra ? ' instance-list-view-toggle__btn--active' : ''}`}
+            aria-pressed={listInfra}
+            onClick={() => setListInfra(true)}
+          >
+            Router infra
+          </button>
+        </div>
+      </div>
       {listInfra && futureRouterAmi && (
         <FutureRouterAmiSummary info={futureRouterAmi} />
       )}
@@ -418,7 +432,13 @@ export function InstanceList() {
             </tr>
           </thead>
           <tbody>
-            {instances.length === 0 ? (
+            {instancesLoading ? (
+              <tr>
+                <td colSpan={4} className="empty">
+                  {listInfra ? 'Loading router instances…' : 'Loading workstations…'}
+                </td>
+              </tr>
+            ) : instances.length === 0 ? (
               <tr>
                 <td colSpan={4} className="empty">
                   {listInfra ? 'No router instances found.' : 'No workstations found.'}
