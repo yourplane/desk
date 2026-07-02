@@ -1017,6 +1017,7 @@ def test_list_amis_success(mock_session: MagicMock) -> None:
                 "Tags": [
                     {"Key": "desk:managed", "Value": "true"},
                     {"Key": "desk:source-instance", "Value": "i-aaa"},
+                    {"Key": "desk:ami-build-status", "Value": "tested"},
                 ],
             },
             {
@@ -1041,8 +1042,10 @@ def test_list_amis_success(mock_session: MagicMock) -> None:
     assert result[0].state == "available"
     assert result[0].creation_date == "2025-02-01T12:00:00.000Z"
     assert result[0].source_instance == "i-bbb"
+    assert result[0].build_status is None
     assert result[1].image_id == "ami-old"
     assert result[1].source_instance == "i-aaa"
+    assert result[1].build_status == "tested"
     mock_ec2.describe_images.assert_called_once_with(
         Owners=["self"],
         Filters=[{"Name": "tag:desk:managed", "Values": ["true"]}],

@@ -2,6 +2,7 @@
 
 export const queryKeys = {
   workstations: (infra: boolean) => ['workstations', infra] as const,
+  deskAmis: ['deskAmis'] as const,
   webRoutesAll: ['webRoutes', 'all'] as const,
   costs: ['costs'] as const,
   savedCommands: ['savedCommands'] as const,

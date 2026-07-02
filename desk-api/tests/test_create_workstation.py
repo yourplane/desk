@@ -27,6 +27,7 @@ def test_create_workstation_success(mock_create: object) -> None:
     mock_create.assert_called_once_with(
         "my-ws",
         "t3.medium",
+        ami_id=None,
         shutdown_after="4h",
         allow_untested_ami=False,
         region=None,
@@ -51,6 +52,7 @@ def test_create_workstation_custom_instance_type(mock_create: object) -> None:
     mock_create.assert_called_once_with(
         "big-ws",
         "m5.xlarge",
+        ami_id=None,
         shutdown_after="4h",
         allow_untested_ami=False,
         region=None,
@@ -72,8 +74,31 @@ def test_create_workstation_allow_untested_ami(mock_create: object) -> None:
     mock_create.assert_called_once_with(
         "ws",
         "t3.medium",
+        ami_id=None,
         shutdown_after="4h",
         allow_untested_ami=True,
+        region=None,
+        profile=None,
+    )
+
+
+@patch("app.routes.workstations.create_workstation")
+def test_create_workstation_with_ami_id(mock_create: object) -> None:
+    """POST /api/workstations passes ami_id to the SDK."""
+    mock_create.return_value = ("i-ami", "2026-03-20T20:00:00Z")
+
+    resp = client.post(
+        "/api/workstations",
+        json={"name": "ws", "ami_id": "ami-abc123"},
+    )
+
+    assert resp.status_code == 200
+    mock_create.assert_called_once_with(
+        "ws",
+        "t3.medium",
+        ami_id="ami-abc123",
+        shutdown_after="4h",
+        allow_untested_ami=False,
         region=None,
         profile=None,
     )

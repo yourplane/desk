@@ -999,6 +999,7 @@ class AmiInfo:
     state: str
     creation_date: str
     source_instance: str | None
+    build_status: str | None = None
 
 
 def list_amis(
@@ -1034,6 +1035,7 @@ def list_amis(
                 state=img.get("State", "unknown"),
                 creation_date=img.get("CreationDate", ""),
                 source_instance=_tag(img, "desk:source-instance"),
+                build_status=_tag(img, AMI_TAG_BUILD_STATUS),
             )
         )
 
