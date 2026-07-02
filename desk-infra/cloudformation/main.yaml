@@ -123,6 +123,7 @@ Resources:
                 - ec2:DescribeInstances
                 - ec2:DescribeTags
                 - ec2:DescribeImages
+                - ec2:DescribeLaunchTemplateVersions
                 - ec2:StartInstances
                 - ec2:StopInstances
                 - ec2:TerminateInstances

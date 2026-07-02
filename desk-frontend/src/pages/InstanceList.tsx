@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import {
   listInstances,
@@ -6,6 +6,7 @@ import {
   startInstance,
   stopInstance,
   killInstance,
+  type FutureRouterAmiInfo,
   type Instance,
 } from '../api/client'
 import { CreateWorkstationForm } from '../components/CreateWorkstationForm'
@@ -13,7 +14,7 @@ import { DataFreshnessBar } from '../DataFreshnessBar'
 import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
 import { queryKeys } from '../queryKeys'
 import { logout } from '../auth'
-import { instanceKey, stateColor } from './workstationUtils'
+import { instanceKey, stateColor, formatAmiLine, instanceAmiSubline, futureRouterAmiSummaryClass } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
@@ -73,6 +74,63 @@ function toDatetimeLocalValue(isoUtc: string | null): string {
   return `${y}-${mo}-${day}T${h}:${mi}`
 }
 
+function FutureRouterAmiSummary({ info }: { info: FutureRouterAmiInfo }) {
+  const className = futureRouterAmiSummaryClass(info)
+
+  if (info.status === 'unavailable') {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__warning">
+          {info.warnings[0] ?? 'Router AMI info unavailable.'}
+        </p>
+      </div>
+    )
+  }
+
+  if (info.status === 'consolidated' && info.ami) {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__line">{formatAmiLine(info.ami)}</p>
+      </div>
+    )
+  }
+
+  if (info.status === 'partial' && info.ami) {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__line">{formatAmiLine(info.ami)}</p>
+        {info.warnings.map((w) => (
+          <p key={w} className="future-router-ami-summary__warning">{w}</p>
+        ))}
+      </div>
+    )
+  }
+
+  if (info.status === 'mismatch' && info.latest && info.deploy) {
+    return (
+      <div className={className} role="status">
+        <div className="future-router-ami-summary__title">Future router AMI</div>
+        <p className="future-router-ami-summary__line">
+          <span className="future-router-ami-summary__label">Latest router-ami-*:</span>{' '}
+          {formatAmiLine(info.latest)}
+        </p>
+        <p className="future-router-ami-summary__line">
+          <span className="future-router-ami-summary__label">desk-router deploy:</span>{' '}
+          {formatAmiLine(info.deploy)}
+        </p>
+        {info.warnings.map((w) => (
+          <p key={w} className="future-router-ami-summary__warning">{w}</p>
+        ))}
+      </div>
+    )
+  }
+
+  return null
+}
+
 export function InstanceList() {
   const queryClient = useQueryClient()
   const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
@@ -88,12 +146,18 @@ export function InstanceList() {
   const instancesQuery = useQuery({
     queryKey: queryKeys.workstations(listInfra),
     queryFn: () => listInstances({ infra: listInfra }),
-    placeholderData: keepPreviousData,
+    placeholderData: (previousData, previousQuery) => {
+      if (previousQuery?.queryKey[1] === listInfra) return previousData
+      return undefined
+    },
     staleTime: 5_000,
     refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
   })
 
-  const instances: Instance[] = instancesQuery.data ?? []
+  const instances: Instance[] = instancesQuery.data?.instances ?? []
+  const futureRouterAmi = instancesQuery.data?.future_router_ami
+  const instancesLoading =
+    instancesQuery.isFetching && instances.length === 0 && !instancesQuery.isError
   const blockingError =
     instancesQuery.isError && instancesQuery.data === undefined
       ? instancesQuery.error instanceof Error
@@ -265,7 +329,7 @@ export function InstanceList() {
   return (
     <>
       <DataFreshnessBar
-        resourceLabel="Workstation list"
+        resourceLabel={listInfra ? 'Router infra list' : 'Workstation list'}
         dataUpdatedAt={instancesQuery.dataUpdatedAt}
         isFetching={instancesQuery.isFetching}
         onRefresh={() => void refetchWorkstations()}
@@ -276,17 +340,29 @@ export function InstanceList() {
       {actionError && (
         <p className="error-message" role="alert">{actionError}</p>
       )}
-      <p className="instance-list-toolbar">
-        <label className="instance-list-infra-toggle">
-          <input
-            type="checkbox"
-            checked={listInfra}
-            onChange={(e) => setListInfra(e.target.checked)}
-          />
-          {' '}
-          List managed router (infra)
-        </label>
-      </p>
+      <div className="instance-list-toolbar">
+        <div className="instance-list-view-toggle" role="group" aria-label="Instance list view">
+          <button
+            type="button"
+            className={`instance-list-view-toggle__btn${!listInfra ? ' instance-list-view-toggle__btn--active' : ''}`}
+            aria-pressed={!listInfra}
+            onClick={() => setListInfra(false)}
+          >
+            Workstations
+          </button>
+          <button
+            type="button"
+            className={`instance-list-view-toggle__btn${listInfra ? ' instance-list-view-toggle__btn--active' : ''}`}
+            aria-pressed={listInfra}
+            onClick={() => setListInfra(true)}
+          >
+            Router infra
+          </button>
+        </div>
+      </div>
+      {listInfra && futureRouterAmi && (
+        <FutureRouterAmiSummary info={futureRouterAmi} />
+      )}
       <div
         className={`table-wrap${instancesQuery.isFetching && instances.length > 0 ? ' table-wrap--revalidating' : ''}`}
       >
@@ -300,7 +376,13 @@ export function InstanceList() {
             </tr>
           </thead>
           <tbody>
-            {instances.length === 0 ? (
+            {instancesLoading ? (
+              <tr>
+                <td colSpan={4} className="empty">
+                  {listInfra ? 'Loading router instances…' : 'Loading workstations…'}
+                </td>
+              </tr>
+            ) : instances.length === 0 ? (
               <tr>
                 <td colSpan={4} className="empty">
                   {listInfra ? 'No router instances found.' : 'No workstations found.'}
@@ -311,7 +393,10 @@ export function InstanceList() {
                 const key = instanceKey(inst)
                 return (
                 <tr key={inst.instance_id}>
-                  <td className="name">{key}</td>
+                  <td className="name">
+                    <div>{key}</div>
+                    <div className="instance-ami-subline">{instanceAmiSubline(inst)}</div>
+                  </td>
                   <td>
                     <span className="state-label" style={{ color: stateColor(inst.state) }}>
                       {inst.state}

@@ -1,4 +1,4 @@
-import type { Instance } from '../api/client'
+import type { AmiRef, FutureRouterAmiInfo, Instance } from '../api/client'
 
 /** Matches desk web-router hostname rules (letters, numbers, _, -). */
 const WEB_ROUTE_WS = /^[a-zA-Z0-9_-]+$/
@@ -61,4 +61,43 @@ export function stateColor(state: string): string {
     default:
       return 'var(--state-default)'
   }
+}
+
+export function formatAmiBuildAt(isoUtc: string): string {
+  try {
+    const d = new Date(isoUtc)
+    if (Number.isNaN(d.getTime())) return isoUtc
+    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+  } catch {
+    return isoUtc
+  }
+}
+
+export function formatAmiLine(ami: AmiRef): string {
+  const built = ami.build_at ? formatAmiBuildAt(ami.build_at) : '—'
+  return `${ami.name} · ${built}`
+}
+
+export function instanceAmiSubline(inst: Instance): string {
+  if (inst.ami_name && inst.ami_build_at) {
+    return formatAmiLine({
+      image_id: inst.ami_id ?? '',
+      name: inst.ami_name,
+      build_at: inst.ami_build_at,
+    })
+  }
+  if (inst.ami_id) {
+    return `AMI unavailable (${inst.ami_id})`
+  }
+  return 'AMI unavailable'
+}
+
+export function futureRouterAmiSummaryClass(info: FutureRouterAmiInfo): string {
+  if (info.status === 'mismatch' || info.status === 'unavailable') {
+    return 'future-router-ami-summary future-router-ami-summary--warning'
+  }
+  if (info.status === 'partial') {
+    return 'future-router-ami-summary future-router-ami-summary--partial'
+  }
+  return 'future-router-ami-summary'
 }

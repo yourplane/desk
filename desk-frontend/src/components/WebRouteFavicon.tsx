@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { webRouteFaviconCandidates } from '../pages/workstationUtils'
+import { resolvePortDisplayGroup, type PortDisplayGroup } from '../portDisplayGroup'
 import { probeWebRouteReachability, type RouteReachability } from '../webRouteProbe'
 
 /** Retry favicon loads periodically so icons appear when routes come up or change. */
@@ -85,13 +86,21 @@ function FaviconPlaceholder({ reachability }: { reachability: RouteReachability 
   )
 }
 
-export function WebRouteFavicon({ baseUrl }: { baseUrl: string }) {
+export function WebRouteFavicon({
+  baseUrl,
+  onDisplayGroupChange,
+}: {
+  baseUrl: string
+  onDisplayGroupChange?: (group: PortDisplayGroup) => void
+}) {
   const [candidateIndex, setCandidateIndex] = useState(0)
   const [loaded, setLoaded] = useState(false)
   const [exhausted, setExhausted] = useState(false)
   const [reachability, setReachability] = useState<RouteReachability | null>(null)
   const [probeDone, setProbeDone] = useState(false)
   const [tick, setTick] = useState(refreshTick)
+  const lastSettledGroupRef = useRef<PortDisplayGroup | null>(null)
+  const lastReportedGroupRef = useRef<PortDisplayGroup | null>(null)
 
   const candidates = useMemo(() => webRouteFaviconCandidates(baseUrl), [baseUrl])
 
@@ -102,10 +111,24 @@ export function WebRouteFavicon({ baseUrl }: { baseUrl: string }) {
     setReachability(null)
     setProbeDone(false)
     setTick(refreshTick)
+    lastSettledGroupRef.current = null
+    lastReportedGroupRef.current = null
   }, [baseUrl])
 
   useEffect(() => {
     const onRefresh = () => {
+      if (lastSettledGroupRef.current === 'broken') {
+        void probeWebRouteReachability(baseUrl).then((result) => {
+          if (result === 'dead') return
+          setCandidateIndex(0)
+          setLoaded(false)
+          setExhausted(false)
+          setReachability(null)
+          setProbeDone(false)
+          setTick(refreshTick)
+        })
+        return
+      }
       setCandidateIndex(0)
       setLoaded(false)
       setExhausted(false)
@@ -141,6 +164,24 @@ export function WebRouteFavicon({ baseUrl }: { baseUrl: string }) {
   const candidate = candidates[candidateIndex]
   const showFavicon = loaded && candidate
   const showPlaceholder = exhausted && probeDone && reachability !== null
+
+  useEffect(() => {
+    const group = resolvePortDisplayGroup({
+      faviconLoaded: loaded,
+      probeDone,
+      reachability,
+      lastSettledGroup: lastSettledGroupRef.current,
+    })
+
+    if (loaded || (probeDone && reachability !== null)) {
+      lastSettledGroupRef.current = group
+    }
+
+    if (lastReportedGroupRef.current !== group) {
+      lastReportedGroupRef.current = group
+      onDisplayGroupChange?.(group)
+    }
+  }, [loaded, probeDone, reachability, onDisplayGroupChange])
 
   return (
     <span className="port-chip-favicon-slot" aria-hidden="true">
