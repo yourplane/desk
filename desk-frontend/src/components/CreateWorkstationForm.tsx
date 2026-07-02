@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { createWorkstation, listDeskAmis } from '../api/client'
+import { createWorkstation, listDeskAmis, type CreateWorkstationResult } from '../api/client'
 import { queryKeys } from '../queryKeys'
 import {
   defaultVisibleVersion,
@@ -24,7 +24,12 @@ import { CustomAmiSearch } from './CustomAmiSearch'
 interface CreateWorkstationFormProps {
   onClose: () => void
   onLaunchStarted?: (name: string) => void
-  onLaunchFinished?: (result: { name: string; ok: boolean; error?: string }) => void
+  onLaunchFinished?: (result: {
+    name: string
+    ok: boolean
+    error?: string
+    result?: CreateWorkstationResult
+  }) => void
 }
 
 function prefsFromState(state: {
@@ -237,9 +242,9 @@ export function CreateWorkstationForm({ onClose, onLaunchStarted, onLaunchFinish
 
     void (async () => {
       try {
-        await createWorkstation(trimmed, launchOptions)
+        const result = await createWorkstation(trimmed, launchOptions)
         await queryClient.invalidateQueries({ queryKey: ['workstations'] })
-        onLaunchFinished?.({ name: trimmed, ok: true })
+        onLaunchFinished?.({ name: trimmed, ok: true, result })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         onLaunchFinished?.({ name: trimmed, ok: false, error: message })

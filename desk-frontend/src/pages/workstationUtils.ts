@@ -53,6 +53,7 @@ export function stateColor(state: string): string {
     case 'running':
       return 'var(--state-running)'
     case 'pending':
+    case 'launching':
       return 'var(--state-pending)'
     case 'stopped':
       return 'var(--state-stopped)'
