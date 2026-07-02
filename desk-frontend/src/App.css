@@ -92,6 +92,16 @@
   color: var(--text-muted);
 }
 
+.launch-notice {
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
 .create-form-ami-section {
   margin-top: 0.75rem;
   display: flex;

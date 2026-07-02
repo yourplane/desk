@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -42,6 +43,16 @@ def get_desk_vpc_outputs(
     profile: str | None = None,
 ) -> DeskVpcOutputs:
     """Fetch desk-vpc CloudFormation stack outputs."""
+    return _get_desk_vpc_outputs_impl(stack_name, region, profile)
+
+
+@functools.lru_cache(maxsize=16)
+def _get_desk_vpc_outputs_impl(
+    stack_name: str,
+    region: str | None,
+    profile: str | None,
+) -> DeskVpcOutputs:
+    """Cached VPC stack lookup (warm Lambda containers reuse results)."""
     session = boto3.Session(region_name=region, profile_name=profile)
     cf = session.client("cloudformation")
     resolved_region = session.region_name
@@ -427,8 +438,7 @@ def create_workstation(
             "Choose a different workstation name."
         )
 
-    existing = list_workstations(region=region, profile=profile)
-    duplicates = [w for w in existing if w.name == name and w.state != "terminated"]
+    duplicates = find_workstations_by_name(name, region=region, profile=profile)
     if duplicates:
         states = ", ".join(f"{w.instance_id} ({w.state})" for w in duplicates)
         raise ValueError(
@@ -482,6 +492,40 @@ class Workstation:
     state: str
     shutdown_at: str | None = None
     image_id: str = ""
+
+
+_NON_TERMINATED_WORKSTATION_STATES = ("pending", "running", "stopping", "stopped")
+
+
+def find_workstations_by_name(
+    name: str,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[Workstation]:
+    """Find non-terminated workstations with the given Name tag (targeted EC2 query)."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    filters = [
+        {"Name": "tag:Name", "Values": [name]},
+        {"Name": "tag:Type", "Values": ["workstation"]},
+        {"Name": "instance-state-name", "Values": list(_NON_TERMINATED_WORKSTATION_STATES)},
+    ]
+    result: list[Workstation] = []
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
+        for reservation in page.get("Reservations", []):
+            for instance in reservation.get("Instances", []):
+                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+                result.append(
+                    Workstation(
+                        instance_id=instance["InstanceId"],
+                        name=tags.get("Name", ""),
+                        state=instance["State"]["Name"],
+                        shutdown_at=tags.get(TAG_SHUTDOWN_AT),
+                        image_id=instance.get("ImageId", ""),
+                    )
+                )
+    return result
 
 
 @dataclass

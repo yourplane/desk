@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from desk.aws import (
@@ -159,9 +159,9 @@ def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profi
     return {"instance_id": instance_id, "shutdown_at": shutdown_at}
 
 
-@router.post("/workstations")
+@router.post("/workstations", status_code=status.HTTP_202_ACCEPTED)
 def create_workstation_route(body: CreateWorkstationBody):
-    """Create a new workstation instance."""
+    """Start launching a new workstation instance (returns once EC2 accepts RunInstances)."""
     region, profile = _region_profile()
 
     name = body.name.strip()
@@ -185,7 +185,12 @@ def create_workstation_route(body: CreateWorkstationBody):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     logger.info("created workstation name=%s instance_id=%s", name, instance_id)
-    return {"instance_id": instance_id, "name": name, "shutdown_at": shutdown_at}
+    return {
+        "instance_id": instance_id,
+        "name": name,
+        "state": "pending",
+        "shutdown_at": shutdown_at,
+    }
 
 
 @router.get("/workstations")

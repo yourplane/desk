@@ -23,6 +23,8 @@ import { CustomAmiSearch } from './CustomAmiSearch'
 
 interface CreateWorkstationFormProps {
   onClose: () => void
+  onLaunchStarted?: (name: string) => void
+  onLaunchFinished?: (result: { name: string; ok: boolean; error?: string }) => void
 }
 
 function prefsFromState(state: {
@@ -122,7 +124,7 @@ function FamilyRows({
   )
 }
 
-export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
+export function CreateWorkstationForm({ onClose, onLaunchStarted, onLaunchFinished }: CreateWorkstationFormProps) {
   const queryClient = useQueryClient()
   const initial = loadCreateFormPrefs()
   const [amiMode, setAmiMode] = useState<AmiInputMode>(initial.amiMode)
@@ -132,7 +134,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
   const [allowUntestedAmi, setAllowUntestedAmi] = useState(initial.allowUntestedAmi)
   const [instanceType, setInstanceType] = useState(initial.instanceType)
   const [name, setName] = useState(initial.name)
-  const [creating, setCreating] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [staleNotice, setStaleNotice] = useState<string | null>(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -211,31 +213,40 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
 
   const canLaunch =
     name.trim().length > 0 &&
-    !creating &&
+    !submitting &&
     (amiMode === 'desk' ? deskAmiId !== null : customAmiId.length > 0)
 
-  const onSubmit = async (e: React.FormEvent) => {
+  const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const trimmed = name.trim()
     if (!trimmed || !canLaunch) return
-    setCreating(true)
-    setCreateError(null)
-    try {
-      const amiId = amiMode === 'desk' ? deskAmiId! : customAmiId
-      await createWorkstation(trimmed, {
-        instanceType: instanceType || undefined,
-        amiId,
-        allowUntestedAmi: amiMode === 'desk' ? allowUntestedAmi : undefined,
-      })
-      clearCreateFormName()
-      setName('')
-      onClose()
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCreating(false)
+
+    const amiId = amiMode === 'desk' ? deskAmiId! : customAmiId
+    const launchOptions = {
+      instanceType: instanceType || undefined,
+      amiId,
+      allowUntestedAmi: amiMode === 'desk' ? allowUntestedAmi : undefined,
     }
+
+    setSubmitting(true)
+    setCreateError(null)
+    onLaunchStarted?.(trimmed)
+    clearCreateFormName()
+    setName('')
+    onClose()
+
+    void (async () => {
+      try {
+        await createWorkstation(trimmed, launchOptions)
+        await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+        onLaunchFinished?.({ name: trimmed, ok: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        onLaunchFinished?.({ name: trimmed, ok: false, error: message })
+      } finally {
+        setSubmitting(false)
+      }
+    })()
   }
 
   const dropdownLabel = selectedDeskAmi
@@ -255,7 +266,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
           onChange={(e) => setName(e.target.value)}
           required
           autoFocus
-          disabled={creating}
+          disabled={submitting}
         />
         <input
           className="create-input create-input--narrow"
@@ -263,7 +274,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
           placeholder="Instance type"
           value={instanceType}
           onChange={(e) => setInstanceType(e.target.value)}
-          disabled={creating}
+          disabled={submitting}
         />
       </div>
 
@@ -273,7 +284,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
             type="button"
             className={`ami-mode-switch-btn${amiMode === 'desk' ? ' ami-mode-switch-btn--active' : ''}`}
             onClick={() => setAmiMode('desk')}
-            disabled={creating}
+            disabled={submitting}
           >
             Desk AMI
           </button>
@@ -281,7 +292,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
             type="button"
             className={`ami-mode-switch-btn${amiMode === 'custom' ? ' ami-mode-switch-btn--active' : ''}`}
             onClick={() => setAmiMode('custom')}
-            disabled={creating}
+            disabled={submitting}
           >
             Custom AMI
           </button>
@@ -304,7 +315,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
                 type="button"
                 className="ami-picker-trigger"
                 onClick={() => setDropdownOpen((o) => !o)}
-                disabled={creating || amisQuery.isPending}
+                disabled={submitting || amisQuery.isPending}
                 aria-haspopup="listbox"
                 aria-expanded={dropdownOpen}
               >
@@ -337,7 +348,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
                 type="checkbox"
                 checked={allowUntestedAmi}
                 onChange={(e) => onAllowUntestedChange(e.target.checked)}
-                disabled={creating}
+                disabled={submitting}
               />
               {' '}
               Allow untested AMI
@@ -347,7 +358,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
           <CustomAmiSearch
             selectedId={customAmiId}
             selectedName={customAmiName}
-            disabled={creating}
+            disabled={submitting}
             onSelect={(ami) => {
               setCustomAmiId(ami.image_id)
               setCustomAmiName(ami.name)
@@ -362,13 +373,13 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
 
       <div className="create-form-actions">
         <button type="submit" className="btn btn-start" disabled={!canLaunch}>
-          {creating ? 'Creating…' : 'Launch'}
+          {submitting ? 'Launching…' : 'Launch'}
         </button>
         <button
           type="button"
           className="btn btn-secondary"
           onClick={onClose}
-          disabled={creating}
+          disabled={submitting}
         >
           Cancel
         </button>

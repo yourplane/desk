@@ -186,6 +186,7 @@ export async function reapWorkstations(): Promise<ReapResult> {
 export interface CreateWorkstationResult {
   instance_id: string
   name: string
+  state: string
   shutdown_at: string | null
 }
 

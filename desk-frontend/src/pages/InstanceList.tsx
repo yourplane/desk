@@ -138,6 +138,8 @@ export function InstanceList() {
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
   const [customTime, setCustomTime] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [launchNotice, setLaunchNotice] = useState<string | null>(null)
+  const [launchError, setLaunchError] = useState<string | null>(null)
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const actingRef = useRef<string | null>(null)
   actingRef.current = acting
@@ -283,7 +285,26 @@ export function InstanceList() {
   const createSection = (
     <div className="create-section">
       {showCreateForm ? (
-        <CreateWorkstationForm onClose={() => setShowCreateForm(false)} />
+        <CreateWorkstationForm
+          onClose={() => setShowCreateForm(false)}
+          onLaunchStarted={(wsName) => {
+            setLaunchError(null)
+            setLaunchNotice(`Launching workstation “${wsName}”…`)
+          }}
+          onLaunchFinished={({ name: wsName, ok, error }) => {
+            if (ok) {
+              setLaunchNotice(`Workstation “${wsName}” is launching.`)
+              window.setTimeout(() => {
+                setLaunchNotice((current) =>
+                  current === `Workstation “${wsName}” is launching.` ? null : current,
+                )
+              }, 8000)
+            } else {
+              setLaunchNotice(null)
+              setLaunchError(error ?? `Failed to launch workstation “${wsName}”.`)
+            }
+          }}
+        />
       ) : (
         <button
           type="button"
@@ -339,6 +360,12 @@ export function InstanceList() {
       )}
       {actionError && (
         <p className="error-message" role="alert">{actionError}</p>
+      )}
+      {launchNotice && (
+        <p className="launch-notice" role="status">{launchNotice}</p>
+      )}
+      {launchError && (
+        <p className="error-message" role="alert">{launchError}</p>
       )}
       <div className="instance-list-toolbar">
         <div className="instance-list-view-toggle" role="group" aria-label="Instance list view">

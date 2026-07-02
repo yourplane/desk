@@ -111,7 +111,8 @@ Resources:
       Runtime: python3.12
       Handler: lambda_handler.handler
       CodeUri: ../../desk-api
-      Timeout: 30
+      # No ReservedConcurrentExecutions — use the account concurrency pool (parallel invocations).
+      Timeout: 60
       MemorySize: 256
       Policies:
         - Statement:

@@ -19,10 +19,11 @@ def test_create_workstation_success(mock_create: object) -> None:
 
     resp = client.post("/api/workstations", json={"name": "my-ws"})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     body = resp.json()
     assert body["instance_id"] == "i-new123"
     assert body["name"] == "my-ws"
+    assert body["state"] == "pending"
     assert body["shutdown_at"] == "2026-03-20T20:00:00Z"
     mock_create.assert_called_once_with(
         "my-ws",
@@ -45,10 +46,11 @@ def test_create_workstation_custom_instance_type(mock_create: object) -> None:
         json={"name": "big-ws", "instance_type": "m5.xlarge"},
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     body = resp.json()
     assert body["instance_id"] == "i-new456"
     assert body["name"] == "big-ws"
+    assert body["state"] == "pending"
     mock_create.assert_called_once_with(
         "big-ws",
         "m5.xlarge",
@@ -70,7 +72,8 @@ def test_create_workstation_allow_untested_ami(mock_create: object) -> None:
         json={"name": "ws", "allow_untested_ami": True},
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    assert resp.json()["state"] == "pending"
     mock_create.assert_called_once_with(
         "ws",
         "t3.medium",
@@ -92,7 +95,8 @@ def test_create_workstation_with_ami_id(mock_create: object) -> None:
         json={"name": "ws", "ami_id": "ami-abc123"},
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    assert resp.json()["state"] == "pending"
     mock_create.assert_called_once_with(
         "ws",
         "t3.medium",
@@ -125,7 +129,8 @@ def test_create_workstation_allows_terminated_duplicate(mock_create: object) -> 
 
     resp = client.post("/api/workstations", json={"name": "my-ws"})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    assert resp.json()["state"] == "pending"
     assert resp.json()["instance_id"] == "i-new789"
 
 
@@ -152,7 +157,7 @@ def test_create_workstation_no_stack_in_body() -> None:
     )
     # stack is not in the model, so FastAPI ignores it; request still succeeds
     # (the key test is that it's not passed to SDK)
-    assert resp.status_code in (200, 409, 500)
+    assert resp.status_code in (202, 409, 500)
 
 
 def test_create_workstation_reserved_name_router_rejected() -> None:
