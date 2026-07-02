@@ -4,6 +4,7 @@ export interface CreateFormPrefs {
   amiMode: AmiInputMode
   deskAmiId: string | null
   customAmiId: string
+  customAmiName: string
   allowUntestedAmi: boolean
   instanceType: string
   name: string
@@ -15,6 +16,7 @@ const DEFAULT_PREFS: CreateFormPrefs = {
   amiMode: 'desk',
   deskAmiId: null,
   customAmiId: '',
+  customAmiName: '',
   allowUntestedAmi: false,
   instanceType: 't3.medium',
   name: '',
@@ -29,6 +31,7 @@ export function loadCreateFormPrefs(): CreateFormPrefs {
       amiMode: parsed.amiMode === 'custom' ? 'custom' : 'desk',
       deskAmiId: typeof parsed.deskAmiId === 'string' ? parsed.deskAmiId : null,
       customAmiId: typeof parsed.customAmiId === 'string' ? parsed.customAmiId : '',
+      customAmiName: typeof parsed.customAmiName === 'string' ? parsed.customAmiName : '',
       allowUntestedAmi: Boolean(parsed.allowUntestedAmi),
       instanceType: typeof parsed.instanceType === 'string' && parsed.instanceType.trim()
         ? parsed.instanceType

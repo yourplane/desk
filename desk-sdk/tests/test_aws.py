@@ -1100,6 +1100,21 @@ def test_list_amis_all_owned(mock_session: MagicMock) -> None:
 
 
 @patch("desk.aws.boto3.Session")
+def test_list_amis_name_query(mock_session: MagicMock) -> None:
+    """list_amis with name_query adds a wildcard name filter."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {"Images": []}
+    mock_session.return_value.client.return_value = mock_ec2
+
+    list_amis(managed_only=False, name_query="ubuntu")
+
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"],
+        Filters=[{"Name": "name", "Values": ["*ubuntu*"]}],
+    )
+
+
+@patch("desk.aws.boto3.Session")
 def test_get_ssm_command_uses_list_commands(mock_session: MagicMock) -> None:
     """get_ssm_command uses list_commands(CommandId=) when get_command is unavailable."""
     mock_ssm = MagicMock()

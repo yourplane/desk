@@ -34,7 +34,25 @@ def test_list_amis_success(mock_list_amis: object) -> None:
     assert data[0]["image_id"] == "ami-new"
     assert data[0]["name"] == "default-desk-ami-20250701-120000"
     assert data[0]["build_status"] == "tested"
-    mock_list_amis.assert_called_once_with(region=None, profile=None, managed_only=True)
+    mock_list_amis.assert_called_once_with(
+        region=None, profile=None, managed_only=True, name_query=None
+    )
+
+
+@patch("app.routes.amis.list_amis")
+def test_list_amis_search_by_name(mock_list_amis: object) -> None:
+    """GET /api/amis?q=... searches owned AMIs by name."""
+    mock_list_amis.return_value = []
+
+    resp = client.get("/api/amis", params={"q": "my-ami", "managed_only": "false"})
+
+    assert resp.status_code == 200
+    mock_list_amis.assert_called_once_with(
+        region=None,
+        profile=None,
+        managed_only=False,
+        name_query="my-ami",
+    )
 
 
 @patch("app.routes.amis.list_amis")

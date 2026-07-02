@@ -1032,6 +1032,7 @@ def list_amis(
     region: str | None = None,
     profile: str | None = None,
     managed_only: bool = True,
+    name_query: str | None = None,
 ) -> list[AmiInfo]:
     """
     List AMIs. By default returns only AMIs tagged desk:managed=true (created by desk).
@@ -1040,8 +1041,13 @@ def list_amis(
     ec2 = session.client("ec2")
 
     params: dict = {"Owners": ["self"]}
+    filters: list[dict[str, Any]] = []
     if managed_only:
-        params["Filters"] = [{"Name": "tag:desk:managed", "Values": ["true"]}]
+        filters.append({"Name": "tag:desk:managed", "Values": ["true"]})
+    if name_query and name_query.strip():
+        filters.append({"Name": "name", "Values": [f"*{name_query.strip()}*"]})
+    if filters:
+        params["Filters"] = filters
 
     response = ec2.describe_images(**params)
     images = response.get("Images", [])

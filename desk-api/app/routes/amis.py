@@ -12,13 +12,24 @@ router = APIRouter(tags=["amis"])
 
 
 @router.get("/amis")
-def list_amis_route():
+def list_amis_route(q: str | None = None, managed_only: bool = True):
     """List desk-managed AMIs available for workstation launch."""
     aws = get_desk_settings().aws_settings
     region, profile = aws.region, aws.profile
-    logger.info("list_amis: region=%s profile=%s", region, profile)
+    logger.info(
+        "list_amis: region=%s profile=%s managed_only=%s q=%s",
+        region,
+        profile,
+        managed_only,
+        q,
+    )
     try:
-        amis = list_amis(region=region, profile=profile, managed_only=True)
+        amis = list_amis(
+            region=region,
+            profile=profile,
+            managed_only=managed_only,
+            name_query=q,
+        )
     except Exception as e:
         logger.exception("list_amis failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e

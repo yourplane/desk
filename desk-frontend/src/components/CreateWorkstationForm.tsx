@@ -19,6 +19,7 @@ import {
   type AmiInputMode,
   type CreateFormPrefs,
 } from '../pages/createFormPrefs'
+import { CustomAmiSearch } from './CustomAmiSearch'
 
 interface CreateWorkstationFormProps {
   onClose: () => void
@@ -28,6 +29,7 @@ function prefsFromState(state: {
   amiMode: AmiInputMode
   deskAmiId: string | null
   customAmiId: string
+  customAmiName: string
   allowUntestedAmi: boolean
   instanceType: string
   name: string
@@ -126,6 +128,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
   const [amiMode, setAmiMode] = useState<AmiInputMode>(initial.amiMode)
   const [deskAmiId, setDeskAmiId] = useState<string | null>(initial.deskAmiId)
   const [customAmiId, setCustomAmiId] = useState(initial.customAmiId)
+  const [customAmiName, setCustomAmiName] = useState(initial.customAmiName)
   const [allowUntestedAmi, setAllowUntestedAmi] = useState(initial.allowUntestedAmi)
   const [instanceType, setInstanceType] = useState(initial.instanceType)
   const [name, setName] = useState(initial.name)
@@ -139,7 +142,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
 
   const amisQuery = useQuery({
     queryKey: queryKeys.deskAmis,
-    queryFn: listDeskAmis,
+    queryFn: () => listDeskAmis(),
     staleTime: 30_000,
   })
 
@@ -149,9 +152,17 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
 
   useEffect(() => {
     saveCreateFormPrefs(
-      prefsFromState({ amiMode, deskAmiId, customAmiId, allowUntestedAmi, instanceType, name }),
+      prefsFromState({
+        amiMode,
+        deskAmiId,
+        customAmiId,
+        customAmiName,
+        allowUntestedAmi,
+        instanceType,
+        name,
+      }),
     )
-  }, [amiMode, deskAmiId, customAmiId, allowUntestedAmi, instanceType, name])
+  }, [amiMode, deskAmiId, customAmiId, customAmiName, allowUntestedAmi, instanceType, name])
 
   useEffect(() => {
     if (staleCheckedRef.current || amisQuery.isPending || amisQuery.isError) return
@@ -201,7 +212,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
   const canLaunch =
     name.trim().length > 0 &&
     !creating &&
-    (amiMode === 'desk' ? deskAmiId !== null : customAmiId.trim().length > 0)
+    (amiMode === 'desk' ? deskAmiId !== null : customAmiId.length > 0)
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -210,7 +221,7 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
     setCreating(true)
     setCreateError(null)
     try {
-      const amiId = amiMode === 'desk' ? deskAmiId! : customAmiId.trim()
+      const amiId = amiMode === 'desk' ? deskAmiId! : customAmiId
       await createWorkstation(trimmed, {
         instanceType: instanceType || undefined,
         amiId,
@@ -333,13 +344,18 @@ export function CreateWorkstationForm({ onClose }: CreateWorkstationFormProps) {
             </label>
           </div>
         ) : (
-          <input
-            className="create-input"
-            type="text"
-            placeholder="AMI ID (ami-…)"
-            value={customAmiId}
-            onChange={(e) => setCustomAmiId(e.target.value)}
+          <CustomAmiSearch
+            selectedId={customAmiId}
+            selectedName={customAmiName}
             disabled={creating}
+            onSelect={(ami) => {
+              setCustomAmiId(ami.image_id)
+              setCustomAmiName(ami.name)
+            }}
+            onClear={() => {
+              setCustomAmiId('')
+              setCustomAmiName('')
+            }}
           />
         )}
       </div>

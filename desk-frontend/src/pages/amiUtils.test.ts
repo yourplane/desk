@@ -30,6 +30,12 @@ describe('extractFamilyBaseName', () => {
     expect(extractFamilyBaseName('default-desk-ami-20250701-120000')).toBe('default-desk-ami')
   })
 
+  it('strips async build id suffix with commit hash', () => {
+    expect(extractFamilyBaseName('default-desk-ami-20260101-010101-abcdef01')).toBe(
+      'default-desk-ami',
+    )
+  })
+
   it('returns full name when no timestamp suffix', () => {
     expect(extractFamilyBaseName('router-ami')).toBe('router-ami')
   })
@@ -41,6 +47,17 @@ describe('groupDeskAmis', () => {
     ami('ami-new', 'default-desk-ami-20250701-120000', '2025-07-01T12:00:00.000Z'),
     ami('ami-router', 'router-ami-20250601-080000', '2025-06-01T08:00:00.000Z', 'untested'),
   ]
+
+  it('groups async build AMIs into the same family', () => {
+    const amis = [
+      ami('ami-old', 'default-desk-ami-20250101-100000-abc12345', '2025-01-01T10:00:00.000Z'),
+      ami('ami-new', 'default-desk-ami-20250701-120000-deadbeef', '2025-07-01T12:00:00.000Z'),
+    ]
+    const families = groupDeskAmis(amis, { allowUntested: true })
+    expect(families).toHaveLength(1)
+    expect(families[0].baseName).toBe('default-desk-ami')
+    expect(families[0].versions.map((v) => v.image_id)).toEqual(['ami-new', 'ami-old'])
+  })
 
   it('groups by family and orders families newest first', () => {
     const families = groupDeskAmis(amis, { allowUntested: true })

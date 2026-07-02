@@ -1,6 +1,8 @@
 import type { DeskAmi } from '../api/client'
 
-const FAMILY_SUFFIX_RE = /^(.+)-(\d{8}-\d{6})$/
+// Desk async builds register AMIs as {base}-{YYYYMMDD-HHMMSS}-{commit}.
+// Manual `desk ami create` uses {base}-{YYYYMMDD-HHMMSS} only.
+const FAMILY_SUFFIX_RE = /^(.+)-(\d{8}-\d{6}(?:-[0-9a-f]{8})?)$/i
 
 export function extractFamilyBaseName(amiName: string): string {
   const match = amiName.match(FAMILY_SUFFIX_RE)

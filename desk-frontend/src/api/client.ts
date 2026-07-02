@@ -198,8 +198,17 @@ export interface DeskAmi {
   build_status: string | null
 }
 
-export async function listDeskAmis(): Promise<DeskAmi[]> {
-  const res = await fetchWithAuthRetry('/api/amis', { headers: authHeaders() })
+export async function listDeskAmis(options?: {
+  q?: string
+  managedOnly?: boolean
+}): Promise<DeskAmi[]> {
+  const params = new URLSearchParams()
+  if (options?.q?.trim()) params.set('q', options.q.trim())
+  if (options?.managedOnly === false) params.set('managed_only', 'false')
+  const query = params.toString()
+  const res = await fetchWithAuthRetry(`/api/amis${query ? `?${query}` : ''}`, {
+    headers: authHeaders(),
+  })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(errorMessage(res, text))
