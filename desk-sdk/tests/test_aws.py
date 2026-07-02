@@ -1100,6 +1100,44 @@ def test_list_amis_all_owned(mock_session: MagicMock) -> None:
 
 
 @patch("desk.aws.boto3.Session")
+def test_list_amis_public_search_case_insensitive(mock_session: MagicMock) -> None:
+    """list_amis public_only filters names case-insensitively and caps results."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {
+                "ImageId": "ami-match",
+                "Name": "ubuntu/images/hvm-ssd/ubuntu-noble-24.04-amd64-server",
+                "State": "available",
+                "CreationDate": "2025-07-01T12:00:00.000Z",
+                "Tags": [],
+            },
+            {
+                "ImageId": "ami-other",
+                "Name": "amazon-linux-2023",
+                "State": "available",
+                "CreationDate": "2025-06-01T12:00:00.000Z",
+                "Tags": [],
+            },
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = list_amis(public_only=True, name_query="UBUNTU")
+
+    assert len(result) == 1
+    assert result[0].image_id == "ami-match"
+    mock_ec2.describe_images.assert_called_once()
+    call_kwargs = mock_ec2.describe_images.call_args.kwargs
+    assert "Owners" not in call_kwargs
+    filters = call_kwargs["Filters"]
+    assert {"Name": "is-public", "Values": ["true"]} in filters
+    name_filter = next(f for f in filters if f["Name"] == "name")
+    assert "*UBUNTU*" in name_filter["Values"]
+    assert "*ubuntu*" in name_filter["Values"]
+
+
+@patch("desk.aws.boto3.Session")
 def test_list_amis_name_query(mock_session: MagicMock) -> None:
     """list_amis with name_query adds a wildcard name filter."""
     mock_ec2 = MagicMock()

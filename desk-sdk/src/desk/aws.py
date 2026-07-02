@@ -1033,21 +1033,38 @@ def list_amis(
     profile: str | None = None,
     managed_only: bool = True,
     name_query: str | None = None,
+    public_only: bool = False,
 ) -> list[AmiInfo]:
     """
     List AMIs. By default returns only AMIs tagged desk:managed=true (created by desk).
+    When *public_only* is True, searches public AMIs in the region by name (case-insensitive).
     """
     session = boto3.Session(region_name=region, profile_name=profile)
     ec2 = session.client("ec2")
 
-    params: dict = {"Owners": ["self"]}
+    query = name_query.strip() if name_query else ""
     filters: list[dict[str, Any]] = []
-    if managed_only:
-        filters.append({"Name": "tag:desk:managed", "Values": ["true"]})
-    if name_query and name_query.strip():
-        filters.append({"Name": "name", "Values": [f"*{name_query.strip()}*"]})
-    if filters:
-        params["Filters"] = filters
+
+    if public_only:
+        if not query:
+            return []
+        patterns = list(dict.fromkeys([f"*{query}*", f"*{query.lower()}*"]))
+        filters.extend(
+            [
+                {"Name": "is-public", "Values": ["true"]},
+                {"Name": "state", "Values": ["available"]},
+                {"Name": "name", "Values": patterns},
+            ]
+        )
+        params: dict = {"Filters": filters}
+    else:
+        params = {"Owners": ["self"]}
+        if managed_only:
+            filters.append({"Name": "tag:desk:managed", "Values": ["true"]})
+        if query:
+            filters.append({"Name": "name", "Values": [f"*{query}*"]})
+        if filters:
+            params["Filters"] = filters
 
     response = ec2.describe_images(**params)
     images = response.get("Images", [])
@@ -1058,12 +1075,16 @@ def list_amis(
                 return t.get("Value")
         return None
 
+    needle = query.lower()
     result: list[AmiInfo] = []
     for img in images:
+        name = img.get("Name", "-")
+        if public_only and needle not in name.lower():
+            continue
         result.append(
             AmiInfo(
                 image_id=img["ImageId"],
-                name=img.get("Name", "-"),
+                name=name,
                 state=img.get("State", "unknown"),
                 creation_date=img.get("CreationDate", ""),
                 source_instance=_tag(img, "desk:source-instance"),
@@ -1072,6 +1093,8 @@ def list_amis(
         )
 
     result.sort(key=lambda a: a.creation_date, reverse=True)
+    if public_only:
+        return result[:50]
     return result
 
 

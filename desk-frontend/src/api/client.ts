@@ -201,10 +201,12 @@ export interface DeskAmi {
 export async function listDeskAmis(options?: {
   q?: string
   managedOnly?: boolean
+  publicOnly?: boolean
 }): Promise<DeskAmi[]> {
   const params = new URLSearchParams()
   if (options?.q?.trim()) params.set('q', options.q.trim())
-  if (options?.managedOnly === false) params.set('managed_only', 'false')
+  if (options?.publicOnly) params.set('public', 'true')
+  else if (options?.managedOnly === false) params.set('managed_only', 'false')
   const query = params.toString()
   const res = await fetchWithAuthRetry(`/api/amis${query ? `?${query}` : ''}`, {
     headers: authHeaders(),

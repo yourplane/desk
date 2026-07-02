@@ -27,7 +27,7 @@ export function CustomAmiSearch({
 
   const searchQuery = useQuery({
     queryKey: [...queryKeys.deskAmis, 'search', query.trim()],
-    queryFn: () => listDeskAmis({ q: query.trim(), managedOnly: false }),
+    queryFn: () => listDeskAmis({ q: query.trim(), publicOnly: true }),
     enabled: menuOpen && query.trim().length >= MIN_QUERY_LEN,
     staleTime: 15_000,
   })
@@ -64,7 +64,7 @@ export function CustomAmiSearch({
       <input
         className="create-input"
         type="search"
-        placeholder="Search AMIs by name…"
+        placeholder="Search public AMIs by name…"
         value={query}
         onChange={(e) => onInputChange(e.target.value)}
         onFocus={() => setMenuOpen(true)}
