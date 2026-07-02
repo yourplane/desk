@@ -110,7 +110,7 @@ export function CommandPage({
     refetchOnMount: 'always',
   })
 
-  const instances: Instance[] = instancesQuery.data ?? []
+  const instances: Instance[] = instancesQuery.data?.instances ?? []
   const loadingInstances = instancesQuery.isPending && instancesQuery.data === undefined
   const savedCommands: SavedCommandItem[] = savedCommandsQuery.data ?? []
 

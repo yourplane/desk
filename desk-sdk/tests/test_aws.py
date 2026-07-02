@@ -15,15 +15,19 @@ from desk.aws import (
     create_key_pair,
     create_workstation,
     delete_key_pair,
+    describe_amis_by_id,
     generate_presigned_get_object_url,
     get_ami_state,
     get_desk_copy_bucket,
     get_desk_data_bucket,
     get_desk_vpc_outputs,
+    get_future_router_ami_info,
     get_instance_state,
     get_latest_ami_by_name_prefix,
+    get_latest_router_ami,
     get_latest_tested_ami_by_name_prefix,
     get_latest_ubuntu_ami,
+    get_router_launch_template_ami,
     get_running_workstations_using_key,
     get_ssm_command,
     is_ssm_ready,
@@ -699,6 +703,7 @@ def test_list_workstations_success(mock_session: MagicMock) -> None:
                     "Instances": [
                         {
                             "InstanceId": "i-abc123",
+                            "ImageId": "ami-ws",
                             "State": {"Name": "running"},
                             "Tags": [
                                 {"Key": "Name", "Value": "max"},
@@ -719,6 +724,7 @@ def test_list_workstations_success(mock_session: MagicMock) -> None:
     assert result[0].instance_id == "i-abc123"
     assert result[0].name == "max"
     assert result[0].state == "running"
+    assert result[0].image_id == "ami-ws"
 
 
 @patch("desk.aws.boto3.Session")
@@ -1157,3 +1163,134 @@ def test_list_s3_object_keys_under_prefix(mock_session: MagicMock) -> None:
     keys = list_s3_object_keys_under_prefix("b", "p/", region="us-east-1", profile=None)
 
     assert keys == ["p/a/x.txt", "p/b/y.txt"]
+
+
+@patch("desk.aws.boto3.Session")
+def test_describe_amis_by_id_success(mock_session: MagicMock) -> None:
+    """describe_amis_by_id returns AmiRef for known IDs."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {
+                "ImageId": "ami-abc",
+                "Name": "default-desk-ami-20240601",
+                "CreationDate": "2024-06-01T12:00:00.000Z",
+            }
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = describe_amis_by_id(["ami-abc"])
+
+    assert "ami-abc" in result
+    assert result["ami-abc"].name == "default-desk-ami-20240601"
+    assert result["ami-abc"].build_at == "2024-06-01T12:00:00.000Z"
+
+
+@patch("desk.aws.boto3.Session")
+def test_describe_amis_by_id_not_found(mock_session: MagicMock) -> None:
+    """describe_amis_by_id skips deregistered AMIs."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.side_effect = ClientError(
+        {"Error": {"Code": "InvalidAMIID.NotFound", "Message": "Not found"}},
+        "DescribeImages",
+    )
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = describe_amis_by_id(["ami-gone"])
+
+    assert result == {}
+
+
+@patch("desk.aws.boto3.Session")
+def test_get_latest_router_ami(mock_session: MagicMock) -> None:
+    """get_latest_router_ami returns newest router-ami-* by CreationDate."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {
+                "ImageId": "ami-old",
+                "Name": "router-ami-20240101",
+                "CreationDate": "2024-01-01T00:00:00.000Z",
+            },
+            {
+                "ImageId": "ami-new",
+                "Name": "router-ami-20240601",
+                "CreationDate": "2024-06-01T00:00:00.000Z",
+            },
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = get_latest_router_ami()
+
+    assert result is not None
+    assert result.image_id == "ami-new"
+    mock_ec2.describe_images.assert_called_once_with(
+        Owners=["self"],
+        Filters=[{"Name": "name", "Values": ["router-ami-*"]}],
+    )
+
+
+@patch("desk.aws.describe_amis_by_id")
+@patch("desk.aws.boto3.Session")
+def test_get_router_launch_template_ami(
+    mock_session: MagicMock,
+    mock_describe: MagicMock,
+) -> None:
+    """get_router_launch_template_ami reads ImageId from desk-router-lt."""
+    from desk.aws import AmiRef
+
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_launch_template_versions.return_value = {
+        "LaunchTemplateVersions": [
+            {"LaunchTemplateData": {"ImageId": "ami-deploy"}},
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+    mock_describe.return_value = {
+        "ami-deploy": AmiRef(
+            image_id="ami-deploy",
+            name="router-ami-deploy",
+            build_at="2024-05-01T00:00:00.000Z",
+        )
+    }
+
+    result = get_router_launch_template_ami()
+
+    assert result is not None
+    assert result.image_id == "ami-deploy"
+    mock_ec2.describe_launch_template_versions.assert_called_once()
+
+
+@patch("desk.aws.get_router_launch_template_ami")
+@patch("desk.aws.get_latest_router_ami")
+def test_get_future_router_ami_info_mismatch(
+    mock_latest: MagicMock,
+    mock_deploy: MagicMock,
+) -> None:
+    """get_future_router_ami_info reports mismatch when sources differ."""
+    from desk.aws import AmiRef
+
+    mock_latest.return_value = AmiRef("ami-new", "router-ami-new", "2024-06-01T00:00:00.000Z")
+    mock_deploy.return_value = AmiRef("ami-old", "router-ami-old", "2024-01-01T00:00:00.000Z")
+
+    info = get_future_router_ami_info()
+
+    assert info.status == "mismatch"
+    assert info.latest is not None
+    assert info.deploy is not None
+    assert info.warnings
+
+
+@patch("desk.aws.get_router_launch_template_ami", return_value=None)
+@patch("desk.aws.get_latest_router_ami", return_value=None)
+def test_get_future_router_ami_info_unavailable(
+    mock_latest: MagicMock,
+    mock_deploy: MagicMock,
+) -> None:
+    """get_future_router_ami_info warns when no router AMI sources exist."""
+    info = get_future_router_ami_info()
+
+    assert info.status == "unavailable"
+    assert info.warnings
