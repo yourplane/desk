@@ -6,4 +6,5 @@ export const queryKeys = {
   webRoutesAll: ['webRoutes', 'all'] as const,
   costs: ['costs'] as const,
   savedCommands: ['savedCommands'] as const,
+  routerInfraStatus: ['routerInfra', 'status'] as const,
 }

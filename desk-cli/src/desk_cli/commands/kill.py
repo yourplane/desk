@@ -8,6 +8,7 @@ import click
 
 from desk.aws import resolve_workstation, terminate_instance
 from desk.config import get_desk_settings
+from desk.router_infra import is_router_instance_ops_enabled
 
 
 @click.command("kill")
@@ -52,6 +53,11 @@ def kill(
         )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
+
+    if infra and not is_router_instance_ops_enabled(region=region, profile=profile):
+        raise click.UsageError(
+            "Router instance operations are disabled while the active stack is absent."
+        )
 
     if not yes:
         click.confirm(

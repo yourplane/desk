@@ -6,6 +6,7 @@ import click
 
 from desk.aws import create_workstation
 from desk.config import get_desk_settings
+from desk.router_infra import ensure_router_up
 
 
 @click.command("create")
@@ -78,6 +79,10 @@ def create(
     click.echo(f"  Instance ID:  {instance_id}")
     click.echo(f"  Name:        {workstation}")
     click.echo(f"  State:       pending (initializing)")
+    try:
+        ensure_router_up(region=region, profile=profile)
+    except Exception:
+        pass
     click.echo()
     click.echo("Connect once the instance is running:")
     click.echo(f"  desk connect {workstation}")

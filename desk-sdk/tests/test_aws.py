@@ -11,6 +11,7 @@ from desk.aws import (
     AmiInfo,
     DeskVpcOutputs,
     Workstation,
+    _get_desk_vpc_outputs_impl,
     create_ami,
     create_key_pair,
     create_workstation,
@@ -93,6 +94,7 @@ def test_get_desk_vpc_outputs_stack_not_found(mock_session: MagicMock) -> None:
     mock_session.return_value.client.return_value = mock_cf
 
     with pytest.raises(RuntimeError, match="Stack 'desk' not found"):
+        _get_desk_vpc_outputs_impl.cache_clear()
         get_desk_vpc_outputs(stack_name="desk")
 
 

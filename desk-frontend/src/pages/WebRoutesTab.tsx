@@ -3,9 +3,11 @@ import { useCallback, useRef, useState } from 'react'
 import {
   addWebRoute,
   fetchWebRoutesAll,
+  fetchRouterInfraStatus,
   listInstances,
   removeWebRoute,
   type Instance,
+  type RouterInfraStatus,
 } from '../api/client'
 import { DataFreshnessBar } from '../DataFreshnessBar'
 import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
@@ -16,6 +18,22 @@ import { instanceKey, publicWebRouteUrl, stateColor } from './workstationUtils'
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
+
+function routerInfraBannerMessage(status: RouterInfraStatus): string | null {
+  if (status.phase === 'waking') {
+    return 'Router infra is starting. Public web routes may take several minutes to become reachable — retry your link until then.'
+  }
+  if (status.phase === 'idle' && status.demand) {
+    return 'Router infra is idle but needed for open web routes. Wake is in progress or will run on the next reaper tick.'
+  }
+  if (status.phase === 'sleeping') {
+    return 'Router infra is shutting down.'
+  }
+  if (status.phase === 'error') {
+    return status.messages.join(' ') || 'Router infra reported an error.'
+  }
+  return null
+}
 
 async function fetchWebRoutesSafe(): Promise<{ routes: Record<string, number[]> }> {
   try {
@@ -198,6 +216,13 @@ export function WebRoutesTab() {
     refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
   })
 
+  const routerStatusQuery = useQuery({
+    queryKey: queryKeys.routerInfraStatus,
+    queryFn: fetchRouterInfraStatus,
+    staleTime: 5_000,
+    refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
+  })
+
   const instances: Instance[] = instancesQuery.data?.instances ?? []
   const webRoutesByName = webRoutesQuery.data?.routes ?? {}
 
@@ -215,12 +240,21 @@ export function WebRoutesTab() {
       ? 'Could not refresh workstation list. Will retry.'
       : null
 
-  const combinedFetching = instancesQuery.isFetching || webRoutesQuery.isFetching
-  const dataUpdatedAt = Math.max(instancesQuery.dataUpdatedAt ?? 0, webRoutesQuery.dataUpdatedAt ?? 0)
+  const combinedFetching = instancesQuery.isFetching || webRoutesQuery.isFetching || routerStatusQuery.isFetching
+  const dataUpdatedAt = Math.max(
+    instancesQuery.dataUpdatedAt ?? 0,
+    webRoutesQuery.dataUpdatedAt ?? 0,
+    routerStatusQuery.dataUpdatedAt ?? 0,
+  )
+
+  const routerBanner = routerStatusQuery.data
+    ? routerInfraBannerMessage(routerStatusQuery.data)
+    : null
 
   const refetchAll = () => {
     void instancesQuery.refetch()
     void webRoutesQuery.refetch()
+    void routerStatusQuery.refetch()
   }
 
   const onAddWebRoute = async (key: string) => {
@@ -278,6 +312,11 @@ export function WebRoutesTab() {
       />
       {instancesRefreshError && (
         <p className="refresh-error" role="status">{instancesRefreshError}</p>
+      )}
+      {routerBanner && (
+        <div className="web-routes-banner web-routes-banner--info" role="status">
+          <span className="web-routes-banner-text">{routerBanner}</span>
+        </div>
       )}
       {bannerError && (
         <div className="web-routes-banner web-routes-banner--error" role="alert">

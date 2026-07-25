@@ -6,8 +6,12 @@ import {
   startInstance,
   stopInstance,
   killInstance,
+  fetchRouterInfraStatus,
+  wakeRouterInfra,
+  sleepRouterInfra,
   type FutureRouterAmiInfo,
   type Instance,
+  type RouterInfraStatus,
 } from '../api/client'
 import { CreateWorkstationForm } from '../components/CreateWorkstationForm'
 import { DataFreshnessBar } from '../DataFreshnessBar'
@@ -131,6 +135,72 @@ function FutureRouterAmiSummary({ info }: { info: FutureRouterAmiInfo }) {
   return null
 }
 
+function routerPhaseLabel(phase: RouterInfraStatus['phase']): string {
+  switch (phase) {
+    case 'idle': return 'Idle'
+    case 'waking': return 'Starting…'
+    case 'active': return 'Active'
+    case 'sleeping': return 'Shutting down…'
+    case 'error': return 'Error'
+    case 'unavailable': return 'Unavailable'
+    default: return phase
+  }
+}
+
+function RouterInfraStatusCard({
+  status,
+  busy,
+  onWake,
+  onSleep,
+}: {
+  status: RouterInfraStatus
+  busy: boolean
+  onWake: () => void
+  onSleep: (force: boolean) => void
+}) {
+  return (
+    <div className="router-infra-status" role="status">
+      <div className="router-infra-status__title">Router stack</div>
+      <p className="router-infra-status__phase">{routerPhaseLabel(status.phase)}</p>
+      <ul className="router-infra-status__details">
+        {status.base_stack_status && <li>Base stack: {status.base_stack_status}</li>}
+        {status.active_stack_status && <li>Active stack: {status.active_stack_status}</li>}
+        {status.asg_desired != null && (
+          <li>ASG desired/in-service: {status.asg_desired}/{status.asg_in_service ?? 0}</li>
+        )}
+        {status.target_health && <li>Target health: {status.target_health}</li>}
+        {status.demand && <li>Demand: workstations with web-route ports</li>}
+      </ul>
+      <div className="router-infra-status__actions">
+        <button type="button" className="btn btn-start" disabled={busy} onClick={onWake}>
+          Launch stack
+        </button>
+        <button
+          type="button"
+          className="btn btn-stop"
+          disabled={busy}
+          onClick={() => {
+            if (status.demand) {
+              if (
+                !window.confirm(
+                  'Pending/running workstations still have web-route ports. Public routes will be unavailable until the stack wakes again. Continue?',
+                )
+              ) {
+                return
+              }
+              onSleep(true)
+            } else {
+              onSleep(false)
+            }
+          }}
+        >
+          Shutdown stack
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function InstanceList() {
   const queryClient = useQueryClient()
   const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
@@ -143,6 +213,15 @@ export function InstanceList() {
   const actingRef = useRef<string | null>(null)
   actingRef.current = acting
   const [listInfra, setListInfra] = useState(false)
+  const [stackActing, setStackActing] = useState(false)
+
+  const routerStatusQuery = useQuery({
+    queryKey: queryKeys.routerInfraStatus,
+    queryFn: fetchRouterInfraStatus,
+    enabled: listInfra,
+    staleTime: 5_000,
+    refetchInterval: () => (actingRef.current !== null || stackActing ? false : pollIntervalMs),
+  })
 
   const instancesQuery = useQuery({
     queryKey: queryKeys.workstations(listInfra),
@@ -225,6 +304,38 @@ export function InstanceList() {
       setActing(null)
     }
   }
+
+  const onStackWake = async () => {
+    setStackActing(true)
+    setActionError(null)
+    try {
+      await wakeRouterInfra()
+      await queryClient.invalidateQueries({ queryKey: queryKeys.routerInfraStatus })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStackActing(false)
+    }
+  }
+
+  const onStackSleep = async (force: boolean) => {
+    setStackActing(true)
+    setActionError(null)
+    try {
+      await sleepRouterInfra(force)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.routerInfraStatus })
+      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStackActing(false)
+    }
+  }
+
+  const instanceOpsEnabled = listInfra
+    ? (routerStatusQuery.data?.instance_ops_enabled ?? false)
+    : true
 
   const onKill = async (name: string) => {
     if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
@@ -407,6 +518,14 @@ export function InstanceList() {
       {listInfra && futureRouterAmi && (
         <FutureRouterAmiSummary info={futureRouterAmi} />
       )}
+      {listInfra && routerStatusQuery.data && (
+        <RouterInfraStatusCard
+          status={routerStatusQuery.data}
+          busy={stackActing || acting !== null}
+          onWake={() => void onStackWake()}
+          onSleep={(force) => void onStackSleep(force)}
+        />
+      )}
       <div
         className={`table-wrap${instancesQuery.isFetching && displayInstances.length > 0 ? ' table-wrap--revalidating' : ''}`}
       >
@@ -551,7 +670,8 @@ export function InstanceList() {
                       <button
                         type="button"
                         className="btn btn-start"
-                        disabled={acting !== null}
+                        disabled={acting !== null || (listInfra && !instanceOpsEnabled)}
+                        title={listInfra && !instanceOpsEnabled ? 'Launch the router stack first' : undefined}
                         onClick={() => onStart(key)}
                       >
                         {acting === key ? '…' : 'Start'}
@@ -561,7 +681,8 @@ export function InstanceList() {
                       <button
                         type="button"
                         className="btn btn-stop"
-                        disabled={acting !== null}
+                        disabled={acting !== null || (listInfra && !instanceOpsEnabled)}
+                        title={listInfra && !instanceOpsEnabled ? 'Launch the router stack first' : undefined}
                         onClick={() => onStop(key)}
                       >
                         {acting === key ? '…' : 'Stop'}
@@ -571,7 +692,8 @@ export function InstanceList() {
                       <button
                         type="button"
                         className="btn btn-kill"
-                        disabled={acting !== null}
+                        disabled={acting !== null || (listInfra && !instanceOpsEnabled)}
+                        title={listInfra && !instanceOpsEnabled ? 'Launch the router stack first' : undefined}
                         onClick={() => onKill(key)}
                       >
                         {acting === key ? '…' : 'Kill'}

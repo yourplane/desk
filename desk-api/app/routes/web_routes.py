@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from desk.aws import resolve_workstation
+from desk.router_infra import ensure_router_up
 from desk.web_routes import (
     add_port,
     get_ports,
@@ -85,6 +86,11 @@ def add_workstation_web_route(name: str, body: AddWebRouteBody):
     except Exception as e:
         logger.exception("add_port failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    region, profile = _region_profile()
+    try:
+        ensure_router_up(region=region, profile=profile)
+    except Exception:
+        logger.exception("ensure_router_up after add_port failed")
     return {"name": key, "ports": ports}
 
 
