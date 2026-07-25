@@ -26,7 +26,7 @@ echo "==> Stack: $STACK_NAME, Repo root: $REPO_ROOT"
 _get() { aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
 
 # Deploy managed router ASG (desk-router.yaml). Skips if no router AMI exists in the account.
-echo "==> Deploying desk-router stack..."
+echo "==> Checking desk-router stack..."
 ROUTER_AMI=$(aws ec2 describe-images --owners self \
   --filters "Name=name,Values=router-ami-*" \
   --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text 2>/dev/null || true)
@@ -111,40 +111,52 @@ _migrate_legacy_router_stack() {
   fi
 }
 
+_deploy_router_stack() {
+  ROUTER_PARAM_ARGS=(
+    "RouterAmiId=${ROUTER_AMI}"
+    "CloudFrontVpcOriginPrefixListId=${CLOUDFRONT_VPC_PL}"
+    "WebRouterBaseDomain=${DESK_CUSTOM_DOMAIN_NAME:-}"
+    "EnableWebRouterCloudFront=${DESK_ENABLE_WEB_ROUTER_CLOUDFRONT:-false}"
+    "CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME:-}"
+    "AcmCertificateArn=${DESK_ACM_CERTIFICATE_ARN:-}"
+    "Route53HostedZoneId=${DESK_ROUTE53_HOSTED_ZONE_ID:-}"
+  )
+  aws cloudformation deploy \
+    --stack-name desk-router \
+    --template-file "$INFRA_DIR/desk-router.yaml" \
+    --parameter-overrides "${ROUTER_PARAM_ARGS[@]}" \
+    --capabilities CAPABILITY_NAMED_IAM
+}
+
+_upload_router_active_template() {
+  local bucket=$1
+  if [ -n "$bucket" ] && [ "$bucket" != "None" ] && aws s3 ls "s3://${bucket}" >/dev/null 2>&1; then
+    echo "==> Uploading desk-router-active template to s3://${bucket}/cf-templates/..."
+    aws s3 cp "$INFRA_DIR/desk-router-active.yaml" "s3://${bucket}/cf-templates/desk-router-active.yaml"
+  fi
+}
+
+NEEDS_LEGACY_ROUTER_MIGRATION=false
+if [ -n "$ROUTER_AMI" ] && [ "$ROUTER_AMI" != "None" ] && [ -n "$CLOUDFRONT_VPC_PL" ] && [ "$CLOUDFRONT_VPC_PL" != "None" ]; then
+  _existing=$(_router_stack_exists)
+  if [ -n "$_existing" ] && [ "$_existing" != "None" ] && _router_is_legacy_monolith; then
+    NEEDS_LEGACY_ROUTER_MIGRATION=true
+    echo "==> Legacy desk-router detected; will deploy desk-web first to drop ImportValue, then migrate router."
+  fi
+fi
+
 if [ -z "$ROUTER_AMI" ] || [ "$ROUTER_AMI" = "None" ]; then
   echo "Warning: No self-owned router-ami-* AMI found; skipping desk-router deploy." >&2
 elif [ -z "$CLOUDFRONT_VPC_PL" ] || [ "$CLOUDFRONT_VPC_PL" = "None" ]; then
   echo "Error: Could not resolve EC2 managed prefix list com.amazonaws.global.cloudfront.origin-facing (needed for desk-router ALB)." >&2
   exit 1
-else
-  _existing=$(_router_stack_exists)
-  if [ -n "$_existing" ] && [ "$_existing" != "None" ] && _router_is_legacy_monolith; then
-    _migrate_legacy_router_stack
-  else
-    ROUTER_PARAM_ARGS=(
-      "RouterAmiId=${ROUTER_AMI}"
-      "CloudFrontVpcOriginPrefixListId=${CLOUDFRONT_VPC_PL}"
-      "WebRouterBaseDomain=${DESK_CUSTOM_DOMAIN_NAME:-}"
-      "EnableWebRouterCloudFront=${DESK_ENABLE_WEB_ROUTER_CLOUDFRONT:-false}"
-      "CustomDomainName=${DESK_CUSTOM_DOMAIN_NAME:-}"
-      "AcmCertificateArn=${DESK_ACM_CERTIFICATE_ARN:-}"
-      "Route53HostedZoneId=${DESK_ROUTE53_HOSTED_ZONE_ID:-}"
-    )
-    aws cloudformation deploy \
-      --stack-name desk-router \
-      --template-file "$INFRA_DIR/desk-router.yaml" \
-      --parameter-overrides "${ROUTER_PARAM_ARGS[@]}" \
-      --capabilities CAPABILITY_NAMED_IAM
-  fi
-
-  # Upload active-stack template for runtime wake (API/reaper CreateStack).
+elif [ "$NEEDS_LEGACY_ROUTER_MIGRATION" = "false" ]; then
+  echo "==> Deploying desk-router stack..."
+  _deploy_router_stack
   _data_bucket="${STACK_NAME}-data-$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
-  if [ -n "$_data_bucket" ] && [ "$_data_bucket" != "None" ] && aws s3 ls "s3://${_data_bucket}" >/dev/null 2>&1; then
-    echo "==> Uploading desk-router-active template to s3://${_data_bucket}/cf-templates/..."
-    aws s3 cp "$INFRA_DIR/desk-router-active.yaml" "s3://${_data_bucket}/cf-templates/desk-router-active.yaml"
-  else
-    echo "Warning: Data bucket not found yet; desk-router-active template will be uploaded after SAM deploy." >&2
-  fi
+  _upload_router_active_template "$_data_bucket"
+else
+  echo "==> Deferring desk-router deploy until after desk-web SAM update."
 fi
 
 # Build metadata for frontend (displayed in UI)
@@ -190,6 +202,12 @@ sam deploy \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset
 
+# Legacy migration: desk-web must drop ImportValue before desk-router exports can be removed.
+if [ "$NEEDS_LEGACY_ROUTER_MIGRATION" = "true" ]; then
+  echo "==> Migrating desk-router after desk-web update..."
+  _migrate_legacy_router_stack
+fi
+
 # Attach WAF ARN to desk-router when web-router CloudFront is enabled
 if [ -n "${DESK_CUSTOM_DOMAIN_NAME:-}" ] && [ "${DESK_ENABLE_WEB_ROUTER_CLOUDFRONT:-false}" = "true" ]; then
   WAF_ARN=$(_get WafWebAclArn)
@@ -217,10 +235,7 @@ fi
 
 # Upload active-stack template now that data bucket exists
 _data_bucket_post=$(_get DeskDataBucketName)
-if [ -n "$_data_bucket_post" ] && [ "$_data_bucket_post" != "None" ] && [ -f "$INFRA_DIR/desk-router-active.yaml" ]; then
-  echo "==> Uploading desk-router-active template to s3://${_data_bucket_post}/cf-templates/..."
-  aws s3 cp "$INFRA_DIR/desk-router-active.yaml" "s3://${_data_bucket_post}/cf-templates/desk-router-active.yaml"
-fi
+_upload_router_active_template "$_data_bucket_post"
 
 # 2. Stack outputs for frontend Cognito config (after deploy so values match the template)
 _stack_param() {
