@@ -452,6 +452,7 @@ export function InstanceList() {
               displayInstances.map((inst) => {
                 const key = instanceKey(inst)
                 const isLaunching = inst.state === 'launching'
+                const rowBusy = actingRows.has(key)
                 return (
                 <tr key={inst.instance_id}>
                   <td className="name">
@@ -470,7 +471,6 @@ export function InstanceList() {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
                       const isRunningOrPending = inst.state === 'running' || inst.state === 'pending'
                       const menuOpen = openAutoStopFor === key
-                      const rowBusy = actingRows.has(key)
                       if (!isRunningOrPending) {
                         return relative ? (
                           <span className="shutdown-cell">
