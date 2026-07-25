@@ -596,76 +596,135 @@ def test_create_workstation_rejects_reserved_router_name() -> None:
         create_workstation("router")
 
 
-def test_resolve_workstation_by_id() -> None:
+def _mock_ec2_paginate(mock_session: MagicMock, pages: list[dict]) -> MagicMock:
+    mock_ec2 = MagicMock()
+    mock_paginator = MagicMock()
+    mock_paginator.paginate.return_value = pages
+    mock_ec2.get_paginator.return_value = mock_paginator
+    mock_session.return_value.client.return_value = mock_ec2
+    return mock_paginator
+
+
+def _instance_page(
+    instance_id: str,
+    name: str,
+    *,
+    state: str = "running",
+    type_value: str = "workstation",
+) -> dict:
+    return {
+        "Reservations": [
+            {
+                "Instances": [
+                    {
+                        "InstanceId": instance_id,
+                        "ImageId": "ami-ws",
+                        "State": {"Name": state},
+                        "Tags": [
+                            {"Key": "Name", "Value": name},
+                            {"Key": "Type", "Value": type_value},
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+
+
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_by_id(mock_session: MagicMock) -> None:
     """resolve_workstation finds by instance ID."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = [
-            Workstation(instance_id="i-abc123", name="max", state="running"),
-        ]
-        assert resolve_workstation("i-abc123") == "i-abc123"
+    _mock_ec2_paginate(mock_session, [_instance_page("i-abc123", "max")])
+    assert resolve_workstation("i-abc123") == "i-abc123"
 
 
-def test_resolve_workstation_by_name() -> None:
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_by_name(mock_session: MagicMock) -> None:
     """resolve_workstation finds by name."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = [
-            Workstation(instance_id="i-abc123", name="max", state="running"),
-        ]
-        assert resolve_workstation("max") == "i-abc123"
+    _mock_ec2_paginate(mock_session, [_instance_page("i-abc123", "max")])
+    assert resolve_workstation("max") == "i-abc123"
 
 
-def test_resolve_workstation_not_found() -> None:
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_not_found(mock_session: MagicMock) -> None:
     """resolve_workstation raises when not found."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = []
-        with pytest.raises(ValueError, match="not found"):
-            resolve_workstation("unknown")
+    _mock_ec2_paginate(mock_session, [{"Reservations": []}])
+    with pytest.raises(ValueError, match="not found"):
+        resolve_workstation("unknown")
 
 
-def test_resolve_workstation_multiple_running_same_name() -> None:
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_multiple_running_same_name(mock_session: MagicMock) -> None:
     """resolve_workstation errors when multiple running instances share the name."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = [
-            Workstation(instance_id="i-aaa", name="main", state="running"),
-            Workstation(instance_id="i-bbb", name="main", state="running"),
-        ]
-        with pytest.raises(ValueError, match="Multiple workstations named 'main'.*i-aaa, i-bbb"):
-            resolve_workstation("main")
+    _mock_ec2_paginate(
+        mock_session,
+        [
+            {
+                "Reservations": [
+                    {
+                        "Instances": [
+                            {
+                                "InstanceId": "i-aaa",
+                                "ImageId": "ami-ws",
+                                "State": {"Name": "running"},
+                                "Tags": [
+                                    {"Key": "Name", "Value": "main"},
+                                    {"Key": "Type", "Value": "workstation"},
+                                ],
+                            },
+                            {
+                                "InstanceId": "i-bbb",
+                                "ImageId": "ami-ws",
+                                "State": {"Name": "running"},
+                                "Tags": [
+                                    {"Key": "Name", "Value": "main"},
+                                    {"Key": "Type", "Value": "workstation"},
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    )
+    with pytest.raises(ValueError, match="Multiple workstations named 'main'.*i-aaa, i-bbb"):
+        resolve_workstation("main")
 
 
-def test_resolve_workstation_infra_by_id() -> None:
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_infra_by_id(mock_session: MagicMock) -> None:
     """resolve_workstation(..., infra=True) finds router by instance ID."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = [
-            Workstation(instance_id="i-abc123", name="router", state="running"),
-        ]
-        assert resolve_workstation("i-abc123", infra=True) == "i-abc123"
+    _mock_ec2_paginate(
+        mock_session,
+        [_instance_page("i-abc123", "router", type_value="router")],
+    )
+    assert resolve_workstation("i-abc123", infra=True) == "i-abc123"
 
 
-def test_resolve_workstation_infra_by_name() -> None:
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_infra_by_name(mock_session: MagicMock) -> None:
     """resolve_workstation(..., infra=True) finds router by name."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = [
-            Workstation(instance_id="i-abc123", name="router", state="running"),
-        ]
-        assert resolve_workstation("router", infra=True) == "i-abc123"
+    _mock_ec2_paginate(
+        mock_session,
+        [_instance_page("i-abc123", "router", type_value="router")],
+    )
+    assert resolve_workstation("router", infra=True) == "i-abc123"
 
 
-def test_resolve_workstation_infra_not_found() -> None:
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_infra_not_found(mock_session: MagicMock) -> None:
     """resolve_workstation(..., infra=True) raises when not found."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = []
-        with pytest.raises(ValueError, match="not found"):
-            resolve_workstation("unknown", infra=True)
+    _mock_ec2_paginate(mock_session, [{"Reservations": []}])
+    with pytest.raises(ValueError, match="not found"):
+        resolve_workstation("unknown", infra=True)
 
 
-def test_resolve_workstation_by_name_only_stopped() -> None:
+@patch("desk.aws.boto3.Session")
+def test_resolve_workstation_by_name_only_stopped(mock_session: MagicMock) -> None:
     """resolve_workstation by name finds only running; not found if only stopped."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        # Mock returns empty when filtering for running/pending (default states)
-        mock_list.return_value = []
-        with pytest.raises(ValueError, match="not found"):
-            resolve_workstation("main")
+    _mock_ec2_paginate(mock_session, [{"Reservations": []}])
+    with pytest.raises(ValueError, match="not found"):
+        resolve_workstation("main")
 
 
 def test_workstation_dataclass() -> None:
@@ -913,10 +972,11 @@ def test_start_workstation_success(mock_session: MagicMock) -> None:
 
 def test_resolve_workstation_by_name_with_stopped_states() -> None:
     """resolve_workstation with states=['stopped'] finds stopped instances."""
-    with patch("desk.aws.list_workstations") as mock_list:
-        mock_list.return_value = [
-            Workstation(instance_id="i-abc123", name="main", state="stopped"),
-        ]
+    with patch("desk.aws.boto3.Session") as mock_session:
+        _mock_ec2_paginate(
+            mock_session,
+            [_instance_page("i-abc123", "main", state="stopped")],
+        )
         result = resolve_workstation("main", states=["stopped"])
         assert result == "i-abc123"
 
@@ -1261,6 +1321,32 @@ def test_list_s3_object_keys_under_prefix(mock_session: MagicMock) -> None:
     keys = list_s3_object_keys_under_prefix("b", "p/", region="us-east-1", profile=None)
 
     assert keys == ["p/a/x.txt", "p/b/y.txt"]
+
+
+@patch("desk.aws.boto3.Session")
+def test_describe_amis_by_id_batches(mock_session: MagicMock) -> None:
+    """describe_amis_by_id batches multiple IDs into one describe_images call."""
+    mock_ec2 = MagicMock()
+    mock_ec2.describe_images.return_value = {
+        "Images": [
+            {
+                "ImageId": "ami-a",
+                "Name": "ami-a-name",
+                "CreationDate": "2024-06-01T12:00:00.000Z",
+            },
+            {
+                "ImageId": "ami-b",
+                "Name": "ami-b-name",
+                "CreationDate": "2024-06-02T12:00:00.000Z",
+            },
+        ]
+    }
+    mock_session.return_value.client.return_value = mock_ec2
+
+    result = describe_amis_by_id(["ami-a", "ami-b"])
+
+    assert set(result.keys()) == {"ami-a", "ami-b"}
+    mock_ec2.describe_images.assert_called_once_with(ImageIds=["ami-a", "ami-b"])
 
 
 @patch("desk.aws.boto3.Session")

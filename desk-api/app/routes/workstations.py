@@ -1,6 +1,7 @@
 """Workstation management routes. All EC2 logic lives in desk-sdk."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
@@ -201,17 +202,26 @@ def list_workstations_route(infra: bool = False):
     try:
         workstations = list_workstations(region=region, profile=profile, infra=infra)
         image_ids = [w.image_id for w in workstations if w.image_id]
-        ami_lookup = describe_amis_by_id(image_ids, region=region, profile=profile)
         future_router_ami = None
         if infra:
-            try:
-                future_router_ami = get_future_router_ami_info(region=region, profile=profile)
-            except Exception:
-                logger.exception("get_future_router_ami_info failed")
-                future_router_ami = FutureRouterAmiInfo(
-                    status="unavailable",
-                    warnings=["Router AMI info unavailable."],
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                ami_future = executor.submit(
+                    describe_amis_by_id, image_ids, region=region, profile=profile
                 )
+                router_future = executor.submit(
+                    get_future_router_ami_info, region=region, profile=profile
+                )
+                ami_lookup = ami_future.result()
+                try:
+                    future_router_ami = router_future.result()
+                except Exception:
+                    logger.exception("get_future_router_ami_info failed")
+                    future_router_ami = FutureRouterAmiInfo(
+                        status="unavailable",
+                        warnings=["Router AMI info unavailable."],
+                    )
+        else:
+            ami_lookup = describe_amis_by_id(image_ids, region=region, profile=profile)
     except Exception as e:
         logger.exception("list_workstations failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e

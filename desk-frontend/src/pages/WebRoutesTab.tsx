@@ -181,21 +181,19 @@ export function WebRoutesTab() {
   const [bannerError, setBannerError] = useState<string | null>(null)
   const [webRoutesBusy, setWebRoutesBusy] = useState<string | null>(null)
   const [portDraftByKey, setPortDraftByKey] = useState<Record<string, string>>({})
-  const webRoutesBusyRef = useRef<string | null>(null)
-  webRoutesBusyRef.current = webRoutesBusy
 
   const instancesQuery = useQuery({
     queryKey: queryKeys.workstations(false),
     queryFn: () => listInstances(),
     staleTime: 5_000,
-    refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
+    refetchInterval: pollIntervalMs,
   })
 
   const webRoutesQuery = useQuery({
     queryKey: queryKeys.webRoutesAll,
     queryFn: fetchWebRoutesSafe,
     staleTime: 5_000,
-    refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
+    refetchInterval: pollIntervalMs,
   })
 
   const instances: Instance[] = instancesQuery.data?.instances ?? []

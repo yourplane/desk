@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -552,6 +553,38 @@ ROUTER_AMI_NAME_PREFIX = "router-ami-"
 ROUTER_LAUNCH_TEMPLATE_NAME = "desk-router-lt"
 
 
+def _workstations_from_reservations(reservations: list[dict]) -> list[Workstation]:
+    result: list[Workstation] = []
+    for reservation in reservations:
+        for instance in reservation.get("Instances", []):
+            tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
+            result.append(
+                Workstation(
+                    instance_id=instance["InstanceId"],
+                    name=tags.get("Name", ""),
+                    state=instance["State"]["Name"],
+                    shutdown_at=tags.get(TAG_SHUTDOWN_AT),
+                    image_id=instance.get("ImageId", ""),
+                )
+            )
+    return result
+
+
+def _find_workstations_filtered(
+    filters: list[dict[str, Any]],
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[Workstation]:
+    """Run a targeted describe_instances query and return matching workstations."""
+    session = boto3.Session(region_name=region, profile_name=profile)
+    ec2 = session.client("ec2")
+    result: list[Workstation] = []
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
+        result.extend(_workstations_from_reservations(page.get("Reservations", [])))
+    return result
+
+
 def list_workstations(
     region: str | None = None,
     profile: str | None = None,
@@ -563,31 +596,12 @@ def list_workstations(
 
     Optionally filter by instance state(s).
     """
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
-
     type_value = TAG_TYPE_ROUTER if infra else "workstation"
-    result: list[Workstation] = []
-    filters = [{"Name": "tag:Type", "Values": [type_value]}]
+    filters: list[dict[str, Any]] = [{"Name": "tag:Type", "Values": [type_value]}]
     if states:
         filters.append({"Name": "instance-state-name", "Values": states})
 
-    paginator = ec2.get_paginator("describe_instances")
-    for page in paginator.paginate(Filters=filters):
-        for reservation in page.get("Reservations", []):
-            for instance in reservation.get("Instances", []):
-                tags = {t["Key"]: t["Value"] for t in instance.get("Tags", [])}
-                result.append(
-                    Workstation(
-                        instance_id=instance["InstanceId"],
-                        name=tags.get("Name", ""),
-                        state=instance["State"]["Name"],
-                        shutdown_at=tags.get(TAG_SHUTDOWN_AT),
-                        image_id=instance.get("ImageId", ""),
-                    )
-                )
-
-    return result
+    return _find_workstations_filtered(filters, region=region, profile=profile)
 
 
 def resolve_workstation(
@@ -608,18 +622,24 @@ def resolve_workstation(
         states = ["running", "pending"]
 
     not_found = f"Workstation '{name_or_id}' not found. Run 'desk list' to see workstations."
+    type_value = TAG_TYPE_ROUTER if infra else "workstation"
 
     if name_or_id.startswith("i-"):
-        instances = list_workstations(region=region, profile=profile, infra=infra)
-        for w in instances:
-            if w.instance_id == name_or_id:
-                return w.instance_id
-        raise ValueError(not_found)
+        filters = [
+            {"Name": "instance-id", "Values": [name_or_id]},
+            {"Name": "tag:Type", "Values": [type_value]},
+        ]
+        matches = _find_workstations_filtered(filters, region=region, profile=profile)
+        if not matches:
+            raise ValueError(not_found)
+        return matches[0].instance_id
 
-    matching_state = list_workstations(
-        region=region, profile=profile, states=states, infra=infra
-    )
-    matches = [w for w in matching_state if w.name == name_or_id]
+    filters = [
+        {"Name": "tag:Name", "Values": [name_or_id]},
+        {"Name": "tag:Type", "Values": [type_value]},
+        {"Name": "instance-state-name", "Values": states},
+    ]
+    matches = _find_workstations_filtered(filters, region=region, profile=profile)
     if len(matches) > 1:
         ids = ", ".join(m.instance_id for m in matches)
         raise ValueError(
@@ -1174,17 +1194,18 @@ def describe_amis_by_id(
     ec2 = session.client("ec2")
     result: dict[str, AmiRef] = {}
 
-    for image_id in unique:
+    batch_size = 1000
+    for offset in range(0, len(unique), batch_size):
+        batch = unique[offset : offset + batch_size]
         try:
-            resp = ec2.describe_images(ImageIds=[image_id])
+            resp = ec2.describe_images(ImageIds=batch)
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "")
             if code == "InvalidAMIID.NotFound":
                 continue
             raise
-        images = resp.get("Images", [])
-        if images:
-            result[image_id] = _ami_ref_from_image(images[0])
+        for img in resp.get("Images", []):
+            result[img["ImageId"]] = _ami_ref_from_image(img)
 
     return result
 
@@ -1241,8 +1262,13 @@ def get_future_router_ami_info(
     profile: str | None = None,
 ) -> FutureRouterAmiInfo:
     """Compare latest router-ami-* with desk-router launch template AMI for infra UI summary."""
-    latest = get_latest_router_ami(region=region, profile=profile)
-    deploy = get_router_launch_template_ami(region=region, profile=profile)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        latest_future = executor.submit(get_latest_router_ami, region=region, profile=profile)
+        deploy_future = executor.submit(
+            get_router_launch_template_ami, region=region, profile=profile
+        )
+        latest = latest_future.result()
+        deploy = deploy_future.result()
 
     if latest is None and deploy is None:
         return FutureRouterAmiInfo(

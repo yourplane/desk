@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   listInstances,
   setAutoStop,
@@ -134,15 +134,31 @@ function FutureRouterAmiSummary({ info }: { info: FutureRouterAmiInfo }) {
 export function InstanceList() {
   const queryClient = useQueryClient()
   const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
-  const [acting, setActing] = useState<string | null>(null)
+  const [actingRows, setActingRows] = useState<Set<string>>(() => new Set())
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
   const [customTime, setCustomTime] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [optimisticInstances, setOptimisticInstances] = useState<Instance[]>([])
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
-  const actingRef = useRef<string | null>(null)
-  actingRef.current = acting
   const [listInfra, setListInfra] = useState(false)
+
+  const markRowActing = useCallback((name: string) => {
+    setActingRows((prev) => {
+      if (prev.has(name)) return prev
+      const next = new Set(prev)
+      next.add(name)
+      return next
+    })
+  }, [])
+
+  const clearRowActing = useCallback((name: string) => {
+    setActingRows((prev) => {
+      if (!prev.has(name)) return prev
+      const next = new Set(prev)
+      next.delete(name)
+      return next
+    })
+  }, [])
 
   const instancesQuery = useQuery({
     queryKey: queryKeys.workstations(listInfra),
@@ -152,7 +168,7 @@ export function InstanceList() {
       return undefined
     },
     staleTime: 5_000,
-    refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
+    refetchInterval: pollIntervalMs,
   })
 
   const instances: Instance[] = instancesQuery.data?.instances ?? []
@@ -187,7 +203,7 @@ export function InstanceList() {
   const refetchWorkstations = () => instancesQuery.refetch()
 
   const onStart = async (name: string) => {
-    setActing(name)
+    markRowActing(name)
     setActionError(null)
     try {
       await startInstance(name, { infra: listInfra })
@@ -195,12 +211,12 @@ export function InstanceList() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setActing(null)
+      clearRowActing(name)
     }
   }
 
   const onStop = async (name: string) => {
-    setActing(name)
+    markRowActing(name)
     setActionError(null)
     try {
       await stopInstance(name, { infra: listInfra })
@@ -208,12 +224,12 @@ export function InstanceList() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setActing(null)
+      clearRowActing(name)
     }
   }
 
   const onSetAutoStop = async (name: string, duration: string) => {
-    setActing(name)
+    markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
     try {
@@ -222,13 +238,13 @@ export function InstanceList() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setActing(null)
+      clearRowActing(name)
     }
   }
 
   const onKill = async (name: string) => {
     if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
-    setActing(name)
+    markRowActing(name)
     setActionError(null)
     try {
       await killInstance(name, { infra: listInfra })
@@ -236,12 +252,12 @@ export function InstanceList() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setActing(null)
+      clearRowActing(name)
     }
   }
 
   const onClearAutoStop = async (name: string) => {
-    setActing(name)
+    markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
     try {
@@ -250,12 +266,12 @@ export function InstanceList() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setActing(null)
+      clearRowActing(name)
     }
   }
 
   const onSetAutoStopAt = async (name: string, localDatetime: string) => {
-    setActing(name)
+    markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
     try {
@@ -265,12 +281,12 @@ export function InstanceList() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setActing(null)
+      clearRowActing(name)
     }
   }
 
   const onPlus2h = async (name: string, shutdownAt: string | null) => {
-    setActing(name)
+    markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
     try {
@@ -287,7 +303,7 @@ export function InstanceList() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
-      setActing(null)
+      clearRowActing(name)
     }
   }
 
@@ -454,7 +470,7 @@ export function InstanceList() {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
                       const isRunningOrPending = inst.state === 'running' || inst.state === 'pending'
                       const menuOpen = openAutoStopFor === key
-                      const busy = acting !== null
+                      const rowBusy = actingRows.has(key)
                       if (!isRunningOrPending) {
                         return relative ? (
                           <span className="shutdown-cell">
@@ -470,7 +486,7 @@ export function InstanceList() {
                           <button
                             type="button"
                             className="shutdown-clickable"
-                            disabled={busy}
+                            disabled={rowBusy}
                             onClick={() => {
                               setOpenAutoStopFor((prev) => {
                                 if (prev === key) return null
@@ -492,7 +508,7 @@ export function InstanceList() {
                           <button
                             type="button"
                             className="btn btn-plus2h"
-                            disabled={busy}
+                            disabled={rowBusy}
                             onClick={() => onPlus2h(key, inst.shutdown_at)}
                             title="Set auto-stop to 2 hours from now"
                           >
@@ -551,30 +567,30 @@ export function InstanceList() {
                       <button
                         type="button"
                         className="btn btn-start"
-                        disabled={acting !== null}
+                        disabled={rowBusy}
                         onClick={() => onStart(key)}
                       >
-                        {acting === key ? '…' : 'Start'}
+                        {rowBusy ? '…' : 'Start'}
                       </button>
                     )}
                     {(inst.state === 'running' || inst.state === 'pending') && (
                       <button
                         type="button"
                         className="btn btn-stop"
-                        disabled={acting !== null}
+                        disabled={rowBusy}
                         onClick={() => onStop(key)}
                       >
-                        {acting === key ? '…' : 'Stop'}
+                        {rowBusy ? '…' : 'Stop'}
                       </button>
                     )}
                     {inst.state !== 'terminated' && inst.state !== 'shutting-down' && (
                       <button
                         type="button"
                         className="btn btn-kill"
-                        disabled={acting !== null}
+                        disabled={rowBusy}
                         onClick={() => onKill(key)}
                       >
-                        {acting === key ? '…' : 'Kill'}
+                        {rowBusy ? '…' : 'Kill'}
                       </button>
                     )}
                       </>
