@@ -8,6 +8,7 @@ import {
   killInstance,
   type FutureRouterAmiInfo,
   type Instance,
+  type ListInstancesResponse,
 } from '../api/client'
 import { CreateWorkstationForm } from '../components/CreateWorkstationForm'
 import { DataFreshnessBar } from '../DataFreshnessBar'
@@ -202,12 +203,37 @@ export function InstanceList() {
 
   const refetchWorkstations = () => instancesQuery.refetch()
 
-  const onStart = async (name: string) => {
+  const refreshWorkstationsInBackground = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['workstations'] })
+  }, [queryClient])
+
+  const patchWorkstationInCache = useCallback(
+    (rowKey: string, patch: Partial<Instance>) => {
+      queryClient.setQueryData<ListInstancesResponse>(
+        queryKeys.workstations(listInfra),
+        (old) => {
+          if (!old) return old
+          return {
+            ...old,
+            instances: old.instances.map((inst) =>
+              instanceKey(inst) === rowKey ? { ...inst, ...patch } : inst,
+            ),
+          }
+        },
+      )
+    },
+    [queryClient, listInfra],
+  )
+
+  const onStart = async (name: string, instanceId: string) => {
     markRowActing(name)
     setActionError(null)
     try {
-      await startInstance(name, { infra: listInfra })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      const result = await startInstance(name, { infra: listInfra, instanceId })
+      if (result.shutdown_at != null) {
+        patchWorkstationInCache(name, { shutdown_at: result.shutdown_at })
+      }
+      refreshWorkstationsInBackground()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -215,12 +241,12 @@ export function InstanceList() {
     }
   }
 
-  const onStop = async (name: string) => {
+  const onStop = async (name: string, instanceId: string) => {
     markRowActing(name)
     setActionError(null)
     try {
-      await stopInstance(name, { infra: listInfra })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      await stopInstance(name, { infra: listInfra, instanceId })
+      refreshWorkstationsInBackground()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -228,13 +254,16 @@ export function InstanceList() {
     }
   }
 
-  const onSetAutoStop = async (name: string, duration: string) => {
+  const onSetAutoStop = async (name: string, instanceId: string, duration: string) => {
     markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
     try {
-      await setAutoStop(name, { duration })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      const result = await setAutoStop(name, { duration, instanceId })
+      if ('shutdown_at' in result) {
+        patchWorkstationInCache(name, { shutdown_at: result.shutdown_at })
+      }
+      refreshWorkstationsInBackground()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -242,13 +271,13 @@ export function InstanceList() {
     }
   }
 
-  const onKill = async (name: string) => {
+  const onKill = async (name: string, instanceId: string) => {
     if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
     markRowActing(name)
     setActionError(null)
     try {
-      await killInstance(name, { infra: listInfra })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      await killInstance(name, { infra: listInfra, instanceId })
+      refreshWorkstationsInBackground()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -256,13 +285,14 @@ export function InstanceList() {
     }
   }
 
-  const onClearAutoStop = async (name: string) => {
+  const onClearAutoStop = async (name: string, instanceId: string) => {
     markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
     try {
-      await setAutoStop(name, { clear: true })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      await setAutoStop(name, { clear: true, instanceId })
+      patchWorkstationInCache(name, { shutdown_at: null })
+      refreshWorkstationsInBackground()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -270,14 +300,17 @@ export function InstanceList() {
     }
   }
 
-  const onSetAutoStopAt = async (name: string, localDatetime: string) => {
+  const onSetAutoStopAt = async (name: string, instanceId: string, localDatetime: string) => {
     markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
     try {
       const utcIso = new Date(localDatetime).toISOString()
-      await setAutoStop(name, { shutdown_at: utcIso })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      const result = await setAutoStop(name, { shutdown_at: utcIso, instanceId })
+      if ('shutdown_at' in result) {
+        patchWorkstationInCache(name, { shutdown_at: result.shutdown_at })
+      }
+      refreshWorkstationsInBackground()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -285,7 +318,7 @@ export function InstanceList() {
     }
   }
 
-  const onPlus2h = async (name: string, shutdownAt: string | null) => {
+  const onPlus2h = async (name: string, instanceId: string, shutdownAt: string | null) => {
     markRowActing(name)
     setActionError(null)
     setOpenAutoStopFor(null)
@@ -298,8 +331,14 @@ export function InstanceList() {
           totalMinutes = remainingMinutes + 120
         }
       }
-      await setAutoStop(name, { duration: buildDurationFromTotalMinutes(totalMinutes) })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      const result = await setAutoStop(name, {
+        duration: buildDurationFromTotalMinutes(totalMinutes),
+        instanceId,
+      })
+      if ('shutdown_at' in result) {
+        patchWorkstationInCache(name, { shutdown_at: result.shutdown_at })
+      }
+      refreshWorkstationsInBackground()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -509,7 +548,7 @@ export function InstanceList() {
                             type="button"
                             className="btn btn-plus2h"
                             disabled={rowBusy}
-                            onClick={() => onPlus2h(key, inst.shutdown_at)}
+                            onClick={() => onPlus2h(key, inst.instance_id, inst.shutdown_at)}
                             title="Set auto-stop to 2 hours from now"
                           >
                             +2h
@@ -523,7 +562,7 @@ export function InstanceList() {
                                   type="button"
                                   role="menuitem"
                                   className="shutdown-menu-item"
-                                  onClick={() => onSetAutoStop(key, value)}
+                                  onClick={() => onSetAutoStop(key, inst.instance_id, value)}
                                 >
                                   {label}
                                 </button>
@@ -539,7 +578,7 @@ export function InstanceList() {
                                   type="button"
                                   className="btn btn-set-time"
                                   disabled={!customTime}
-                                  onClick={() => onSetAutoStopAt(key, customTime)}
+                                  onClick={() => onSetAutoStopAt(key, inst.instance_id, customTime)}
                                 >
                                   Set
                                 </button>
@@ -548,7 +587,7 @@ export function InstanceList() {
                                 type="button"
                                 role="menuitem"
                                 className="shutdown-menu-item shutdown-menu-item--clear"
-                                onClick={() => onClearAutoStop(key)}
+                                onClick={() => onClearAutoStop(key, inst.instance_id)}
                               >
                                 Clear auto-stop
                               </button>
@@ -568,7 +607,7 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-start"
                         disabled={rowBusy}
-                        onClick={() => onStart(key)}
+                        onClick={() => onStart(key, inst.instance_id)}
                       >
                         {rowBusy ? '…' : 'Start'}
                       </button>
@@ -578,7 +617,7 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-stop"
                         disabled={rowBusy}
-                        onClick={() => onStop(key)}
+                        onClick={() => onStop(key, inst.instance_id)}
                       >
                         {rowBusy ? '…' : 'Stop'}
                       </button>
@@ -588,7 +627,7 @@ export function InstanceList() {
                         type="button"
                         className="btn btn-kill"
                         disabled={rowBusy}
-                        onClick={() => onKill(key)}
+                        onClick={() => onKill(key, inst.instance_id)}
                       >
                         {rowBusy ? '…' : 'Kill'}
                       </button>

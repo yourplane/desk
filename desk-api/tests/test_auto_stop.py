@@ -24,6 +24,21 @@ def test_auto_stop_with_duration(mock_resolve, mock_set, mock_compute):
     assert body["instance_id"] == "i-abc123"
     assert body["shutdown_at"] == "2026-06-01T20:00:00Z"
     mock_set.assert_called_once()
+    mock_resolve.assert_called_once()
+
+
+@patch(_COMPUTE, return_value="2026-06-01T20:00:00Z")
+@patch(_SET_TAG)
+@patch(_RESOLVE)
+def test_auto_stop_with_instance_id_skips_resolve(mock_resolve, mock_set, mock_compute):
+    res = client.post(
+        "/api/workstations/main/auto-stop",
+        json={"instance_id": "i-direct", "duration": "4h"},
+    )
+    assert res.status_code == 200
+    mock_resolve.assert_not_called()
+    mock_set.assert_called_once()
+    assert mock_set.call_args[0][0] == "i-direct"
 
 
 @patch(_SET_TAG)

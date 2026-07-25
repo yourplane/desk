@@ -8,6 +8,7 @@ from botocore.exceptions import ClientError
 from desk.aws import (
     AMI_TAG_BUILD_STATUS,
     AMI_BUILD_STATUS_TESTED,
+    TAG_SHUTDOWN_AT,
     AmiInfo,
     DeskVpcOutputs,
     Workstation,
@@ -381,7 +382,9 @@ def test_run_workstation_success(mock_session: MagicMock) -> None:
     assert bdm[0]["Ebs"]["VolumeSize"] == 32
     assert bdm[0]["Ebs"]["VolumeType"] == "gp3"
     assert bdm[0]["Ebs"]["DeleteOnTermination"] is True
-    mock_ec2.create_tags.assert_called_once()
+    tag_specs = call_kw["TagSpecifications"][0]["Tags"]
+    assert any(t["Key"] == TAG_SHUTDOWN_AT for t in tag_specs)
+    mock_ec2.create_tags.assert_not_called()
 
 
 @patch("desk.aws.run_workstation")

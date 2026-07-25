@@ -233,7 +233,7 @@ export function WebRoutesTab() {
     try {
       await addWebRoute(key, port)
       setPortDraftByKey((prev) => ({ ...prev, [key]: '' }))
-      await queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
     } catch (e) {
       setBannerError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -246,7 +246,7 @@ export function WebRoutesTab() {
     setBannerError(null)
     try {
       await removeWebRoute(key, port)
-      await queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
     } catch (e) {
       setBannerError(e instanceof Error ? e.message : String(e))
     } finally {

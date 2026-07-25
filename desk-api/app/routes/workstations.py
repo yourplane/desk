@@ -4,7 +4,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel
 
 from desk.aws import (
@@ -96,9 +96,36 @@ class RunCommandBody(BaseModel):
 class AutoStopBody(BaseModel):
     """Request body for POST /workstations/{name}/auto-stop."""
 
+    instance_id: str | None = None
     duration: str | None = None
     shutdown_at: str | None = None
     clear: bool = False
+
+
+class InstanceMutationBody(BaseModel):
+    """Optional body for POST mutations that can skip EC2 resolve."""
+
+    instance_id: str | None = None
+
+
+def _resolve_instance_id(
+    name: str,
+    instance_id: str | None,
+    *,
+    region: str,
+    profile: str,
+    states: list[str] | None = None,
+    infra: bool = False,
+) -> str:
+    if instance_id and instance_id.startswith("i-"):
+        return instance_id
+    return resolve_workstation(
+        name,
+        region=region,
+        profile=profile,
+        states=states,
+        infra=infra,
+    )
 
 
 def _parse_shutdown_at(value: str) -> str:
@@ -123,8 +150,9 @@ def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profi
         )
 
     try:
-        instance_id = resolve_workstation(
+        instance_id = _resolve_instance_id(
             name,
+            body.instance_id,
             region=region,
             profile=profile,
             states=["running", "pending", "stopping", "stopped"],
@@ -235,12 +263,21 @@ def list_workstations_route(infra: bool = False):
 
 
 @router.post("/workstations/{name}/start")
-def start_workstation_by_name(name: str, infra: bool = False):
+def start_workstation_by_name(
+    name: str,
+    infra: bool = False,
+    body: InstanceMutationBody = Body(default_factory=InstanceMutationBody),
+):
     """Start a stopped workstation by name or instance ID. Sets auto-stop to 4 hours (ignored for infra)."""
     region, profile = _region_profile()
     try:
-        instance_id = resolve_workstation(
-            name, region=region, profile=profile, states=["stopped"], infra=infra
+        instance_id = _resolve_instance_id(
+            name,
+            body.instance_id,
+            region=region,
+            profile=profile,
+            states=["stopped"],
+            infra=infra,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -251,11 +288,21 @@ def start_workstation_by_name(name: str, infra: bool = False):
 
 
 @router.post("/workstations/{name}/stop")
-def stop_workstation_by_name(name: str, infra: bool = False):
+def stop_workstation_by_name(
+    name: str,
+    infra: bool = False,
+    body: InstanceMutationBody = Body(default_factory=InstanceMutationBody),
+):
     """Stop a running workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
-        instance_id = resolve_workstation(name, region=region, profile=profile, infra=infra)
+        instance_id = _resolve_instance_id(
+            name,
+            body.instance_id,
+            region=region,
+            profile=profile,
+            infra=infra,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     stop_instance(instance_id, region=region, profile=profile)
@@ -263,12 +310,17 @@ def stop_workstation_by_name(name: str, infra: bool = False):
 
 
 @router.post("/workstations/{name}/kill")
-def kill_instance_by_name(name: str, infra: bool = False):
+def kill_instance_by_name(
+    name: str,
+    infra: bool = False,
+    body: InstanceMutationBody = Body(default_factory=InstanceMutationBody),
+):
     """Permanently terminate a workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
-        instance_id = resolve_workstation(
+        instance_id = _resolve_instance_id(
             name,
+            body.instance_id,
             region=region,
             profile=profile,
             states=["pending", "running", "stopping", "stopped"],

@@ -15,6 +15,17 @@ from desk.log import get_logger
 log = get_logger("aws")
 from botocore.exceptions import ClientError
 
+
+@functools.lru_cache(maxsize=32)
+def _ec2_client_cached(region: str, profile: str):
+    session = boto3.Session(region_name=region or None, profile_name=profile or None)
+    return session.client("ec2")
+
+
+def get_ec2_client(region: str | None = None, profile: str | None = None):
+    """Return a cached EC2 client for the given region/profile (reuse in Lambda warm containers)."""
+    return _ec2_client_cached(region or "", profile or "")
+
 # Tag key used to store the scheduled shutdown time (ISO 8601 UTC).
 TAG_SHUTDOWN_AT = "desk:shutdown-at"
 
@@ -339,12 +350,20 @@ def _run_instance(
     iam_instance_profile_name: str,
     name: str,
     key_name: str | None = None,
+    shutdown_at: str | None = None,
     region: str | None = None,
     profile: str | None = None,
 ) -> str:
     """Launch an EC2 instance and return its instance ID. Internal; use run_workstation for auto-stop."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
+    ec2 = get_ec2_client(region=region, profile=profile)
+
+    instance_tags = [
+        {"Key": "Name", "Value": name},
+        {"Key": "Type", "Value": "workstation"},
+        {"Key": "desk:managed", "Value": "true"},
+    ]
+    if shutdown_at:
+        instance_tags.append({"Key": TAG_SHUTDOWN_AT, "Value": shutdown_at})
 
     run_kw: dict = {
         "ImageId": ami_id,
@@ -357,11 +376,7 @@ def _run_instance(
         "TagSpecifications": [
             {
                 "ResourceType": "instance",
-                "Tags": [
-                    {"Key": "Name", "Value": name},
-                    {"Key": "Type", "Value": "workstation"},
-                    {"Key": "desk:managed", "Value": "true"},
-                ],
+                "Tags": instance_tags,
             },
         ],
         "MetadataOptions": {
@@ -399,6 +414,8 @@ def run_workstation(
     profile: str | None = None,
 ) -> tuple[str, str | None]:
     """Create a workstation: launch instance and set auto-stop. Returns (instance_id, shutdown_at or None)."""
+    hours = parse_duration(shutdown_after)
+    shutdown_at = compute_shutdown_at(hours) if hours > 0 else None
     instance_id = _run_instance(
         ami_id=ami_id,
         instance_type=instance_type,
@@ -407,12 +424,12 @@ def run_workstation(
         iam_instance_profile_name=iam_instance_profile_name,
         name=name,
         key_name=key_name,
+        shutdown_at=shutdown_at,
         region=region,
         profile=profile,
     )
-    shutdown_at = _maybe_set_shutdown_tag(
-        instance_id, shutdown_after=shutdown_after, region=region, profile=profile
-    )
+    if hours <= 0:
+        clear_shutdown_tag(instance_id, region=region, profile=profile)
     return (instance_id, shutdown_at)
 
 
@@ -768,8 +785,7 @@ def stop_instance(
     profile: str | None = None,
 ) -> str:
     """Stop an EC2 instance. Returns the instance ID."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
+    ec2 = get_ec2_client(region=region, profile=profile)
     ec2.stop_instances(InstanceIds=[instance_id])
     return instance_id
 
@@ -780,8 +796,7 @@ def _start_instance(
     profile: str | None = None,
 ) -> str:
     """Start a stopped EC2 instance. Returns the instance ID. Internal; use start_workstation for auto-stop."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
+    ec2 = get_ec2_client(region=region, profile=profile)
     ec2.start_instances(InstanceIds=[instance_id])
     return instance_id
 
@@ -798,12 +813,26 @@ def start_workstation(
 
     With ``infra=True``, starts without setting auto-stop (for managed router instances).
     """
-    _start_instance(instance_id, region=region, profile=profile)
+    ec2 = get_ec2_client(region=region, profile=profile)
     if infra:
+        ec2.start_instances(InstanceIds=[instance_id])
         return (instance_id, None)
-    shutdown_at = _maybe_set_shutdown_tag(
-        instance_id, shutdown_after=shutdown_after, region=region, profile=profile
-    )
+
+    hours = parse_duration(shutdown_after)
+    shutdown_at = compute_shutdown_at(hours) if hours > 0 else None
+    if shutdown_at:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            start_future = executor.submit(ec2.start_instances, InstanceIds=[instance_id])
+            tag_future = executor.submit(
+                ec2.create_tags,
+                Resources=[instance_id],
+                Tags=[{"Key": TAG_SHUTDOWN_AT, "Value": shutdown_at}],
+            )
+            start_future.result()
+            tag_future.result()
+    else:
+        ec2.start_instances(InstanceIds=[instance_id])
+        clear_shutdown_tag(instance_id, region=region, profile=profile)
     return (instance_id, shutdown_at)
 
 
@@ -813,8 +842,7 @@ def terminate_instance(
     profile: str | None = None,
 ) -> str:
     """Terminate an EC2 instance. Returns the instance ID."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
+    ec2 = get_ec2_client(region=region, profile=profile)
     ec2.terminate_instances(InstanceIds=[instance_id])
     return instance_id
 
@@ -1414,8 +1442,7 @@ def set_shutdown_tag(
     profile: str | None = None,
 ) -> None:
     """Set (or update) the desk:shutdown-at tag on an instance."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
+    ec2 = get_ec2_client(region=region, profile=profile)
     ec2.create_tags(
         Resources=[instance_id],
         Tags=[{"Key": TAG_SHUTDOWN_AT, "Value": shutdown_at}],
@@ -1429,8 +1456,7 @@ def clear_shutdown_tag(
     profile: str | None = None,
 ) -> None:
     """Remove the desk:shutdown-at tag from an instance."""
-    session = boto3.Session(region_name=region, profile_name=profile)
-    ec2 = session.client("ec2")
+    ec2 = get_ec2_client(region=region, profile=profile)
     ec2.delete_tags(
         Resources=[instance_id],
         Tags=[{"Key": TAG_SHUTDOWN_AT}],

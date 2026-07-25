@@ -28,11 +28,16 @@ def _region_profile():
     return aws.region, aws.profile
 
 
-def _ensure_workstation_exists(name: str) -> str:
-    region, profile = _region_profile()
+def _normalize_workstation_name(name: str) -> str:
     normalized = name.strip()
     if not normalized:
         raise HTTPException(status_code=400, detail="Workstation name must not be empty.")
+    return normalized
+
+
+def _ensure_workstation_exists(name: str) -> str:
+    region, profile = _region_profile()
+    normalized = _normalize_workstation_name(name)
     try:
         resolve_workstation(
             normalized,
@@ -77,7 +82,7 @@ def get_workstation_web_routes(name: str):
 @router.post("/workstations/{name}/web-routes")
 def add_workstation_web_route(name: str, body: AddWebRouteBody):
     """Register a TCP port for routing (stored in S3 only)."""
-    key = _ensure_workstation_exists(name)
+    key = _normalize_workstation_name(name)
     try:
         ports = add_port(key, body.port)
     except ValueError as e:
@@ -91,7 +96,7 @@ def add_workstation_web_route(name: str, body: AddWebRouteBody):
 @router.delete("/workstations/{name}/web-routes/{port}")
 def remove_workstation_web_route(name: str, port: int):
     """Remove a registered port. Returns 404 if the port was not registered."""
-    key = _ensure_workstation_exists(name)
+    key = _normalize_workstation_name(name)
     try:
         ports = remove_port(key, port)
     except ValueError as e:
