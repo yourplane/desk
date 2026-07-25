@@ -11,6 +11,7 @@ from desk.config import get_desk_settings
 from desk.router_infra import (
     get_router_infra_status,
     is_router_instance_ops_enabled,
+    router_infra_friendly_label,
     sleep_router_infra,
     wake_router_infra,
 )
@@ -27,6 +28,7 @@ def _region_profile():
 def _status_payload(status) -> dict:
     return {
         "phase": status.phase,
+        "friendly_label": router_infra_friendly_label(status.phase),
         "base_stack_status": status.base_stack_status,
         "active_stack_status": status.active_stack_status,
         "asg_name": status.asg_name,
@@ -35,6 +37,10 @@ def _status_payload(status) -> dict:
         "target_health": status.target_health,
         "demand": status.demand,
         "active_stack_present": status.active_stack_present,
+        "demand_sources": [
+            {"name": s.name, "ports": s.ports, "state": s.state}
+            for s in status.demand_sources
+        ],
         "instance_ops_enabled": status.active_stack_present
         and status.phase not in ("sleeping", "unavailable"),
         "messages": status.messages,

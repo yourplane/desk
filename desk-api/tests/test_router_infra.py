@@ -11,7 +11,7 @@ client = TestClient(app)
 
 @patch("app.routes.router_infra.get_router_infra_status")
 def test_router_infra_status(mock_status: MagicMock) -> None:
-    from desk.router_infra import RouterInfraStatus
+    from desk.router_infra import DemandSource, RouterInfraStatus
 
     mock_status.return_value = RouterInfraStatus(
         phase="active",
@@ -22,14 +22,17 @@ def test_router_infra_status(mock_status: MagicMock) -> None:
         target_health="healthy",
         demand=True,
         active_stack_present=True,
+        demand_sources=[DemandSource(name="main", ports=[5173], state="running")],
     )
     with patch("app.routes.router_infra.is_router_instance_ops_enabled", return_value=True):
         resp = client.get("/api/router-infra/status")
     assert resp.status_code == 200
     body = resp.json()
     assert body["phase"] == "active"
+    assert body["friendly_label"] == "Running"
     assert body["target_health"] == "healthy"
     assert body["instance_ops_enabled"] is True
+    assert body["demand_sources"] == [{"name": "main", "ports": [5173], "state": "running"}]
 
 
 @patch("app.routes.router_infra.wake_router_infra")

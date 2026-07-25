@@ -21,6 +21,24 @@ ACTIVE_TEMPLATE_S3_KEY = "cf-templates/desk-router-active.yaml"
 
 RouterInfraPhase = Literal["idle", "waking", "active", "sleeping", "error", "unavailable"]
 
+FRIENDLY_LABELS: dict[RouterInfraPhase, str] = {
+    "idle": "Stopped",
+    "waking": "Starting",
+    "active": "Running",
+    "sleeping": "Stopping",
+    "error": "Error",
+    "unavailable": "Unavailable",
+}
+
+
+@dataclass
+class DemandSource:
+    """Workstation + ports that keep router backend awake."""
+
+    name: str
+    ports: list[int]
+    state: str
+
 
 @dataclass
 class RouterInfraStatus:
@@ -35,7 +53,13 @@ class RouterInfraStatus:
     target_health: str | None = None
     demand: bool = False
     active_stack_present: bool = False
+    demand_sources: list[DemandSource] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
+
+
+def router_infra_friendly_label(phase: RouterInfraPhase) -> str:
+    """User-facing backend state label."""
+    return FRIENDLY_LABELS.get(phase, phase)
 
 
 def _session(region: str | None, profile: str | None):
@@ -101,25 +125,45 @@ def _is_failed(status: str | None) -> bool:
     return "FAILED" in status or status.endswith("_ROLLBACK_COMPLETE")
 
 
+def get_router_infra_demand_sources(
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+    prune_stale: bool = True,
+) -> list[DemandSource]:
+    """Pending/running workstations that have S3 web-route ports."""
+    if prune_stale:
+        from desk.web_routes import prune_stale_web_routes
+
+        prune_stale_web_routes(region=region, profile=profile)
+
+    routes = list_all_web_routes()
+    if not routes:
+        return []
+
+    workstations = list_workstations(
+        region=region,
+        profile=profile,
+        states=["pending", "running"],
+    )
+    ws_by_name = {w.name: w for w in workstations if w.name}
+    sources: list[DemandSource] = []
+    for name, ports in routes.items():
+        if not ports:
+            continue
+        ws = ws_by_name.get(name)
+        if ws is not None:
+            sources.append(DemandSource(name=name, ports=list(ports), state=ws.state))
+    return sources
+
+
 def router_infra_demand_exists(
     *,
     region: str | None = None,
     profile: str | None = None,
 ) -> bool:
     """True when any pending/running workstation has S3 web-route ports."""
-    routes = list_all_web_routes()
-    if not routes:
-        return False
-    names_with_ports = {name for name, ports in routes.items() if ports}
-    if not names_with_ports:
-        return False
-    workstations = list_workstations(
-        region=region,
-        profile=profile,
-        states=["pending", "running"],
-    )
-    ws_names = {w.name for w in workstations if w.name}
-    return bool(names_with_ports & ws_names)
+    return bool(get_router_infra_demand_sources(region=region, profile=profile))
 
 
 def _get_asg_info(
@@ -198,7 +242,8 @@ def get_router_infra_status(
         or None
     )
     target_health = _get_target_health(tg_arn, session=session) if tg_arn else None
-    demand = router_infra_demand_exists(region=region, profile=profile)
+    demand_sources = get_router_infra_demand_sources(region=region, profile=profile)
+    demand = bool(demand_sources)
 
     messages: list[str] = []
     if _is_failed(base_status) or _is_failed(active_status):
@@ -215,9 +260,11 @@ def get_router_infra_status(
         phase = "waking"
     elif not active_present and (asg_desired or 0) == 0:
         phase = "idle"
+    elif active_present and (asg_desired or 0) == 0 and not _is_in_progress(active_status):
+        phase = "sleeping" if _is_in_progress(base_status) else "idle"
     elif active_present and target_health == "healthy" and (asg_in_service or 0) >= 1:
         phase = "active"
-    elif active_present:
+    elif active_present or (asg_desired or 0) > 0:
         phase = "waking"
     else:
         phase = "idle"
@@ -232,6 +279,7 @@ def get_router_infra_status(
         target_health=target_health,
         demand=demand,
         active_stack_present=active_present,
+        demand_sources=demand_sources,
         messages=messages,
     )
 
@@ -451,7 +499,8 @@ def reconcile_router_infra(
                     return {"action": "complete_wake", "stack": ROUTER_BASE_STACK}
         return {"action": "noop", "phase": status.phase, "demand": True}
 
-    if not demand and status.active_stack_present and status.phase not in ("sleeping", "waking"):
+    billable_active = status.active_stack_present or (status.asg_desired or 0) > 0
+    if not demand and billable_active and status.phase not in ("sleeping", "waking"):
         if _is_in_progress(status.base_stack_status) or _is_in_progress(status.active_stack_status):
             return {"action": "noop", "reason": "stack operation in progress"}
         result = sleep_router_infra(region=region, profile=profile)

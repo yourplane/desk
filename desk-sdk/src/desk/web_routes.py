@@ -134,3 +134,45 @@ def remove_port(workstation_name: str, port: int) -> list[int]:
     _save_map(m)
     log.info("removed web route name=%s port=%s", name, p)
     return list(m.get(name, []))
+
+
+def clear_ports(workstation_name: str) -> None:
+    """Remove all registered ports for *workstation_name* (no-op if none)."""
+    name = _normalize_workstation_name(workstation_name)
+    m = _load_map()
+    if name not in m:
+        return
+    del m[name]
+    _save_map(m)
+    log.info("cleared all web routes for name=%s", name)
+
+
+def prune_stale_web_routes(
+    *,
+    region: str | None = None,
+    profile: str | None = None,
+) -> list[str]:
+    """Drop S3 ports for workstation names with no non-terminated EC2 instance."""
+    from desk.aws import list_workstations
+
+    routes = _load_map()
+    if not routes:
+        return []
+
+    live = list_workstations(
+        region=region,
+        profile=profile,
+        states=["pending", "running", "stopping", "stopped"],
+    )
+    live_names = {w.name for w in live if w.name}
+    pruned: list[str] = []
+    changed = False
+    for name in list(routes.keys()):
+        if name not in live_names:
+            del routes[name]
+            pruned.append(name)
+            changed = True
+    if changed:
+        _save_map(routes)
+        log.info("pruned stale web routes for: %s", pruned)
+    return pruned

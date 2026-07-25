@@ -142,3 +142,50 @@ def test_remove_port_not_found(mock_client: MagicMock) -> None:
 def test_add_port_invalid() -> None:
     with pytest.raises(ValueError, match="Invalid port"):
         add_port("x", 0)  # type: ignore[arg-type] — exercise validation
+
+
+@patch("desk.web_routes._s3_client")
+def test_clear_ports(mock_client: MagicMock) -> None:
+    from desk.web_routes import clear_ports
+
+    s3 = MagicMock()
+    mock_client.return_value = s3
+    s3.get_object.return_value = _make_s3_response_dict({"my-ws": [80, 443]})
+
+    clear_ports("my-ws")
+
+    saved = json.loads(s3.put_object.call_args.kwargs["Body"])
+    assert saved == {}
+
+
+@patch("desk.web_routes._s3_client")
+def test_clear_ports_noop(mock_client: MagicMock) -> None:
+    from desk.web_routes import clear_ports
+
+    s3 = MagicMock()
+    mock_client.return_value = s3
+    s3.get_object.side_effect = _no_such_key_error()
+
+    clear_ports("missing")
+
+    s3.put_object.assert_not_called()
+
+
+@patch("desk.aws.list_workstations")
+@patch("desk.web_routes._s3_client")
+def test_prune_stale_web_routes(mock_client: MagicMock, mock_list_ws: MagicMock) -> None:
+    from desk.aws import Workstation
+    from desk.web_routes import prune_stale_web_routes
+
+    s3 = MagicMock()
+    mock_client.return_value = s3
+    s3.get_object.return_value = _make_s3_response_dict({"live": [80], "gone": [443]})
+    mock_list_ws.return_value = [
+        Workstation(instance_id="i-1", name="live", state="stopped", shutdown_at=None, image_id="ami-1"),
+    ]
+
+    pruned = prune_stale_web_routes()
+
+    assert pruned == ["gone"]
+    saved = json.loads(s3.put_object.call_args.kwargs["Body"])
+    assert saved == {"live": [80]}

@@ -526,8 +526,15 @@ export async function setAutoStop(
 
 export type RouterInfraPhase = 'idle' | 'waking' | 'active' | 'sleeping' | 'error' | 'unavailable'
 
+export interface RouterInfraDemandSource {
+  name: string
+  ports: number[]
+  state: string
+}
+
 export interface RouterInfraStatus {
   phase: RouterInfraPhase
+  friendly_label: string
   base_stack_status: string | null
   active_stack_status: string | null
   asg_name: string | null
@@ -537,6 +544,7 @@ export interface RouterInfraStatus {
   demand: boolean
   active_stack_present: boolean
   instance_ops_enabled: boolean
+  demand_sources: RouterInfraDemandSource[]
   messages: string[]
 }
 

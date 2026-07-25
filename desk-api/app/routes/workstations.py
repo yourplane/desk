@@ -296,6 +296,13 @@ def kill_instance_by_name(name: str, infra: bool = False):
     except Exception as e:
         logger.exception("terminate_instance failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    if not infra:
+        try:
+            from desk.web_routes import clear_ports
+
+            clear_ports(name)
+        except Exception:
+            logger.exception("clear_ports after kill failed for name=%s", name)
     return {"instance_id": instance_id}
 
 

@@ -21,16 +21,16 @@ const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
 
 function routerInfraBannerMessage(status: RouterInfraStatus): string | null {
   if (status.phase === 'waking') {
-    return 'Router infra is starting. Public web routes may take several minutes to become reachable — retry your link until then.'
+    return `Router backend is ${status.friendly_label.toLowerCase()}. Public web routes may take several minutes to become reachable — retry your link until then.`
   }
   if (status.phase === 'idle' && status.demand) {
-    return 'Router infra is idle but needed for open web routes. Wake is in progress or will run on the next reaper tick.'
+    return 'Router backend is stopped but needed for open web routes. Wake is in progress or will run on the next reaper tick.'
   }
   if (status.phase === 'sleeping') {
-    return 'Router infra is shutting down.'
+    return `Router backend is ${status.friendly_label.toLowerCase()}.`
   }
   if (status.phase === 'error') {
-    return status.messages.join(' ') || 'Router infra reported an error.'
+    return status.messages.join(' ') || 'Router backend reported an error.'
   }
   return null
 }

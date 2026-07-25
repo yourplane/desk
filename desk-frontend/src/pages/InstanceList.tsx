@@ -6,22 +6,14 @@ import {
   startInstance,
   stopInstance,
   killInstance,
-  fetchRouterInfraStatus,
-  wakeRouterInfra,
-  sleepRouterInfra,
-  type FutureRouterAmiInfo,
   type Instance,
-  type RouterInfraStatus,
 } from '../api/client'
 import { CreateWorkstationForm } from '../components/CreateWorkstationForm'
+import { RouterInfraSection, useRouterInfraPollInterval } from '../components/RouterInfraSection'
 import { DataFreshnessBar } from '../DataFreshnessBar'
-import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
 import { queryKeys } from '../queryKeys'
 import { logout } from '../auth'
-import { instanceKey, stateColor, formatAmiLine, instanceAmiSubline, futureRouterAmiSummaryClass } from './workstationUtils'
-
-const POLL_INTERVAL_MS = 10_000
-const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
+import { instanceKey, stateColor, instanceAmiSubline } from './workstationUtils'
 
 const AUTO_STOP_PRESETS = [
   { label: '30m', value: '30m' },
@@ -78,132 +70,9 @@ function toDatetimeLocalValue(isoUtc: string | null): string {
   return `${y}-${mo}-${day}T${h}:${mi}`
 }
 
-function FutureRouterAmiSummary({ info }: { info: FutureRouterAmiInfo }) {
-  const className = futureRouterAmiSummaryClass(info)
-
-  if (info.status === 'unavailable') {
-    return (
-      <div className={className} role="status">
-        <div className="future-router-ami-summary__title">Future router AMI</div>
-        <p className="future-router-ami-summary__warning">
-          {info.warnings[0] ?? 'Router AMI info unavailable.'}
-        </p>
-      </div>
-    )
-  }
-
-  if (info.status === 'consolidated' && info.ami) {
-    return (
-      <div className={className} role="status">
-        <div className="future-router-ami-summary__title">Future router AMI</div>
-        <p className="future-router-ami-summary__line">{formatAmiLine(info.ami)}</p>
-      </div>
-    )
-  }
-
-  if (info.status === 'partial' && info.ami) {
-    return (
-      <div className={className} role="status">
-        <div className="future-router-ami-summary__title">Future router AMI</div>
-        <p className="future-router-ami-summary__line">{formatAmiLine(info.ami)}</p>
-        {info.warnings.map((w) => (
-          <p key={w} className="future-router-ami-summary__warning">{w}</p>
-        ))}
-      </div>
-    )
-  }
-
-  if (info.status === 'mismatch' && info.latest && info.deploy) {
-    return (
-      <div className={className} role="status">
-        <div className="future-router-ami-summary__title">Future router AMI</div>
-        <p className="future-router-ami-summary__line">
-          <span className="future-router-ami-summary__label">Latest router-ami-*:</span>{' '}
-          {formatAmiLine(info.latest)}
-        </p>
-        <p className="future-router-ami-summary__line">
-          <span className="future-router-ami-summary__label">desk-router deploy:</span>{' '}
-          {formatAmiLine(info.deploy)}
-        </p>
-        {info.warnings.map((w) => (
-          <p key={w} className="future-router-ami-summary__warning">{w}</p>
-        ))}
-      </div>
-    )
-  }
-
-  return null
-}
-
-function routerPhaseLabel(phase: RouterInfraStatus['phase']): string {
-  switch (phase) {
-    case 'idle': return 'Idle'
-    case 'waking': return 'Starting…'
-    case 'active': return 'Active'
-    case 'sleeping': return 'Shutting down…'
-    case 'error': return 'Error'
-    case 'unavailable': return 'Unavailable'
-    default: return phase
-  }
-}
-
-function RouterInfraStatusCard({
-  status,
-  busy,
-  onWake,
-  onSleep,
-}: {
-  status: RouterInfraStatus
-  busy: boolean
-  onWake: () => void
-  onSleep: (force: boolean) => void
-}) {
-  return (
-    <div className="router-infra-status" role="status">
-      <div className="router-infra-status__title">Router stack</div>
-      <p className="router-infra-status__phase">{routerPhaseLabel(status.phase)}</p>
-      <ul className="router-infra-status__details">
-        {status.base_stack_status && <li>Base stack: {status.base_stack_status}</li>}
-        {status.active_stack_status && <li>Active stack: {status.active_stack_status}</li>}
-        {status.asg_desired != null && (
-          <li>ASG desired/in-service: {status.asg_desired}/{status.asg_in_service ?? 0}</li>
-        )}
-        {status.target_health && <li>Target health: {status.target_health}</li>}
-        {status.demand && <li>Demand: workstations with web-route ports</li>}
-      </ul>
-      <div className="router-infra-status__actions">
-        <button type="button" className="btn btn-start" disabled={busy} onClick={onWake}>
-          Launch stack
-        </button>
-        <button
-          type="button"
-          className="btn btn-stop"
-          disabled={busy}
-          onClick={() => {
-            if (status.demand) {
-              if (
-                !window.confirm(
-                  'Pending/running workstations still have web-route ports. Public routes will be unavailable until the stack wakes again. Continue?',
-                )
-              ) {
-                return
-              }
-              onSleep(true)
-            } else {
-              onSleep(false)
-            }
-          }}
-        >
-          Shutdown stack
-        </button>
-      </div>
-    </div>
-  )
-}
-
 export function InstanceList() {
   const queryClient = useQueryClient()
-  const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
+  const pollIntervalMs = useRouterInfraPollInterval()
   const [acting, setActing] = useState<string | null>(null)
   const [openAutoStopFor, setOpenAutoStopFor] = useState<string | null>(null)
   const [customTime, setCustomTime] = useState('')
@@ -212,24 +81,10 @@ export function InstanceList() {
   const autoStopMenuRef = useRef<HTMLDivElement>(null)
   const actingRef = useRef<string | null>(null)
   actingRef.current = acting
-  const [listInfra, setListInfra] = useState(false)
-  const [stackActing, setStackActing] = useState(false)
-
-  const routerStatusQuery = useQuery({
-    queryKey: queryKeys.routerInfraStatus,
-    queryFn: fetchRouterInfraStatus,
-    enabled: listInfra,
-    staleTime: 5_000,
-    refetchInterval: () => (actingRef.current !== null || stackActing ? false : pollIntervalMs),
-  })
 
   const instancesQuery = useQuery({
-    queryKey: queryKeys.workstations(listInfra),
-    queryFn: () => listInstances({ infra: listInfra }),
-    placeholderData: (previousData, previousQuery) => {
-      if (previousQuery?.queryKey[1] === listInfra) return previousData
-      return undefined
-    },
+    queryKey: queryKeys.workstations(false),
+    queryFn: () => listInstances(),
     staleTime: 5_000,
     refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
   })
@@ -240,7 +95,6 @@ export function InstanceList() {
     const pending = optimisticInstances.filter((inst) => !serverNames.has(inst.name))
     return [...instances, ...pending]
   }, [instances, optimisticInstances])
-  const futureRouterAmi = instancesQuery.data?.future_router_ami
   const instancesLoading =
     instancesQuery.isFetching && instances.length === 0 && !instancesQuery.isError
   const blockingError =
@@ -269,7 +123,7 @@ export function InstanceList() {
     setActing(name)
     setActionError(null)
     try {
-      await startInstance(name, { infra: listInfra })
+      await startInstance(name)
       await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
@@ -282,7 +136,7 @@ export function InstanceList() {
     setActing(name)
     setActionError(null)
     try {
-      await stopInstance(name, { infra: listInfra })
+      await stopInstance(name)
       await queryClient.invalidateQueries({ queryKey: ['workstations'] })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
@@ -305,45 +159,14 @@ export function InstanceList() {
     }
   }
 
-  const onStackWake = async () => {
-    setStackActing(true)
-    setActionError(null)
-    try {
-      await wakeRouterInfra()
-      await queryClient.invalidateQueries({ queryKey: queryKeys.routerInfraStatus })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setStackActing(false)
-    }
-  }
-
-  const onStackSleep = async (force: boolean) => {
-    setStackActing(true)
-    setActionError(null)
-    try {
-      await sleepRouterInfra(force)
-      await queryClient.invalidateQueries({ queryKey: queryKeys.routerInfraStatus })
-      await queryClient.invalidateQueries({ queryKey: ['workstations'] })
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setStackActing(false)
-    }
-  }
-
-  const instanceOpsEnabled = listInfra
-    ? (routerStatusQuery.data?.instance_ops_enabled ?? false)
-    : true
-
   const onKill = async (name: string) => {
     if (!window.confirm('Terminate this workstation? This cannot be undone.')) return
     setActing(name)
     setActionError(null)
     try {
-      await killInstance(name, { infra: listInfra })
+      await killInstance(name)
       await queryClient.invalidateQueries({ queryKey: ['workstations'] })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -484,7 +307,7 @@ export function InstanceList() {
   return (
     <>
       <DataFreshnessBar
-        resourceLabel={listInfra ? 'Router infra list' : 'Workstation list'}
+        resourceLabel="Workstation list"
         dataUpdatedAt={instancesQuery.dataUpdatedAt}
         isFetching={instancesQuery.isFetching}
         onRefresh={() => void refetchWorkstations()}
@@ -495,37 +318,12 @@ export function InstanceList() {
       {actionError && (
         <p className="error-message" role="alert">{actionError}</p>
       )}
-      <div className="instance-list-toolbar">
-        <div className="instance-list-view-toggle" role="group" aria-label="Instance list view">
-          <button
-            type="button"
-            className={`instance-list-view-toggle__btn${!listInfra ? ' instance-list-view-toggle__btn--active' : ''}`}
-            aria-pressed={!listInfra}
-            onClick={() => setListInfra(false)}
-          >
-            Workstations
-          </button>
-          <button
-            type="button"
-            className={`instance-list-view-toggle__btn${listInfra ? ' instance-list-view-toggle__btn--active' : ''}`}
-            aria-pressed={listInfra}
-            onClick={() => setListInfra(true)}
-          >
-            Router infra
-          </button>
-        </div>
-      </div>
-      {listInfra && futureRouterAmi && (
-        <FutureRouterAmiSummary info={futureRouterAmi} />
-      )}
-      {listInfra && routerStatusQuery.data && (
-        <RouterInfraStatusCard
-          status={routerStatusQuery.data}
-          busy={stackActing || acting !== null}
-          onWake={() => void onStackWake()}
-          onSleep={(force) => void onStackSleep(force)}
-        />
-      )}
+      <RouterInfraSection
+        pollIntervalMs={pollIntervalMs}
+        acting={acting}
+        setActing={setActing}
+        setActionError={setActionError}
+      />
       <div
         className={`table-wrap${instancesQuery.isFetching && displayInstances.length > 0 ? ' table-wrap--revalidating' : ''}`}
       >
@@ -541,15 +339,11 @@ export function InstanceList() {
           <tbody>
             {instancesLoading ? (
               <tr>
-                <td colSpan={4} className="empty">
-                  {listInfra ? 'Loading router instances…' : 'Loading workstations…'}
-                </td>
+                <td colSpan={4} className="empty">Loading workstations…</td>
               </tr>
             ) : displayInstances.length === 0 ? (
               <tr>
-                <td colSpan={4} className="empty">
-                  {listInfra ? 'No router instances found.' : 'No workstations found.'}
-                </td>
+                <td colSpan={4} className="empty">No workstations found.</td>
               </tr>
             ) : (
               displayInstances.map((inst) => {
@@ -567,7 +361,7 @@ export function InstanceList() {
                     </span>
                   </td>
                   <td className="shutdown">
-                    {listInfra || isLaunching ? (
+                    {isLaunching ? (
                       '—'
                     ) : (() => {
                       const { absolute, relative } = formatShutdownLocal(inst.shutdown_at, inst.state)
@@ -670,8 +464,7 @@ export function InstanceList() {
                       <button
                         type="button"
                         className="btn btn-start"
-                        disabled={acting !== null || (listInfra && !instanceOpsEnabled)}
-                        title={listInfra && !instanceOpsEnabled ? 'Launch the router stack first' : undefined}
+                        disabled={acting !== null}
                         onClick={() => onStart(key)}
                       >
                         {acting === key ? '…' : 'Start'}
@@ -681,8 +474,7 @@ export function InstanceList() {
                       <button
                         type="button"
                         className="btn btn-stop"
-                        disabled={acting !== null || (listInfra && !instanceOpsEnabled)}
-                        title={listInfra && !instanceOpsEnabled ? 'Launch the router stack first' : undefined}
+                        disabled={acting !== null}
                         onClick={() => onStop(key)}
                       >
                         {acting === key ? '…' : 'Stop'}
@@ -692,8 +484,7 @@ export function InstanceList() {
                       <button
                         type="button"
                         className="btn btn-kill"
-                        disabled={acting !== null || (listInfra && !instanceOpsEnabled)}
-                        title={listInfra && !instanceOpsEnabled ? 'Launch the router stack first' : undefined}
+                        disabled={acting !== null}
                         onClick={() => onKill(key)}
                       >
                         {acting === key ? '…' : 'Kill'}
@@ -709,7 +500,7 @@ export function InstanceList() {
           </tbody>
         </table>
       </div>
-      {!listInfra && createSection}
+      {createSection}
     </>
   )
 }

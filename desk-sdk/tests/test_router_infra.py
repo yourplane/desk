@@ -6,36 +6,37 @@ import pytest
 
 from desk.aws import Workstation
 from desk.router_infra import (
+    DemandSource,
+    get_router_infra_demand_sources,
     get_router_infra_status,
     reconcile_router_infra,
     router_infra_demand_exists,
+    router_infra_friendly_label,
     sleep_router_infra,
-    wake_router_infra,
 )
 
 
-@patch("desk.router_infra.list_all_web_routes")
-@patch("desk.router_infra.list_workstations")
-def test_router_infra_demand_exists_true(
-    mock_list_ws: MagicMock,
-    mock_routes: MagicMock,
-) -> None:
-    mock_routes.return_value = {"main": [5173], "other": []}
-    mock_list_ws.return_value = [
-        Workstation(instance_id="i-1", name="main", state="running", shutdown_at=None, image_id="ami-1"),
+@patch("desk.router_infra.get_router_infra_demand_sources")
+def test_router_infra_demand_exists_true(mock_sources: MagicMock) -> None:
+    mock_sources.return_value = [
+        DemandSource(name="main", ports=[5173], state="running"),
     ]
     assert router_infra_demand_exists() is True
 
 
-@patch("desk.router_infra.list_all_web_routes")
-@patch("desk.router_infra.list_workstations")
-def test_router_infra_demand_exists_false_stopped(
-    mock_list_ws: MagicMock,
-    mock_routes: MagicMock,
-) -> None:
-    mock_routes.return_value = {"main": [5173]}
-    mock_list_ws.return_value = []
+@patch("desk.router_infra.get_router_infra_demand_sources")
+def test_router_infra_demand_exists_false_stopped(mock_sources: MagicMock) -> None:
+    mock_sources.return_value = []
     assert router_infra_demand_exists() is False
+
+
+@patch("desk.router_infra.get_router_infra_demand_sources")
+def test_router_infra_friendly_labels(mock_sources: MagicMock) -> None:
+    mock_sources.return_value = []
+    assert router_infra_friendly_label("idle") == "Stopped"
+    assert router_infra_friendly_label("active") == "Running"
+    assert router_infra_friendly_label("waking") == "Starting"
+    assert router_infra_friendly_label("sleeping") == "Stopping"
 
 
 @patch("desk.router_infra._session")
@@ -64,10 +65,30 @@ def test_get_router_infra_status_idle(mock_session: MagicMock) -> None:
     mock_session.return_value.region_name = "us-east-1"
     mock_session.return_value.profile_name = None
 
-    with patch("desk.router_infra.router_infra_demand_exists", return_value=False):
+    with patch("desk.router_infra.get_router_infra_demand_sources", return_value=[]):
         status = get_router_infra_status()
     assert status.phase == "idle"
     assert status.active_stack_present is False
+    assert status.demand_sources == []
+
+
+@patch("desk.web_routes.prune_stale_web_routes")
+@patch("desk.router_infra.list_all_web_routes")
+@patch("desk.router_infra.list_workstations")
+def test_get_router_infra_demand_sources(
+    mock_list_ws: MagicMock,
+    mock_routes: MagicMock,
+    mock_prune: MagicMock,
+) -> None:
+    mock_routes.return_value = {"main": [5173], "gone": [8080]}
+    mock_list_ws.return_value = [
+        Workstation(instance_id="i-1", name="main", state="pending", shutdown_at=None, image_id="ami-1"),
+    ]
+    sources = get_router_infra_demand_sources(prune_stale=False)
+    assert len(sources) == 1
+    assert sources[0].name == "main"
+    assert sources[0].ports == [5173]
+    mock_prune.assert_not_called()
 
 
 @patch("desk.router_infra.wake_router_infra")
@@ -102,6 +123,7 @@ def test_reconcile_sleep_when_idle(
     mock_status.return_value = RouterInfraStatus(
         phase="active",
         active_stack_present=True,
+        asg_desired=1,
         base_stack_status="UPDATE_COMPLETE",
         active_stack_status="CREATE_COMPLETE",
     )

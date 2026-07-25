@@ -6,9 +6,10 @@ import os
 
 import click
 
-from desk.aws import resolve_workstation, terminate_instance
+from desk.aws import list_workstations, resolve_workstation, terminate_instance
 from desk.config import get_desk_settings
 from desk.router_infra import is_router_instance_ops_enabled
+from desk.web_routes import clear_ports
 
 
 @click.command("kill")
@@ -67,4 +68,19 @@ def kill(
 
     click.echo(f"Terminating {instance_id}...")
     terminate_instance(instance_id, region=region, profile=profile)
+    if not infra:
+        ws_name = workstation
+        if workstation.startswith("i-"):
+            for w in list_workstations(
+                region=region,
+                profile=profile,
+                states=["pending", "running", "stopping", "stopped"],
+            ):
+                if w.instance_id == instance_id and w.name:
+                    ws_name = w.name
+                    break
+        try:
+            clear_ports(ws_name)
+        except Exception:
+            pass
     click.secho("Terminated.", fg="red")
