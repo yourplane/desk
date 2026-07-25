@@ -258,7 +258,7 @@ export function RouterInfraSection({
   return (
     <details className="router-infra-section">
       <summary className="router-infra-section__summary">
-        <span className="router-infra-section__title">Router backend</span>
+        <span className="router-infra-section__title">Router infra</span>
         <span
           className="router-infra-section__badge"
           style={{ color: badgeColor, borderColor: badgeColor }}
@@ -280,7 +280,7 @@ export function RouterInfraSection({
             </ul>
             {status.demand_sources.length > 0 ? (
               <div className="router-infra-section__demand">
-                <div className="router-infra-section__demand-title">Keeping backend awake</div>
+                <div className="router-infra-section__demand-title">Keeping router infra awake</div>
                 <ul>
                   {status.demand_sources.map((src) => (
                     <li key={src.name}>

@@ -112,6 +112,30 @@ def test_reconcile_wake_on_demand(
 @patch("desk.router_infra.sleep_router_infra")
 @patch("desk.router_infra.get_router_infra_status")
 @patch("desk.router_infra.router_infra_demand_exists")
+def test_reconcile_sleep_stale_asg_without_active(
+    mock_demand: MagicMock,
+    mock_status: MagicMock,
+    mock_sleep: MagicMock,
+) -> None:
+    from desk.router_infra import RouterInfraStatus
+
+    mock_demand.return_value = False
+    mock_status.return_value = RouterInfraStatus(
+        phase="sleeping",
+        active_stack_present=False,
+        asg_desired=1,
+        base_stack_status="UPDATE_COMPLETE",
+        active_stack_status=None,
+    )
+    mock_sleep.return_value = {"step": "sleep"}
+    result = reconcile_router_infra()
+    assert result["action"] == "sleep"
+    mock_sleep.assert_called_once()
+
+
+@patch("desk.router_infra.sleep_router_infra")
+@patch("desk.router_infra.get_router_infra_status")
+@patch("desk.router_infra.router_infra_demand_exists")
 def test_reconcile_sleep_when_idle(
     mock_demand: MagicMock,
     mock_status: MagicMock,
@@ -130,6 +154,30 @@ def test_reconcile_sleep_when_idle(
     mock_sleep.return_value = {"step": "sleep"}
     result = reconcile_router_infra()
     assert result["action"] == "sleep"
+
+
+@patch("desk.router_infra.sleep_router_infra")
+@patch("desk.router_infra.get_router_infra_status")
+@patch("desk.router_infra.router_infra_demand_exists")
+def test_reconcile_sleep_stale_asg_without_active(
+    mock_demand: MagicMock,
+    mock_status: MagicMock,
+    mock_sleep: MagicMock,
+) -> None:
+    from desk.router_infra import RouterInfraStatus
+
+    mock_demand.return_value = False
+    mock_status.return_value = RouterInfraStatus(
+        phase="sleeping",
+        active_stack_present=False,
+        asg_desired=1,
+        base_stack_status="UPDATE_COMPLETE",
+        active_stack_status=None,
+    )
+    mock_sleep.return_value = {"step": "sleep"}
+    result = reconcile_router_infra()
+    assert result["action"] == "sleep"
+    mock_sleep.assert_called_once()
 
 
 @patch("desk.router_infra._update_base_active_params")

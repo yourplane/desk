@@ -33,7 +33,7 @@ FRIENDLY_LABELS: dict[RouterInfraPhase, str] = {
 
 @dataclass
 class DemandSource:
-    """Workstation + ports that keep router backend awake."""
+    """Workstation + ports that keep router infra awake."""
 
     name: str
     ports: list[int]
@@ -58,7 +58,7 @@ class RouterInfraStatus:
 
 
 def router_infra_friendly_label(phase: RouterInfraPhase) -> str:
-    """User-facing backend state label."""
+    """User-facing router infra state label."""
     return FRIENDLY_LABELS.get(phase, phase)
 
 
@@ -264,6 +264,8 @@ def get_router_infra_status(
         phase = "sleeping" if _is_in_progress(base_status) else "idle"
     elif active_present and target_health == "healthy" and (asg_in_service or 0) >= 1:
         phase = "active"
+    elif not active_present and (asg_desired or 0) > 0:
+        phase = "sleeping"
     elif active_present or (asg_desired or 0) > 0:
         phase = "waking"
     else:
@@ -434,10 +436,15 @@ def sleep_router_infra(
     )
 
     active_status = _stack_status(cf, ROUTER_ACTIVE_STACK)
-    if active_status and active_status != "DELETE_COMPLETE":
+    if active_status and active_status not in ("DELETE_COMPLETE", "DELETE_FAILED"):
         cf.delete_stack(StackName=ROUTER_ACTIVE_STACK)
         log.info("delete_stack %s started", ROUTER_ACTIVE_STACK)
         return {"step": "sleep", "deleted_active_stack": True}
+
+    if active_status == "DELETE_FAILED":
+        cf.delete_stack(StackName=ROUTER_ACTIVE_STACK)
+        log.info("retry delete_stack %s after DELETE_FAILED", ROUTER_ACTIVE_STACK)
+        return {"step": "sleep", "deleted_active_stack": True, "retry": True}
 
     return {"step": "sleep", "deleted_active_stack": False}
 
@@ -500,9 +507,17 @@ def reconcile_router_infra(
         return {"action": "noop", "phase": status.phase, "demand": True}
 
     billable_active = status.active_stack_present or (status.asg_desired or 0) > 0
-    if not demand and billable_active and status.phase not in ("sleeping", "waking"):
-        if _is_in_progress(status.base_stack_status) or _is_in_progress(status.active_stack_status):
+    if not demand and billable_active:
+        if _is_in_progress(status.base_stack_status) or _is_in_progress(
+            status.active_stack_status or ""
+        ):
             return {"action": "noop", "reason": "stack operation in progress"}
+        wake_in_progress = status.phase == "waking" and (
+            status.active_stack_present
+            or _is_in_progress(status.active_stack_status or "")
+        )
+        if wake_in_progress:
+            return {"action": "noop", "phase": status.phase, "demand": False}
         result = sleep_router_infra(region=region, profile=profile)
         return {"action": "sleep", **result}
 
