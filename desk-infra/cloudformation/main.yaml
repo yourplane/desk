@@ -100,6 +100,7 @@ Resources:
                 - ec2:DescribeTags
                 - ec2:DescribeImages
                 - ec2:DescribeLaunchTemplateVersions
+                - ec2:DescribeLaunchTemplates
                 - ec2:StartInstances
                 - ec2:StopInstances
                 - ec2:TerminateInstances
@@ -123,6 +124,8 @@ Resources:
               Action:
                 - ec2:AuthorizeSecurityGroupIngress
                 - ec2:RevokeSecurityGroupIngress
+                - ec2:AuthorizeSecurityGroupEgress
+                - ec2:RevokeSecurityGroupEgress
                 - ec2:CreateSecurityGroup
                 - ec2:DeleteSecurityGroup
                 - ec2:DescribeSecurityGroups

@@ -72,6 +72,43 @@ def test_get_router_infra_status_idle(mock_session: MagicMock) -> None:
     assert status.demand_sources == []
 
 
+@patch("desk.router_infra._session")
+def test_get_router_infra_status_idle_with_demand_shows_waking(mock_session: MagicMock) -> None:
+    from botocore.exceptions import ClientError as BotoClientError
+    from desk.router_infra import DemandSource
+
+    cf = MagicMock()
+
+    def describe_side_effect(StackName=None, **kwargs):
+        if StackName == "desk-router":
+            return {
+                "Stacks": [{
+                    "StackStatus": "UPDATE_COMPLETE",
+                    "Outputs": [{"OutputKey": "RouterAsgName", "OutputValue": "desk-router-asg"}],
+                    "Parameters": [],
+                }]
+            }
+        raise BotoClientError({"Error": {"Code": "ValidationError", "Message": "not found"}}, "DescribeStacks")
+
+    cf.describe_stacks.side_effect = describe_side_effect
+    asg = MagicMock()
+    asg.describe_auto_scaling_groups.return_value = {
+        "AutoScalingGroups": [{"DesiredCapacity": 0, "Instances": []}],
+    }
+    mock_session.return_value.client.side_effect = lambda svc, **kw: cf if svc == "cloudformation" else asg
+    mock_session.return_value.region_name = "us-east-1"
+    mock_session.return_value.profile_name = None
+
+    with patch(
+        "desk.router_infra.get_router_infra_demand_sources",
+        return_value=[DemandSource(name="main", ports=[5173], state="running")],
+    ):
+        status = get_router_infra_status()
+    assert status.phase == "waking"
+    assert status.demand is True
+    assert router_infra_friendly_label(status.phase) == "Starting"
+
+
 @patch("desk.web_routes.prune_stale_web_routes")
 @patch("desk.router_infra.list_all_web_routes")
 @patch("desk.router_infra.list_workstations")

@@ -22,6 +22,7 @@ Resources:
               Action:
                 - ec2:DescribeInstances
                 - ec2:StopInstances
+                - ec2:DescribeLaunchTemplates
               Resource: "*"
             - Effect: Allow
               Action:
@@ -38,6 +39,8 @@ Resources:
               Action:
                 - ec2:AuthorizeSecurityGroupIngress
                 - ec2:RevokeSecurityGroupIngress
+                - ec2:AuthorizeSecurityGroupEgress
+                - ec2:RevokeSecurityGroupEgress
                 - ec2:CreateSecurityGroup
                 - ec2:DeleteSecurityGroup
                 - ec2:DescribeSecurityGroups

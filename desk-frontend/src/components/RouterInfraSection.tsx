@@ -1,7 +1,6 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
-  fetchRouterInfraStatus,
   killInstance,
   listInstances,
   sleepRouterInfra,
@@ -18,6 +17,10 @@ import { formatAmiLine, futureRouterAmiSummaryClass, instanceKey, stateColor } f
 
 const POLL_INTERVAL_MS = 10_000
 const BACKGROUND_POLL_INTERVAL_MS = 5 * 60 * 1000
+
+function RouterInfraSpinner() {
+  return <span className="port-chip-favicon-spinner router-infra-section__spinner" aria-hidden="true" />
+}
 
 function friendlyPhaseColor(label: RouterInfraStatus['friendly_label']): string {
   switch (label) {
@@ -151,11 +154,13 @@ function RouterInstanceRow({
 }
 
 export function RouterInfraSection({
+  statusQuery,
   pollIntervalMs,
   acting,
   setActing,
   setActionError,
 }: {
+  statusQuery: UseQueryResult<RouterInfraStatus>
   pollIntervalMs: number
   acting: string | null
   setActing: (v: string | null) => void
@@ -163,13 +168,6 @@ export function RouterInfraSection({
 }) {
   const queryClient = useQueryClient()
   const [stackActing, setStackActing] = useState(false)
-
-  const statusQuery = useQuery({
-    queryKey: queryKeys.routerInfraStatus,
-    queryFn: fetchRouterInfraStatus,
-    staleTime: 5_000,
-    refetchInterval: () => (acting !== null || stackActing ? false : pollIntervalMs),
-  })
 
   const routerInstancesQuery = useQuery({
     queryKey: queryKeys.workstations(true),
@@ -179,6 +177,7 @@ export function RouterInfraSection({
   })
 
   const status = statusQuery.data
+  const statusPending = statusQuery.isPending && statusQuery.data === undefined
   const routerInstances = routerInstancesQuery.data?.instances ?? []
   const futureRouterAmi = routerInstancesQuery.data?.future_router_ami
   const instanceOpsEnabled = status?.instance_ops_enabled ?? false
@@ -253,7 +252,7 @@ export function RouterInfraSection({
   }
 
   const friendlyLabel = status?.friendly_label ?? '…'
-  const badgeColor = friendlyPhaseColor(friendlyLabel)
+  const badgeColor = status ? friendlyPhaseColor(friendlyLabel) : '#94a3b8'
 
   return (
     <details className="router-infra-section">
@@ -263,11 +262,15 @@ export function RouterInfraSection({
           className="router-infra-section__badge"
           style={{ color: badgeColor, borderColor: badgeColor }}
         >
-          {friendlyLabel}
+          {statusPending ? <RouterInfraSpinner /> : friendlyLabel}
         </span>
       </summary>
       <div className="router-infra-section__body">
-        {status && (
+        {statusPending ? (
+          <p className="router-infra-section__loading" role="status">
+            <RouterInfraSpinner /> Loading router infra status…
+          </p>
+        ) : status ? (
           <>
             <p className="router-infra-section__friendly">{status.friendly_label}</p>
             <ul className="router-infra-status__details">
@@ -328,8 +331,8 @@ export function RouterInfraSection({
               </button>
             </div>
           </>
-        )}
-        {futureRouterAmi && <FutureRouterAmiSummary info={futureRouterAmi} />}
+        ) : null}
+        {!statusPending && futureRouterAmi && <FutureRouterAmiSummary info={futureRouterAmi} />}
         <div className="table-wrap router-infra-section__table">
           <table className="instances-table">
             <thead>

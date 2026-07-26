@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  fetchRouterInfraStatus,
   listInstances,
   setAutoStop,
   startInstance,
@@ -89,6 +90,13 @@ export function InstanceList() {
     refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
   })
 
+  const routerInfraStatusQuery = useQuery({
+    queryKey: queryKeys.routerInfraStatus,
+    queryFn: fetchRouterInfraStatus,
+    staleTime: 5_000,
+    refetchInterval: () => (actingRef.current !== null ? false : pollIntervalMs),
+  })
+
   const instances: Instance[] = instancesQuery.data?.instances ?? []
   const displayInstances = useMemo(() => {
     const serverNames = new Set(instances.map((inst) => inst.name))
@@ -96,7 +104,9 @@ export function InstanceList() {
     return [...instances, ...pending]
   }, [instances, optimisticInstances])
   const instancesLoading =
-    instancesQuery.isFetching && instances.length === 0 && !instancesQuery.isError
+    (instancesQuery.isPending || instancesQuery.isFetching) &&
+    instances.length === 0 &&
+    !instancesQuery.isError
   const blockingError =
     instancesQuery.isError && instancesQuery.data === undefined
       ? instancesQuery.error instanceof Error
@@ -285,10 +295,6 @@ export function InstanceList() {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [openAutoStopFor])
 
-  if (instancesQuery.isPending && instancesQuery.data === undefined) {
-    return <p className="loading">Loading instances…</p>
-  }
-
   if (error) {
     const isAuthError = /session expired|invalid|log in again/i.test(error)
     return (
@@ -299,6 +305,13 @@ export function InstanceList() {
             Log in again
           </button>
         )}
+        <RouterInfraSection
+          statusQuery={routerInfraStatusQuery}
+          pollIntervalMs={pollIntervalMs}
+          acting={acting}
+          setActing={setActing}
+          setActionError={setActionError}
+        />
         {createSection}
       </>
     )
@@ -319,6 +332,7 @@ export function InstanceList() {
         <p className="error-message" role="alert">{actionError}</p>
       )}
       <RouterInfraSection
+        statusQuery={routerInfraStatusQuery}
         pollIntervalMs={pollIntervalMs}
         acting={acting}
         setActing={setActing}

@@ -125,6 +125,23 @@ def _is_failed(status: str | None) -> bool:
     return "FAILED" in status or status.endswith("_ROLLBACK_COMPLETE")
 
 
+def _active_stack_needs_delete(status: str | None) -> bool:
+    """True when desk-router-active exists but is not usable (failed create/update)."""
+    if not status or status in ("DELETE_COMPLETE", "DELETE_IN_PROGRESS"):
+        return False
+    if status in ("DELETE_FAILED",):
+        return True
+    if "ROLLBACK" in status or status in ("CREATE_FAILED", "UPDATE_FAILED"):
+        return True
+    return False
+
+
+def _active_stack_usable(status: str | None) -> bool:
+    if not status:
+        return False
+    return status.endswith("_COMPLETE") and "ROLLBACK" not in status and "DELETE" not in status
+
+
 def get_router_infra_demand_sources(
     *,
     region: str | None = None,
@@ -271,6 +288,9 @@ def get_router_infra_status(
     else:
         phase = "idle"
 
+    if demand and phase == "idle":
+        phase = "waking"
+
     return RouterInfraStatus(
         phase=phase,
         base_stack_status=base_status,
@@ -373,6 +393,11 @@ def wake_router_infra(
         raise RuntimeError("desk-router stack missing CloudFrontVpcOriginPrefixListId parameter.")
 
     active_status = _stack_status(cf, ROUTER_ACTIVE_STACK)
+    if _active_stack_needs_delete(active_status):
+        cf.delete_stack(StackName=ROUTER_ACTIVE_STACK)
+        log.info("delete_stack %s (status=%s) before recreate", ROUTER_ACTIVE_STACK, active_status)
+        return {"step": "delete_failed_active_stack", "stack": ROUTER_ACTIVE_STACK}
+
     if active_status is None or active_status == "DELETE_COMPLETE":
         template_url = _active_template_url(session)
         cf.create_stack(
@@ -391,6 +416,9 @@ def wake_router_infra(
     if _is_in_progress(active_status):
         log.info("desk-router-active already %s", active_status)
         return {"step": "already_in_progress", "stack_status": active_status}
+
+    if not _active_stack_usable(active_status):
+        raise RuntimeError(f"desk-router-active stack status {active_status!r} is not usable.")
 
     active_outputs = _stack_outputs(cf, ROUTER_ACTIVE_STACK)
     enable_cf = base_params.get("EnableWebRouterCloudFront", "false") == "true"
@@ -463,6 +491,8 @@ def ensure_router_up(
     if status.phase == "unavailable":
         log.warning("ensure_router_up: base stack unavailable")
         return
+    if status.phase == "error":
+        log.warning("ensure_router_up: router infra in error state; attempting wake")
     try:
         wake_router_infra(region=region, profile=profile)
     except Exception:
@@ -492,7 +522,7 @@ def reconcile_router_infra(
             session = _session(region, profile)
             cf = session.client("cloudformation")
             active_status = status.active_stack_status
-            if active_status and active_status.endswith("_COMPLETE") and "DELETE" not in active_status:
+            if active_status and _active_stack_usable(active_status):
                 base_params = _stack_params(cf, ROUTER_BASE_STACK)
                 if not base_params.get("ActiveAlbArn"):
                     active_outputs = _stack_outputs(cf, ROUTER_ACTIVE_STACK)
