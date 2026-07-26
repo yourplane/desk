@@ -66,9 +66,26 @@ class DailyCost:
 
 
 @dataclass
+class HourlyCost:
+    hour: int
+    total: float
+    status: str  # "complete" | "partial" | "future"
+
+
+@dataclass
+class TodayUtcDetail:
+    date: str
+    hourly: list[HourlyCost] = field(default_factory=list)
+    spend_so_far: float = 0.0
+    projected_total: float | None = None
+    projection_available: bool = False
+
+
+@dataclass
 class CostSummary:
     months: list[MonthlyCost] = field(default_factory=list)
     daily_current_month: list[DailyCost] = field(default_factory=list)
+    today_utc: TodayUtcDetail | None = None
 
 
 def _parse_results_by_time(results: list[dict]) -> list[dict]:
@@ -93,6 +110,58 @@ def _parse_results_by_time(results: list[dict]) -> list[dict]:
                 "amount": amount,
             })
     return entries
+
+
+def _parse_hour_from_period(period_start: str) -> int:
+    """Extract UTC hour (0-23) from a Cost Explorer TimePeriod Start value."""
+    if "T" in period_start:
+        dt = datetime.fromisoformat(period_start.replace("Z", "+00:00"))
+        return dt.hour
+    # Daily-style date string — treat as hour 0
+    return 0
+
+
+def _build_today_utc_detail(hourly_results: list[dict], today_utc: date) -> TodayUtcDetail:
+    """Build today's UTC hourly breakdown and end-of-day projection."""
+    now_utc = datetime.now(timezone.utc)
+    current_hour = now_utc.hour if now_utc.date() == today_utc else 24
+
+    hour_amounts: dict[int, float] = {}
+    for result in hourly_results:
+        period_start = result["TimePeriod"]["Start"]
+        hour = _parse_hour_from_period(period_start)
+        amt = float(result.get("Total", {}).get("UnblendedCost", {}).get("Amount", "0"))
+        hour_amounts[hour] = round(amt, 2)
+
+    hourly: list[HourlyCost] = []
+    for h in range(24):
+        if h > current_hour:
+            hourly.append(HourlyCost(hour=h, total=0.0, status="future"))
+        elif h == current_hour and h in hour_amounts:
+            hourly.append(HourlyCost(hour=h, total=hour_amounts[h], status="partial"))
+        elif h <= current_hour:
+            hourly.append(HourlyCost(hour=h, total=hour_amounts.get(h, 0.0), status="complete"))
+        else:
+            hourly.append(HourlyCost(hour=h, total=0.0, status="future"))
+
+    spend_so_far = round(sum(hour_amounts.values()), 2)
+
+    last_complete_hour = current_hour - 1 if current_hour > 0 else None
+    if last_complete_hour is not None:
+        rate = hour_amounts.get(last_complete_hour, 0.0)
+        projected_total = round(rate * 24, 2)
+        projection_available = True
+    else:
+        projected_total = None
+        projection_available = False
+
+    return TodayUtcDetail(
+        date=today_utc.isoformat(),
+        hourly=hourly,
+        spend_so_far=spend_so_far,
+        projected_total=projected_total,
+        projection_available=projection_available,
+    )
 
 
 def get_cost_summary(
@@ -169,4 +238,25 @@ def get_cost_summary(
 
     daily_list.sort(key=lambda d: d.date)
 
-    return CostSummary(months=monthly_list, daily_current_month=daily_list)
+    today_utc = datetime.now(timezone.utc).date()
+    hourly_start = today_utc.isoformat()
+    hourly_end = (today_utc + timedelta(days=1)).isoformat()
+
+    log.debug("get_cost_summary hourly range %s to %s", hourly_start, hourly_end)
+
+    hourly_response = ce.get_cost_and_usage(
+        TimePeriod={"Start": hourly_start, "End": hourly_end},
+        Granularity="HOURLY",
+        Metrics=["UnblendedCost"],
+    )
+
+    today_detail = _build_today_utc_detail(
+        hourly_response.get("ResultsByTime", []),
+        today_utc,
+    )
+
+    return CostSummary(
+        months=monthly_list,
+        daily_current_month=daily_list,
+        today_utc=today_detail,
+    )

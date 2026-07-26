@@ -1,5 +1,6 @@
 """Cost Explorer module tests (mocked)."""
 
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from desk.costs import (
@@ -7,6 +8,8 @@ from desk.costs import (
     DailyCost,
     MonthlyCost,
     ServiceCost,
+    TodayUtcDetail,
+    _build_today_utc_detail,
     _friendly_name,
     _category,
     get_cost_summary,
@@ -88,6 +91,19 @@ def test_get_cost_summary_success(mock_session: MagicMock) -> None:
                 },
             ],
         },
+        # Hourly response (today UTC)
+        {
+            "ResultsByTime": [
+                {
+                    "TimePeriod": {"Start": "2026-03-02T08:00:00Z", "End": "2026-03-02T09:00:00Z"},
+                    "Total": {"UnblendedCost": {"Amount": "0.20", "Unit": "USD"}},
+                },
+                {
+                    "TimePeriod": {"Start": "2026-03-02T09:00:00Z", "End": "2026-03-02T10:00:00Z"},
+                    "Total": {"UnblendedCost": {"Amount": "0.25", "Unit": "USD"}},
+                },
+            ],
+        },
     ]
 
     result = get_cost_summary(months=2)
@@ -113,6 +129,9 @@ def test_get_cost_summary_success(mock_session: MagicMock) -> None:
     assert result.daily_current_month[0].date == "2026-03-01"
     assert result.daily_current_month[0].total == 4.50
     assert result.daily_current_month[1].total == 5.10
+
+    assert result.today_utc is not None
+    assert len(result.today_utc.hourly) == 24
 
 
 @patch("desk.costs.boto3.Session")
@@ -140,6 +159,7 @@ def test_get_cost_summary_filters_tiny_amounts(mock_session: MagicMock) -> None:
             ],
         },
         {"ResultsByTime": []},
+        {"ResultsByTime": []},
     ]
 
     result = get_cost_summary(months=1)
@@ -159,6 +179,7 @@ def test_get_cost_summary_empty(mock_session: MagicMock) -> None:
     mock_ce.get_cost_and_usage.side_effect = [
         {"ResultsByTime": []},
         {"ResultsByTime": []},
+        {"ResultsByTime": []},
     ]
 
     result = get_cost_summary(months=6)
@@ -166,3 +187,58 @@ def test_get_cost_summary_empty(mock_session: MagicMock) -> None:
     assert isinstance(result, CostSummary)
     assert result.months == []
     assert result.daily_current_month == []
+    assert result.today_utc is not None
+
+
+@patch("desk.costs.datetime")
+def test_build_today_utc_detail_projection(mock_dt: MagicMock) -> None:
+    """Projection uses last complete hour rate × 24."""
+    mock_dt.now.return_value = datetime(2026, 3, 2, 10, 30, tzinfo=timezone.utc)
+    mock_dt.fromisoformat = datetime.fromisoformat
+
+    today = date(2026, 3, 2)
+    hourly_results = [
+        {
+            "TimePeriod": {"Start": "2026-03-02T08:00:00Z", "End": "2026-03-02T09:00:00Z"},
+            "Total": {"UnblendedCost": {"Amount": "0.20", "Unit": "USD"}},
+        },
+        {
+            "TimePeriod": {"Start": "2026-03-02T09:00:00Z", "End": "2026-03-02T10:00:00Z"},
+            "Total": {"UnblendedCost": {"Amount": "0.30", "Unit": "USD"}},
+        },
+        {
+            "TimePeriod": {"Start": "2026-03-02T10:00:00Z", "End": "2026-03-02T11:00:00Z"},
+            "Total": {"UnblendedCost": {"Amount": "0.15", "Unit": "USD"}},
+        },
+    ]
+
+    detail = _build_today_utc_detail(hourly_results, today)
+
+    assert isinstance(detail, TodayUtcDetail)
+    assert detail.spend_so_far == 0.65
+    assert detail.projection_available is True
+    assert detail.projected_total == 7.20  # 0.30 × 24 (hour 9 is last complete)
+    assert detail.hourly[9].status == "complete"
+    assert detail.hourly[10].status == "partial"
+    assert detail.hourly[11].status == "future"
+
+
+@patch("desk.costs.datetime")
+def test_build_today_utc_detail_no_projection_early_day(mock_dt: MagicMock) -> None:
+    """Before the first complete hour, projection is unavailable."""
+    mock_dt.now.return_value = datetime(2026, 3, 2, 0, 30, tzinfo=timezone.utc)
+    mock_dt.fromisoformat = datetime.fromisoformat
+
+    today = date(2026, 3, 2)
+    hourly_results = [
+        {
+            "TimePeriod": {"Start": "2026-03-02T00:00:00Z", "End": "2026-03-02T01:00:00Z"},
+            "Total": {"UnblendedCost": {"Amount": "0.05", "Unit": "USD"}},
+        },
+    ]
+
+    detail = _build_today_utc_detail(hourly_results, today)
+
+    assert detail.projection_available is False
+    assert detail.projected_total is None
+    assert detail.hourly[0].status == "partial"

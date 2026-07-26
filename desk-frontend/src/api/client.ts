@@ -153,9 +153,24 @@ export interface DailyTotal {
   total: number
 }
 
+export interface HourlyCost {
+  hour: number
+  total: number
+  status: 'complete' | 'partial' | 'future'
+}
+
+export interface TodayUtcDetail {
+  date: string
+  hourly: HourlyCost[]
+  spend_so_far: number
+  projected_total: number | null
+  projection_available: boolean
+}
+
 export interface CostSummary {
   months: CostMonth[]
   daily_current_month: DailyTotal[]
+  today_utc: TodayUtcDetail | null
 }
 
 export async function fetchCosts(): Promise<CostSummary> {

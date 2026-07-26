@@ -44,4 +44,18 @@ def get_costs():
             {"date": d.date, "total": d.total}
             for d in summary.daily_current_month
         ],
+        "today_utc": (
+            {
+                "date": summary.today_utc.date,
+                "hourly": [
+                    {"hour": h.hour, "total": h.total, "status": h.status}
+                    for h in summary.today_utc.hourly
+                ],
+                "spend_so_far": summary.today_utc.spend_so_far,
+                "projected_total": summary.today_utc.projected_total,
+                "projection_available": summary.today_utc.projection_available,
+            }
+            if summary.today_utc
+            else None
+        ),
     }
