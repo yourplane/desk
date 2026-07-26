@@ -1,25 +1,76 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Lambda that stops desk workstations past their auto-stop time, triggered every 10 minutes
+Description: Lambda that stops desk workstations past their auto-stop time and reconciles router infra idle/wake, triggered every 10 minutes
 
 Resources:
   ReaperFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: desk-reaper
-      Description: Stops desk workstations past their desk:shutdown-at time
+      Description: Stops overdue workstations and reconciles router infra wake/sleep
       Runtime: python3.12
       CodeUri: reaper/
       Handler: handler.handler
-      Timeout: 60
+      Timeout: 120
       MemorySize: 128
+      Environment:
+        Variables:
+          DESK_DATA_BUCKET: !Sub "${DeskWebStackName}-data-${AWS::AccountId}"
       Policies:
         - Statement:
             - Effect: Allow
               Action:
                 - ec2:DescribeInstances
                 - ec2:StopInstances
+                - ec2:DescribeLaunchTemplates
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - cloudformation:DescribeStacks
+                - cloudformation:CreateStack
+                - cloudformation:UpdateStack
+                - cloudformation:DeleteStack
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - autoscaling:DescribeAutoScalingGroups
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ec2:AuthorizeSecurityGroupIngress
+                - ec2:RevokeSecurityGroupIngress
+                - ec2:AuthorizeSecurityGroupEgress
+                - ec2:RevokeSecurityGroupEgress
+                - ec2:CreateSecurityGroup
+                - ec2:DeleteSecurityGroup
+                - ec2:DescribeSecurityGroups
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - elasticloadbalancing:CreateLoadBalancer
+                - elasticloadbalancing:DeleteLoadBalancer
+                - elasticloadbalancing:DescribeLoadBalancers
+                - elasticloadbalancing:CreateTargetGroup
+                - elasticloadbalancing:DeleteTargetGroup
+                - elasticloadbalancing:CreateListener
+                - elasticloadbalancing:DeleteListener
+                - elasticloadbalancing:DescribeListeners
+                - elasticloadbalancing:ModifyListener
+                - elasticloadbalancing:AddTags
+                - elasticloadbalancing:RemoveTags
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - elasticloadbalancing:DescribeTargetHealth
+                - elasticloadbalancing:DescribeTargetGroups
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:ListBucket
+              Resource:
+                - !Sub "arn:${AWS::Partition}:s3:::${DeskWebStackName}-data-${AWS::AccountId}"
+                - !Sub "arn:${AWS::Partition}:s3:::${DeskWebStackName}-data-${AWS::AccountId}/*"
       Tags:
         desk:managed: "true"
       Events:
@@ -31,6 +82,12 @@ Resources:
             Enabled: true
     Metadata:
       BuildMethod: makefile
+
+Parameters:
+  DeskWebStackName:
+    Type: String
+    Default: desk-web
+    Description: Web app stack name (for DESK_DATA_BUCKET and S3 template access)
 
 Outputs:
   ReaperFunctionArn:

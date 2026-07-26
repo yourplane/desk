@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Ephemeral desk router ALB resources — created on wake, deleted on sleep
+
+Parameters:
+  CloudFrontVpcOriginPrefixListId:
+    Type: String
+    Description: EC2 managed prefix list for CloudFront VPC origins
+  RouterSecurityGroupId:
+    Type: String
+    Description: Router instance security group ID (from desk-router base stack)
+
+Resources:
+  RouterAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: desk-router-alb-sg
+      GroupDescription: Inbound from CloudFront VPC origins only; egress to router targets
+      VpcId: !ImportValue desk-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontVpcOriginPrefixListId
+          Description: CloudFront VPC origin to ALB
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: To targets and health checks
+      Tags:
+        - Key: Name
+          Value: desk-router-alb-sg
+        - Key: desk:managed
+          Value: "true"
+
+  RouterAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: desk-router-alb
+      Type: application
+      Scheme: internal
+      IpAddressType: ipv4
+      Subnets: !Split [",", !ImportValue desk-PrivateSubnetIds]
+      SecurityGroups:
+        - !Ref RouterAlbSecurityGroup
+      Tags:
+        - Key: Name
+          Value: desk-router-alb
+        - Key: desk:managed
+          Value: "true"
+
+  RouterTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: desk-router-tg
+      VpcId: !ImportValue desk-VpcId
+      Port: 8780
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckPort: traffic-port
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200,404
+      Tags:
+        - Key: desk:managed
+          Value: "true"
+
+  RouterListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref RouterAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref RouterTargetGroup
+
+  RouterInstanceIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RouterSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 8780
+      ToPort: 8780
+      SourceSecurityGroupId: !Ref RouterAlbSecurityGroup
+
+Outputs:
+  RouterAlbDnsName:
+    Description: DNS name of the internal ALB (CloudFront VPC origin)
+    Value: !GetAtt RouterAlb.DNSName
+    Export:
+      Name: desk-router-active-RouterAlbDnsName
+  RouterAlbArn:
+    Description: ARN of the internal ALB (CloudFront VPC origin endpoint)
+    Value: !Ref RouterAlb
+    Export:
+      Name: desk-router-active-RouterAlbArn
+  RouterAlbHostedZoneId:
+    Description: Route 53 hosted zone ID for the internal ALB (alias records)
+    Value: !GetAtt RouterAlb.CanonicalHostedZoneID
+    Export:
+      Name: desk-router-active-RouterAlbHostedZoneId
+  RouterTargetGroupArn:
+    Description: Target group ARN for the router ASG
+    Value: !Ref RouterTargetGroup
+    Export:
+      Name: desk-router-active-RouterTargetGroupArn
+  RouterAlbSecurityGroupId:
+    Description: Security group attached to the internal ALB
+    Value: !Ref RouterAlbSecurityGroup
+    Export:
+      Name: desk-router-active-RouterAlbSecurityGroupId

@@ -35,3 +35,10 @@ def _isolate_desk_config(monkeypatch: pytest.MonkeyPatch) -> None:
             os.unlink(path)
         except OSError:
             pass
+
+
+@pytest.fixture(autouse=True)
+def _noop_ensure_router_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eager router wake is fire-and-forget; skip in unit tests."""
+    monkeypatch.setattr("app.routes.workstations.ensure_router_up", lambda **kw: None)
+    monkeypatch.setattr("app.routes.web_routes.ensure_router_up", lambda **kw: None)

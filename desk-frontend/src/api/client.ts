@@ -521,3 +521,70 @@ export async function setAutoStop(
 
   return parsed as SetAutoStopResult
 }
+
+// ---- Router infra stack ----
+
+export type RouterInfraPhase = 'idle' | 'waking' | 'active' | 'sleeping' | 'error' | 'unavailable'
+
+export interface RouterInfraDemandSource {
+  name: string
+  ports: number[]
+  state: string
+}
+
+export interface RouterInfraStatus {
+  phase: RouterInfraPhase
+  friendly_label: string
+  base_stack_status: string | null
+  active_stack_status: string | null
+  asg_name: string | null
+  asg_desired: number | null
+  asg_in_service: number | null
+  target_health: string | null
+  demand: boolean
+  active_stack_present: boolean
+  instance_ops_enabled: boolean
+  demand_sources: RouterInfraDemandSource[]
+  messages: string[]
+}
+
+export async function fetchRouterInfraStatus(): Promise<RouterInfraStatus> {
+  const res = await fetchWithAuthRetry('/api/router-infra/status', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function wakeRouterInfra(): Promise<Record<string, unknown>> {
+  const res = await fetchWithAuthRetry('/api/router-infra/wake', {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function sleepRouterInfra(force = false): Promise<Record<string, unknown>> {
+  const res = await fetchWithAuthRetry('/api/router-infra/sleep', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch {
+      // use text
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}

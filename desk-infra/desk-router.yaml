@@ -1,5 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Managed desk router - one private EC2 instance in an ASG (Type=router, Name=router), internal ALB for CloudFront VPC origin
+Description: >-
+  Managed desk router base — IAM, launch template, instance SG, ASG shell, and optional CloudFront
+  for public web routes. Ephemeral ALB lives in desk-router-active.
 
 Parameters:
   RouterAmiId:
@@ -31,77 +33,74 @@ Parameters:
     Default: desk
     Description: >-
       VPC stack name probed when resolving the data bucket (second candidate after DeskWebAppStackName).
+  EnableWebRouterCloudFront:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      When "true" and CustomDomainName is set, deploy CloudFront for *.CustomDomainName public web routes.
+  CustomDomainName:
+    Type: String
+    Default: ""
+    Description: Optional FQDN apex for public web routes (e.g. desk.example.com).
+  AcmCertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate ARN in us-east-1 for CustomDomainName wildcard SAN.
+  Route53HostedZoneId:
+    Type: String
+    Default: ""
+    Description: Optional public hosted zone ID for wildcard DNS when CloudFront is enabled.
+  WafWebAclArn:
+    Type: String
+    Default: ""
+    Description: Optional WAF WebACL ARN (from desk-web) attached to the web-router CloudFront distribution.
+  ActiveAlbArn:
+    Type: String
+    Default: ""
+    Description: ARN of the active internal ALB (from desk-router-active); empty when idle.
+  ActiveAlbDnsName:
+    Type: String
+    Default: ""
+    Description: DNS name of the active internal ALB; empty when idle.
+  ActiveAlbHostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route 53 hosted zone ID of the active ALB; empty when idle.
+  ActiveTargetGroupArn:
+    Type: String
+    Default: ""
+    Description: Target group ARN from desk-router-active; empty when idle.
+  RouterDesiredCapacity:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 1
+    Description: Router ASG desired capacity (0 when idle, 1 when active).
+
+Conditions:
+  HasActiveAlb: !Not [!Equals [!Ref ActiveAlbArn, ""]]
+  HasActiveTargetGroup: !Not [!Equals [!Ref ActiveTargetGroupArn, ""]]
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, ""]]
+  DeployWebRouterCloudFront:
+    !And
+    - !Equals [!Ref EnableWebRouterCloudFront, "true"]
+    - !Condition HasCustomDomain
+  DeployWebRouterCloudFrontWithAlb:
+    !And
+    - !Condition DeployWebRouterCloudFront
+    - !Condition HasActiveAlb
+  HasRoute53HostedZone: !Not [!Equals [!Ref Route53HostedZoneId, ""]]
+  DeployWebRouterDns:
+    !And
+    - !Condition DeployWebRouterCloudFrontWithAlb
+    - !Condition HasRoute53HostedZone
+  HasWaf: !Not [!Equals [!Ref WafWebAclArn, ""]]
+  AttachWafToWebRouter: !And
+    - !Condition DeployWebRouterCloudFrontWithAlb
+    - !Condition HasWaf
 
 Resources:
-  RouterAlbSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: desk-router-alb-sg
-      GroupDescription: Inbound from CloudFront VPC origins only; egress to router targets
-      VpcId: !ImportValue desk-VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          SourcePrefixListId: !Ref CloudFrontVpcOriginPrefixListId
-          Description: CloudFront VPC origin to ALB
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
-          Description: To targets and health checks
-      Tags:
-        - Key: Name
-          Value: desk-router-alb-sg
-        - Key: desk:managed
-          Value: "true"
-
-  RouterAlb:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Properties:
-      Name: desk-router-alb
-      Type: application
-      Scheme: internal
-      IpAddressType: ipv4
-      Subnets: !Split [",", !ImportValue desk-PrivateSubnetIds]
-      SecurityGroups:
-        - !Ref RouterAlbSecurityGroup
-      Tags:
-        - Key: Name
-          Value: desk-router-alb
-        - Key: desk:managed
-          Value: "true"
-
-  RouterTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: desk-router-tg
-      VpcId: !ImportValue desk-VpcId
-      Port: 8780
-      Protocol: HTTP
-      TargetType: instance
-      HealthCheckEnabled: true
-      HealthCheckProtocol: HTTP
-      HealthCheckPath: /
-      HealthCheckPort: traffic-port
-      HealthCheckIntervalSeconds: 30
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 3
-      Matcher:
-        HttpCode: 200,404
-      Tags:
-        - Key: desk:managed
-          Value: "true"
-
-  RouterListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref RouterAlb
-      Port: 80
-      Protocol: HTTP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref RouterTargetGroup
-
   RouterSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -117,16 +116,6 @@ Resources:
           Value: desk-router-sg
         - Key: desk:managed
           Value: "true"
-
-  # Separate rule so CloudFormation does not replace the security group (GroupName is fixed).
-  RouterInstanceIngressFromAlb:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref RouterSecurityGroup
-      IpProtocol: tcp
-      FromPort: 8780
-      ToPort: 8780
-      SourceSecurityGroupId: !Ref RouterAlbSecurityGroup
 
   RouterRole:
     Type: AWS::IAM::Role
@@ -145,7 +134,6 @@ Resources:
         - Key: desk:managed
           Value: "true"
 
-  # desk route refresh / add on the router resolves workstations via EC2 and uses SSM port forwarding.
   RouterDeskCliPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -178,7 +166,6 @@ Resources:
             Action:
               - ssm:TerminateSession
             Resource: "*"
-          # route-sync pull: resolve DESK_DATA_BUCKET via CloudFormation outputs, then read web-routes.json from S3.
           - Sid: CfnDescribeDeskDataStacks
             Effect: Allow
             Action:
@@ -249,18 +236,19 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       AutoScalingGroupName: desk-router-asg
-      # Export is comma-separated; ASG requires a list of subnet IDs
       VPCZoneIdentifier: !Split [",", !ImportValue desk-PrivateSubnetIds]
       LaunchTemplate:
         LaunchTemplateId: !Ref RouterLaunchTemplate
         Version: !GetAtt RouterLaunchTemplate.LatestVersionNumber
-      MinSize: 1
+      MinSize: 0
       MaxSize: 1
-      DesiredCapacity: 1
-      HealthCheckType: ELB
+      DesiredCapacity: !Ref RouterDesiredCapacity
+      HealthCheckType: !If [HasActiveTargetGroup, ELB, EC2]
       HealthCheckGracePeriod: 300
-      TargetGroupARNs:
-        - !Ref RouterTargetGroup
+      TargetGroupARNs: !If
+        - HasActiveTargetGroup
+        - - !Ref ActiveTargetGroupArn
+        - !Ref AWS::NoValue
       Tags:
         - Key: Name
           Value: router
@@ -268,6 +256,153 @@ Resources:
         - Key: desk:managed
           Value: "true"
           PropagateAtLaunch: false
+
+  # ---- Public web routes CloudFront (optional; moved from desk-web) ----
+  DeskWebRouterVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Condition: DeployWebRouterCloudFrontWithAlb
+    Properties:
+      VpcOriginEndpointConfig:
+        Arn: !Ref ActiveAlbArn
+        Name: !Sub "${AWS::StackName}-desk-web-router-vpc"
+        HTTPPort: 80
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+
+  RouterSubdomainAuthFunction:
+    Type: AWS::CloudFront::Function
+    Condition: DeployWebRouterCloudFrontWithAlb
+    Properties:
+      Name: !Sub "${AWS::StackName}-router-subdomain-auth"
+      AutoPublish: true
+      FunctionCode: !Sub |
+        function cookieJarHasAuth(jar) {
+          if (!jar) return false;
+          var t = jar.desk_token || jar["desk_token"];
+          var g = jar.desk_web_gate || jar["desk_web_gate"];
+          function present(entry) {
+            if (!entry) return false;
+            if (entry.value && entry.value.length > 0) return true;
+            if (entry.multiValue) {
+              for (var i = 0; i < entry.multiValue.length; i++) {
+                if (entry.multiValue[i].value && entry.multiValue[i].value.length > 0) return true;
+              }
+            }
+            return false;
+          }
+          return present(t) || present(g);
+        }
+        function handler(event) {
+          var request = event.request;
+          var hostHeader = request.headers.host;
+          var host = hostHeader ? hostHeader.value : "";
+          var colon = host.indexOf(":");
+          if (colon >= 0) host = host.substring(0, colon);
+          if (host.length > 0 && host.charAt(host.length - 1) === ".") {
+            host = host.substring(0, host.length - 1);
+          }
+          var apex = "${CustomDomainName}";
+          if (host.length > 0 && host !== apex && host.endsWith("." + apex)) {
+            if (!cookieJarHasAuth(request.cookies)) {
+              var uri = request.uri || "/";
+              var qs = request.querystring;
+              var qParts = [];
+              if (qs) {
+                for (var key in qs) {
+                  if (!Object.prototype.hasOwnProperty.call(qs, key)) continue;
+                  var entry = qs[key];
+                  if (entry.multiValue) {
+                    for (var qi = 0; qi < entry.multiValue.length; qi++) {
+                      var mv = entry.multiValue[qi];
+                      if (mv && mv.value) {
+                        qParts.push(encodeURIComponent(key) + "=" + encodeURIComponent(mv.value));
+                      }
+                    }
+                  } else if (entry.value) {
+                    qParts.push(encodeURIComponent(key) + "=" + encodeURIComponent(entry.value));
+                  }
+                }
+              }
+              var q = qParts.length > 0 ? "?" + qParts.join("&") : "";
+              var returnUrl = "https://" + host + uri + q;
+              var bridge = "https://" + apex + "/session-bridge.html?return=" + encodeURIComponent(returnUrl);
+              return {
+                statusCode: 302,
+                statusDescription: "Found",
+                headers: { location: { value: bridge } }
+              };
+            }
+          }
+          return request;
+        }
+      FunctionConfig:
+        Comment: Require desk_token or desk_web_gate cookie on *.apex hostnames (public web routes)
+        Runtime: cloudfront-js-2.0
+
+  WebRouterCorsResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Condition: DeployWebRouterCloudFrontWithAlb
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-web-router-cors"
+        CorsConfig:
+          AccessControlAllowCredentials: true
+          AccessControlAllowHeaders:
+            Items:
+              - Accept
+              - Content-Type
+              - Origin
+          AccessControlAllowMethods:
+            Items: [GET, HEAD, OPTIONS]
+          AccessControlAllowOrigins:
+            Items:
+              - !Sub "https://${CustomDomainName}"
+          OriginOverride: true
+
+  DeskWebRouterDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: DeployWebRouterCloudFrontWithAlb
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} public web routes (*.${CustomDomainName})"
+        HttpVersion: http2and3
+        Origins:
+          - Id: DeskRouterAlbVpcOrigin
+            DomainName: !Ref ActiveAlbDnsName
+            VpcOriginConfig:
+              VpcOriginId: !Ref DeskWebRouterVpcOrigin
+        DefaultCacheBehavior:
+          TargetOriginId: DeskRouterAlbVpcOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+          ResponseHeadersPolicyId: !Ref WebRouterCorsResponseHeadersPolicy
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt RouterSubdomainAuthFunction.FunctionMetadata.FunctionARN
+        Aliases:
+          - !Sub "*.${CustomDomainName}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AcmCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        WebACLId: !If [AttachWafToWebRouter, !Ref WafWebAclArn, !Ref AWS::NoValue]
+
+  WebRouterWildcardDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployWebRouterDns
+    Properties:
+      HostedZoneId: !Ref Route53HostedZoneId
+      Name: "*"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt DeskWebRouterDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
 
 Outputs:
   RouterAsgName:
@@ -279,18 +414,11 @@ Outputs:
   RouterLaunchTemplateId:
     Description: Launch template for router instances
     Value: !Ref RouterLaunchTemplate
-  RouterAlbDnsName:
-    Description: DNS name of the internal ALB (CloudFront VPC origin)
-    Value: !GetAtt RouterAlb.DNSName
-    Export:
-      Name: desk-router-RouterAlbDnsName
-  RouterAlbArn:
-    Description: ARN of the internal ALB (CloudFront VPC origin endpoint)
-    Value: !Ref RouterAlb
-    Export:
-      Name: desk-router-RouterAlbArn
-  RouterAlbHostedZoneId:
-    Description: Route 53 hosted zone ID for the internal ALB (alias records)
-    Value: !GetAtt RouterAlb.CanonicalHostedZoneID
-    Export:
-      Name: desk-router-RouterAlbHostedZoneId
+  WebRouterCloudFrontDomain:
+    Condition: DeployWebRouterCloudFrontWithAlb
+    Description: DNS target for wildcard public web routes (*.CustomDomainName)
+    Value: !GetAtt DeskWebRouterDistribution.DomainName
+  WebRouterCloudFrontURL:
+    Condition: DeployWebRouterCloudFrontWithAlb
+    Description: Example base URL for web routes (host is {name}-{port}.CustomDomainName)
+    Value: !Sub "https://example.${CustomDomainName}/"

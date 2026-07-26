@@ -26,6 +26,7 @@ from desk.aws import (
     stop_instance,
     terminate_instance,
 )
+from desk.router_infra import ensure_router_up, is_router_instance_ops_enabled
 from desk.config import get_desk_settings
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,10 @@ def create_workstation_route(body: CreateWorkstationBody):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     logger.info("created workstation name=%s instance_id=%s", name, instance_id)
+    try:
+        ensure_router_up(region=region, profile=profile)
+    except Exception:
+        logger.exception("ensure_router_up after create failed")
     return {
         "instance_id": instance_id,
         "name": name,
@@ -234,9 +239,19 @@ def start_workstation_by_name(name: str, infra: bool = False):
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    if infra and not is_router_instance_ops_enabled(region=region, profile=profile):
+        raise HTTPException(
+            status_code=409,
+            detail="Router instance operations are disabled while the active stack is absent.",
+        )
     instance_id, shutdown_at = start_workstation(
         instance_id, shutdown_after="4h", region=region, profile=profile, infra=infra
     )
+    if not infra:
+        try:
+            ensure_router_up(region=region, profile=profile)
+        except Exception:
+            logger.exception("ensure_router_up after start failed")
     return {"instance_id": instance_id, "shutdown_at": shutdown_at}
 
 
@@ -248,6 +263,11 @@ def stop_workstation_by_name(name: str, infra: bool = False):
         instance_id = resolve_workstation(name, region=region, profile=profile, infra=infra)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    if infra and not is_router_instance_ops_enabled(region=region, profile=profile):
+        raise HTTPException(
+            status_code=409,
+            detail="Router instance operations are disabled while the active stack is absent.",
+        )
     stop_instance(instance_id, region=region, profile=profile)
     return {"instance_id": instance_id}
 
@@ -266,11 +286,23 @@ def kill_instance_by_name(name: str, infra: bool = False):
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    if infra and not is_router_instance_ops_enabled(region=region, profile=profile):
+        raise HTTPException(
+            status_code=409,
+            detail="Router instance operations are disabled while the active stack is absent.",
+        )
     try:
         terminate_instance(instance_id, region=region, profile=profile)
     except Exception as e:
         logger.exception("terminate_instance failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    if not infra:
+        try:
+            from desk.web_routes import clear_ports
+
+            clear_ports(name)
+        except Exception:
+            logger.exception("clear_ports after kill failed for name=%s", name)
     return {"instance_id": instance_id}
 
 

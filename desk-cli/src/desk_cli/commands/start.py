@@ -8,6 +8,7 @@ import click
 
 from desk.aws import resolve_workstation, start_workstation
 from desk.config import get_desk_settings
+from desk.router_infra import ensure_router_up, is_router_instance_ops_enabled
 
 
 @click.command("start")
@@ -53,6 +54,11 @@ def start(
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 
+    if infra and not is_router_instance_ops_enabled(region=region, profile=profile):
+        raise click.UsageError(
+            "Router instance operations are disabled while the active stack is absent."
+        )
+
     click.echo(f"Starting {instance_id}...")
     start_workstation(
         instance_id,
@@ -62,3 +68,8 @@ def start(
         infra=infra,
     )
     click.secho("Started.", fg="green")
+    if not infra:
+        try:
+            ensure_router_up(region=region, profile=profile)
+        except Exception:
+            pass
