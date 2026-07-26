@@ -542,16 +542,41 @@ def reconcile_router_infra(
             status.active_stack_status or ""
         ):
             return {"action": "noop", "reason": "stack operation in progress"}
-        wake_in_progress = status.phase == "waking" and (
-            status.active_stack_present
-            or _is_in_progress(status.active_stack_status or "")
-        )
-        if wake_in_progress:
+        # Defer sleep while Starting (wake in progress); sleep when Running/active.
+        if status.phase == "waking":
             return {"action": "noop", "phase": status.phase, "demand": False}
         result = sleep_router_infra(region=region, profile=profile)
         return {"action": "sleep", **result}
 
     return {"action": "noop", "phase": status.phase, "demand": False}
+
+
+def router_infra_reconcile_summary(result: dict[str, Any]) -> str:
+    """Human-readable summary of reconcile_router_infra() for CLI/UI."""
+    action = result.get("action", "unknown")
+    if action == "sleep":
+        return "Router infra shutdown initiated."
+    if action == "wake":
+        step = result.get("step", "wake")
+        return f"Router infra wake initiated ({step})."
+    if action == "complete_wake":
+        return "Router infra wake completed (base stack wired)."
+    if action == "skip":
+        return f"Router infra skipped ({result.get('reason', 'unknown')})."
+    if action == "error":
+        return f"Router infra error: {result.get('detail', 'unknown')}."
+    if action == "noop":
+        reason = result.get("reason")
+        if reason == "stack operation in progress":
+            return "Router infra unchanged (stack operation in progress)."
+        if result.get("demand"):
+            phase = result.get("phase", "?")
+            return f"Router infra kept awake (demand present, {phase})."
+        phase = result.get("phase", "?")
+        if phase == "waking":
+            return "Router infra still starting; sleep deferred until Running or failed."
+        return f"Router infra unchanged ({phase})."
+    return f"Router infra reconcile: {action}."
 
 
 def is_router_instance_ops_enabled(

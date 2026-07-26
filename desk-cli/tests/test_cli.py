@@ -2936,24 +2936,28 @@ def test_desk_reap_help() -> None:
     assert "--dry-run" in output
 
 
+@patch("desk_cli.commands.reap.reconcile_router_infra")
 @patch("desk_cli.commands.reap.reap_overdue")
-def test_desk_reap_stops_overdue(mock_reap: object) -> None:
+def test_desk_reap_stops_overdue(mock_reap: object, mock_reconcile: object) -> None:
     """desk reap stops instances whose shutdown time is in the past."""
     from desk.aws import Workstation
 
     mock_reap.return_value = [
         Workstation(instance_id="i-overdue", name="old", state="running", shutdown_at="2020-01-01T00:00:00Z"),
     ]
+    mock_reconcile.return_value = {"action": "noop", "phase": "idle", "demand": False}
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
-    mock_reap.assert_called_once_with(region=None, profile=None, dry_run=False)
+    mock_reap.assert_called_once_with(region="us-east-1", profile=None, dry_run=False)
+    mock_reconcile.assert_called_once()
     assert "1 workstation(s) stopped" in result.output
     assert "i-overdue" in result.output
 
 
+@patch("desk_cli.commands.reap.reconcile_router_infra")
 @patch("desk_cli.commands.reap.reap_overdue")
-def test_desk_reap_dry_run(mock_reap: object) -> None:
+def test_desk_reap_dry_run(mock_reap: object, mock_reconcile: object) -> None:
     """desk reap --dry-run shows what would be stopped without stopping."""
     from desk.aws import Workstation
 
@@ -2963,33 +2967,42 @@ def test_desk_reap_dry_run(mock_reap: object) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["reap", "--dry-run"])
     assert result.exit_code == 0
-    mock_reap.assert_called_once_with(region=None, profile=None, dry_run=True)
+    mock_reap.assert_called_once_with(region="us-east-1", profile=None, dry_run=True)
+    mock_reconcile.assert_not_called()
     assert "Would stop" in result.output
     assert "would be stopped" in result.output
 
 
+@patch("desk_cli.commands.reap.reconcile_router_infra")
 @patch("desk_cli.commands.reap.reap_overdue")
-def test_desk_reap_none_overdue(mock_reap: object) -> None:
+def test_desk_reap_none_overdue(mock_reap: object, mock_reconcile: object) -> None:
     """desk reap with no overdue instances reports nothing to do."""
     mock_reap.return_value = []
+    mock_reconcile.return_value = {"action": "sleep", "step": "sleep"}
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
     assert "No overdue workstations" in result.output
+    mock_reconcile.assert_called_once()
+    assert "Router infra shutdown initiated" in result.output
 
 
+@patch("desk_cli.commands.reap.reconcile_router_infra")
 @patch("desk_cli.commands.reap.reap_overdue")
-def test_desk_reap_skips_no_tag(mock_reap: object) -> None:
+def test_desk_reap_skips_no_tag(mock_reap: object, mock_reconcile: object) -> None:
     """desk reap skips instances without a shutdown tag."""
     mock_reap.return_value = []
+    mock_reconcile.return_value = {"action": "noop", "phase": "idle", "demand": False}
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
     assert "No overdue workstations" in result.output
+    mock_reconcile.assert_called_once()
 
 
+@patch("desk_cli.commands.reap.reconcile_router_infra")
 @patch("desk_cli.commands.reap.reap_overdue")
-def test_desk_reap_stops_multiple(mock_reap: object) -> None:
+def test_desk_reap_stops_multiple(mock_reap: object, mock_reconcile: object) -> None:
     """desk reap stops all overdue instances."""
     from desk.aws import Workstation
 
@@ -2997,10 +3010,12 @@ def test_desk_reap_stops_multiple(mock_reap: object) -> None:
         Workstation(instance_id="i-one", name="one", state="running", shutdown_at="2020-01-01T00:00:00Z"),
         Workstation(instance_id="i-two", name="two", state="running", shutdown_at="2020-06-01T00:00:00Z"),
     ]
+    mock_reconcile.return_value = {"action": "noop", "phase": "active", "demand": True}
     runner = CliRunner()
     result = runner.invoke(cli, ["reap"])
     assert result.exit_code == 0
     assert "2 workstation(s) stopped" in result.output
+    mock_reconcile.assert_called_once()
 
 
 # --- desk tab ---

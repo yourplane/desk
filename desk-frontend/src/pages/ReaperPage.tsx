@@ -1,6 +1,28 @@
 import { useState } from 'react'
 import { reapWorkstations, type ReapResult } from '../api/client'
 
+function routerInfraReapSummary(routerInfra: NonNullable<ReapResult['router_infra']>): string {
+  const action = routerInfra.action
+  if (action === 'sleep') return 'Router infra shutdown initiated.'
+  if (action === 'wake') return `Router infra wake initiated (${routerInfra.step ?? 'wake'}).`
+  if (action === 'complete_wake') return 'Router infra wake completed (base stack wired).'
+  if (action === 'skip') return `Router infra skipped (${routerInfra.reason ?? 'unknown'}).`
+  if (action === 'error') return `Router infra error: ${routerInfra.detail ?? 'unknown'}.`
+  if (action === 'noop') {
+    if (routerInfra.reason === 'stack operation in progress') {
+      return 'Router infra unchanged (stack operation in progress).'
+    }
+    if (routerInfra.demand) {
+      return `Router infra kept awake (demand present, ${routerInfra.phase ?? '?'}).`
+    }
+    if (routerInfra.phase === 'waking') {
+      return 'Router infra still starting; sleep deferred until Running or failed.'
+    }
+    return `Router infra unchanged (${routerInfra.phase ?? '?'}).`
+  }
+  return `Router infra reconcile: ${action}.`
+}
+
 export function ReaperPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,6 +65,11 @@ export function ReaperPage() {
 
       {result && (
         <div className="reaper-results">
+          {result.router_infra && (
+            <p className="reaper-router-infra" role="status">
+              {routerInfraReapSummary(result.router_infra)}
+            </p>
+          )}
           {result.stopped.length === 0 ? (
             <p className="reaper-empty">No overdue workstations found.</p>
           ) : (

@@ -26,7 +26,7 @@ from desk.aws import (
     stop_instance,
     terminate_instance,
 )
-from desk.router_infra import ensure_router_up, is_router_instance_ops_enabled
+from desk.router_infra import ensure_router_up, is_router_instance_ops_enabled, reconcile_router_infra
 from desk.config import get_desk_settings
 
 logger = logging.getLogger(__name__)
@@ -325,7 +325,13 @@ def reap_workstations():
         for w in overdue
     ]
     logger.info("reap_workstations: stopped %d workstation(s)", len(stopped))
-    return {"stopped": stopped}
+    try:
+        router_infra = reconcile_router_infra(region=region, profile=profile)
+    except Exception as e:
+        logger.exception("reconcile_router_infra after reap failed: %s", e)
+        router_infra = {"action": "error", "detail": str(e)}
+    logger.info("reap_workstations: router_infra=%s", router_infra)
+    return {"stopped": stopped, "router_infra": router_infra}
 
 
 @router.post("/workstations/{name}/auto-stop")

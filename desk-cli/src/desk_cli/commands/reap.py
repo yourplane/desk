@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import os
-
 import click
 
 from desk.aws import reap_overdue
 from desk.config import get_desk_settings
+from desk.router_infra import reconcile_router_infra, router_infra_reconcile_summary
 
 
 @click.command("reap")
@@ -33,17 +32,24 @@ def reap(dry_run: bool) -> None:
 
     if not overdue:
         click.echo("No overdue workstations.")
-        return
-
-    for w in overdue:
-        label = f"{w.name} ({w.instance_id})" if w.name else w.instance_id
-        if dry_run:
-            click.echo(f"  Would stop {label}  (shutdown was {w.shutdown_at})")
-        else:
-            click.echo(f"  Stopping {label}...")
-
-    count = len(overdue)
-    if dry_run:
-        click.secho(f"\n{count} workstation(s) would be stopped.", fg="yellow")
     else:
-        click.secho(f"\n{count} workstation(s) stopped.", fg="green")
+        for w in overdue:
+            label = f"{w.name} ({w.instance_id})" if w.name else w.instance_id
+            if dry_run:
+                click.echo(f"  Would stop {label}  (shutdown was {w.shutdown_at})")
+            else:
+                click.echo(f"  Stopping {label}...")
+
+        count = len(overdue)
+        if dry_run:
+            click.secho(f"\n{count} workstation(s) would be stopped.", fg="yellow")
+        else:
+            click.secho(f"\n{count} workstation(s) stopped.", fg="green")
+
+    if not dry_run:
+        try:
+            router_result = reconcile_router_infra(region=region, profile=profile)
+            click.echo(router_infra_reconcile_summary(router_result))
+        except Exception as e:
+            click.secho(f"Router infra reconcile failed: {e}", fg="red")
+            raise SystemExit(1) from e

@@ -196,7 +196,7 @@ def test_reconcile_sleep_when_idle(
 @patch("desk.router_infra.sleep_router_infra")
 @patch("desk.router_infra.get_router_infra_status")
 @patch("desk.router_infra.router_infra_demand_exists")
-def test_reconcile_sleep_stale_asg_without_active(
+def test_reconcile_noop_while_starting_no_demand(
     mock_demand: MagicMock,
     mock_status: MagicMock,
     mock_sleep: MagicMock,
@@ -205,16 +205,27 @@ def test_reconcile_sleep_stale_asg_without_active(
 
     mock_demand.return_value = False
     mock_status.return_value = RouterInfraStatus(
-        phase="sleeping",
-        active_stack_present=False,
+        phase="waking",
+        active_stack_present=True,
         asg_desired=1,
         base_stack_status="UPDATE_COMPLETE",
-        active_stack_status=None,
+        active_stack_status="CREATE_COMPLETE",
     )
-    mock_sleep.return_value = {"step": "sleep"}
     result = reconcile_router_infra()
-    assert result["action"] == "sleep"
-    mock_sleep.assert_called_once()
+    assert result["action"] == "noop"
+    assert result["phase"] == "waking"
+    mock_sleep.assert_not_called()
+
+
+def test_router_infra_reconcile_summary() -> None:
+    from desk.router_infra import router_infra_reconcile_summary
+
+    assert router_infra_reconcile_summary({"action": "sleep", "step": "sleep"}) == (
+        "Router infra shutdown initiated."
+    )
+    assert "deferred" in router_infra_reconcile_summary(
+        {"action": "noop", "phase": "waking", "demand": False}
+    )
 
 
 @patch("desk.router_infra._update_base_active_params")

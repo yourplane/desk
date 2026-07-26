@@ -167,8 +167,18 @@ export async function fetchCosts(): Promise<CostSummary> {
   return res.json()
 }
 
+export interface ReapRouterInfraResult {
+  action: string
+  phase?: string
+  demand?: boolean
+  reason?: string
+  step?: string
+  detail?: string
+}
+
 export interface ReapResult {
   stopped: { instance_id: string; name: string; shutdown_at: string | null }[]
+  router_infra?: ReapRouterInfraResult
 }
 
 export async function reapWorkstations(): Promise<ReapResult> {

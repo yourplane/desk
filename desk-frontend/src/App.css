@@ -942,6 +942,11 @@
   background: var(--accent-hover);
 }
 
+.reaper-router-infra {
+  margin: 0.75rem 0 0;
+  color: var(--muted, #94a3b8);
+}
+
 .reaper-results {
   margin-top: 1.5rem;
 }
