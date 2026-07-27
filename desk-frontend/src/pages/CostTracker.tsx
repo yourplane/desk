@@ -258,7 +258,7 @@ export function CostTracker() {
 
           <section className="cost-section">
             <h2 className="cost-section-title">Monthly trend</h2>
-            <div className="chart-scroll-wrap chart-scroll-wrap--monthly">
+            <div className="chart-scroll-wrap">
               <div className="bar-chart">
                 {months.map((m, i) => {
                   const outlier = monthlyScale.isOutlier(i)
@@ -279,70 +279,6 @@ export function CostTracker() {
                   )
                 })}
               </div>
-            </div>
-          </section>
-
-          <section className="cost-section">
-            <h2 className="cost-section-title">By category</h2>
-            <div className="table-wrap">
-              <table className="cost-table">
-                <thead>
-                  <tr>
-                    <th>Category</th>
-                    <th className="num-col">{monthLabel(currentMonth!.month)}</th>
-                    {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
-                    {previousMonth && <th className="num-col">Change</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {categoryRows.map((row) => {
-                    const delta = previousMonth
-                      ? pctChange(row.currentAmount, row.previousAmount)
-                      : null
-                    return (
-                      <tr key={row.category}>
-                        <td className="name">{row.category}</td>
-                        <td className="num-col">{fmtUsd(row.currentAmount)}</td>
-                        {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
-                        {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="cost-section">
-            <h2 className="cost-section-title">By service</h2>
-            <div className="table-wrap">
-              <table className="cost-table">
-                <thead>
-                  <tr>
-                    <th>Service</th>
-                    <th>Category</th>
-                    <th className="num-col">{monthLabel(currentMonth!.month)}</th>
-                    {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
-                    {previousMonth && <th className="num-col">Change</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {serviceRows.map((row) => {
-                    const delta = previousMonth
-                      ? pctChange(row.currentAmount, row.previousAmount)
-                      : null
-                    return (
-                      <tr key={row.name}>
-                        <td className="name">{row.name}</td>
-                        <td className="category-label">{row.category}</td>
-                        <td className="num-col">{fmtUsd(row.currentAmount)}</td>
-                        {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
-                        {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
             </div>
           </section>
         </>
@@ -483,6 +419,75 @@ export function CostTracker() {
           </>
         ) : null}
       </section>
+
+      {/* Category + service breakdown tables */}
+      {months.length > 0 && currentMonth && (
+        <>
+          <section className="cost-section">
+            <h2 className="cost-section-title">By category</h2>
+            <div className="table-wrap">
+              <table className="cost-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th className="num-col">{monthLabel(currentMonth!.month)}</th>
+                    {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
+                    {previousMonth && <th className="num-col">Change</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoryRows.map((row) => {
+                    const delta = previousMonth
+                      ? pctChange(row.currentAmount, row.previousAmount)
+                      : null
+                    return (
+                      <tr key={row.category}>
+                        <td className="name">{row.category}</td>
+                        <td className="num-col">{fmtUsd(row.currentAmount)}</td>
+                        {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
+                        {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="cost-section">
+            <h2 className="cost-section-title">By service</h2>
+            <div className="table-wrap">
+              <table className="cost-table">
+                <thead>
+                  <tr>
+                    <th>Service</th>
+                    <th>Category</th>
+                    <th className="num-col">{monthLabel(currentMonth!.month)}</th>
+                    {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
+                    {previousMonth && <th className="num-col">Change</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {serviceRows.map((row) => {
+                    const delta = previousMonth
+                      ? pctChange(row.currentAmount, row.previousAmount)
+                      : null
+                    return (
+                      <tr key={row.name}>
+                        <td className="name">{row.name}</td>
+                        <td className="category-label">{row.category}</td>
+                        <td className="num-col">{fmtUsd(row.currentAmount)}</td>
+                        {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
+                        {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
     </div>
   )
 }
