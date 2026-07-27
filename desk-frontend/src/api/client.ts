@@ -167,10 +167,54 @@ export interface TodayUtcDetail {
   projection_available: boolean
 }
 
+export type TodayUtcResponse =
+  | ({ status: 'ok' } & TodayUtcDetail)
+  | {
+      status: 'unavailable'
+      reason: 'hourly_opt_in_required'
+      message: string
+      setup_url: string
+    }
+
+export interface CostMonthsResponse {
+  months: CostMonth[]
+}
+
+export interface CostDailyResponse {
+  daily_current_month: DailyTotal[]
+}
+
 export interface CostSummary {
   months: CostMonth[]
   daily_current_month: DailyTotal[]
   today_utc: TodayUtcDetail | null
+}
+
+export async function fetchCostMonths(): Promise<CostMonthsResponse> {
+  const res = await fetchWithAuthRetry('/api/costs/months', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function fetchCostDaily(): Promise<CostDailyResponse> {
+  const res = await fetchWithAuthRetry('/api/costs/daily', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
+}
+
+export async function fetchCostTodayUtc(): Promise<TodayUtcResponse> {
+  const res = await fetchWithAuthRetry('/api/costs/today-utc', { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(errorMessage(res, text))
+  }
+  return res.json()
 }
 
 export async function fetchCosts(): Promise<CostSummary> {

@@ -3,17 +3,24 @@
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+from botocore.exceptions import ClientError
+
 from desk.costs import (
     CostSummary,
     DailyCost,
+    HourlyNotEnabledError,
     MonthlyCost,
     ServiceCost,
     TodayUtcDetail,
     _build_today_utc_detail,
     _friendly_name,
     _category,
+    get_cost_months,
     get_cost_summary,
+    get_cost_today_utc,
 )
+from botocore.exceptions import ClientError
 
 
 def test_friendly_name_known() -> None:
@@ -269,3 +276,46 @@ def test_get_cost_summary_hourly_time_period_format(
         "Start": "2026-07-27T00:00:00Z",
         "End": "2026-07-28T00:00:00Z",
     }
+
+
+@patch("desk.costs.get_cost_today_utc")
+@patch("desk.costs.get_cost_daily")
+@patch("desk.costs.get_cost_months")
+def test_get_cost_summary_degrades_when_hourly_unavailable(
+    mock_months: MagicMock,
+    mock_daily: MagicMock,
+    mock_today: MagicMock,
+) -> None:
+    """Aggregate summary omits today when hourly opt-in is off."""
+    mock_months.return_value = [MonthlyCost(month="2026-07", total=10.0)]
+    mock_daily.return_value = [DailyCost(date="2026-07-01", total=1.0)]
+    mock_today.side_effect = HourlyNotEnabledError("Hourly data granularity is an opt-in only feature.")
+
+    result = get_cost_summary(months=1)
+
+    assert len(result.months) == 1
+    assert len(result.daily_current_month) == 1
+    assert result.today_utc is None
+
+
+@patch("desk.costs._ce_client")
+def test_get_cost_today_utc_hourly_not_enabled(mock_ce_client: MagicMock) -> None:
+    """Hourly opt-in missing raises HourlyNotEnabledError."""
+    mock_ce = MagicMock()
+    mock_ce_client.return_value = mock_ce
+    mock_ce.get_cost_and_usage.side_effect = ClientError(
+        {
+            "Error": {
+                "Code": "AccessDeniedException",
+                "Message": (
+                    "Hourly data granularity is an opt-in only feature. "
+                    "You can be enable this feature from the PAYER account's "
+                    "Cost Explorer Settings page."
+                ),
+            }
+        },
+        "GetCostAndUsage",
+    )
+
+    with pytest.raises(HourlyNotEnabledError):
+        get_cost_today_utc()

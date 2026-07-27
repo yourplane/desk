@@ -1,6 +1,12 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { fetchCosts, type CostMonth, type HourlyCost } from '../api/client'
+import {
+  fetchCostDaily,
+  fetchCostMonths,
+  fetchCostTodayUtc,
+  type CostMonth,
+  type HourlyCost,
+} from '../api/client'
 import { DataFreshnessBar } from '../DataFreshnessBar'
 import { useAdaptiveRefetchInterval } from '../hooks/useAdaptiveRefetchInterval'
 import { queryKeys } from '../queryKeys'
@@ -8,6 +14,10 @@ import { isAuthEnabled, logout } from '../auth'
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000
 const BACKGROUND_POLL_INTERVAL_MS = 15 * 60 * 1000
+
+const QUERY_OPTS = {
+  staleTime: 60_000,
+} as const
 
 function fmtUsd(amount: number): string {
   return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -51,6 +61,10 @@ function computeMonthlyScale(totals: number[]): { yMax: number; isOutlier: (i: n
   const yMax = Math.max(...(nonOutlierTotals.length > 0 ? nonOutlierTotals : totals), 1)
 
   return { yMax, isOutlier }
+}
+
+function queryErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 interface CategoryRow {
@@ -113,30 +127,76 @@ function hourLabel(hour: number): string {
   return `${hour.toString().padStart(2, '0')}:00`
 }
 
+function SectionError({ message }: { message: string }) {
+  return <p className="cost-section-error" role="alert">{message}</p>
+}
+
+function SectionLoading({ label }: { label: string }) {
+  return <p className="loading cost-section-loading">Loading {label}…</p>
+}
+
 export function CostTracker() {
+  const queryClient = useQueryClient()
   const pollIntervalMs = useAdaptiveRefetchInterval(POLL_INTERVAL_MS, BACKGROUND_POLL_INTERVAL_MS)
   const [selectedDay, setSelectedDay] = useState<string>(() => utcTodayString())
   const [selectedHour, setSelectedHour] = useState<number | null>(null)
 
-  const costsQuery = useQuery({
-    queryKey: queryKeys.costs,
-    queryFn: fetchCosts,
-    staleTime: 60_000,
-    refetchInterval: pollIntervalMs,
+  const refetchOpts = { ...QUERY_OPTS, refetchInterval: pollIntervalMs }
+
+  const monthsQuery = useQuery({
+    queryKey: queryKeys.costsMonths,
+    queryFn: fetchCostMonths,
+    ...refetchOpts,
   })
 
-  const data = costsQuery.data
-  const loading = costsQuery.isPending && costsQuery.data === undefined
-  const error =
-    costsQuery.isError && costsQuery.data === undefined
-      ? costsQuery.error instanceof Error
-        ? costsQuery.error.message
-        : String(costsQuery.error)
-      : null
-  const refreshError =
-    costsQuery.isError && costsQuery.data !== undefined
-      ? 'Could not refresh costs. Showing last successful load.'
-      : null
+  const dailyQuery = useQuery({
+    queryKey: queryKeys.costsDaily,
+    queryFn: fetchCostDaily,
+    ...refetchOpts,
+  })
+
+  const todayQuery = useQuery({
+    queryKey: queryKeys.costsTodayUtc,
+    queryFn: fetchCostTodayUtc,
+    ...refetchOpts,
+  })
+
+  const months = monthsQuery.data?.months ?? []
+  const daily = dailyQuery.data?.daily_current_month ?? []
+  const todayUtc = todayQuery.data
+
+  const monthlyScale = useMemo(() => {
+    if (!months.length) return { yMax: 1, isOutlier: () => false }
+    return computeMonthlyScale(months.map((m) => m.total))
+  }, [months])
+
+  const hourlyMax = useMemo(() => {
+    if (!todayUtc || todayUtc.status !== 'ok') return 0.01
+    const amounts = todayUtc.hourly.filter((h) => h.status !== 'future').map((h) => h.total)
+    return Math.max(...amounts, 0.01)
+  }, [todayUtc])
+
+  const currentMonth = months.length > 0 ? months[months.length - 1] : undefined
+  const previousMonth = months.length >= 2 ? months[months.length - 2] : undefined
+  const categoryRows = buildCategoryRows(currentMonth, previousMonth)
+  const serviceRows = buildServiceRows(currentMonth, previousMonth)
+  const dailyMax = daily.length > 0 ? Math.max(...daily.map((d) => d.total), 1) : 1
+  const totalDelta =
+    currentMonth && previousMonth ? pctChange(currentMonth.total, previousMonth.total) : null
+
+  const dataUpdatedAt = Math.max(
+    monthsQuery.dataUpdatedAt,
+    dailyQuery.dataUpdatedAt,
+    todayQuery.dataUpdatedAt,
+  )
+  const isFetching = monthsQuery.isFetching || dailyQuery.isFetching || todayQuery.isFetching
+
+  const refreshAll = () =>
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.costsMonths }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.costsDaily }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.costsTodayUtc }),
+    ])
 
   const pageHeader = (
     <div className="page-header">
@@ -149,276 +209,279 @@ export function CostTracker() {
     </div>
   )
 
-  const monthlyScale = useMemo(() => {
-    if (!data?.months.length) return { yMax: 1, isOutlier: () => false }
-    return computeMonthlyScale(data.months.map((m) => m.total))
-  }, [data?.months])
-
-  const hourlyMax = useMemo(() => {
-    const hourly = data?.today_utc?.hourly ?? []
-    const amounts = hourly.filter((h) => h.status !== 'future').map((h) => h.total)
-    return Math.max(...amounts, 0.01)
-  }, [data?.today_utc?.hourly])
-
-  if (loading) {
-    return (
-      <div className="cost-tracker">
-        {pageHeader}
-        <p className="loading">Loading cost data…</p>
-      </div>
-    )
-  }
-
-  if (error && !data) {
-    return (
-      <div className="cost-tracker">
-        {pageHeader}
-        <p className="error-message" role="alert">{error}</p>
-      </div>
-    )
-  }
-
-  if (!data || data.months.length === 0) {
-    return (
-      <div className="cost-tracker">
-        {pageHeader}
-        <p className="loading">No cost data available.</p>
-      </div>
-    )
-  }
-
-  const months = data.months
-  const currentMonth = months[months.length - 1]!
-  const previousMonth = months.length >= 2 ? months[months.length - 2]! : undefined
-
-  const categoryRows = buildCategoryRows(currentMonth, previousMonth)
-  const serviceRows = buildServiceRows(currentMonth, previousMonth)
-
-  const daily = data.daily_current_month
-  const dailyMax = Math.max(...daily.map((d) => d.total), 1)
-
-  const totalDelta = previousMonth ? pctChange(currentMonth.total, previousMonth.total) : null
-  const todayUtc = data.today_utc
-
   return (
     <div className="cost-tracker">
       {pageHeader}
       <DataFreshnessBar
         resourceLabel="Cost data"
-        dataUpdatedAt={costsQuery.dataUpdatedAt}
-        isFetching={costsQuery.isFetching}
-        onRefresh={() => void costsQuery.refetch()}
+        dataUpdatedAt={dataUpdatedAt}
+        isFetching={isFetching}
+        onRefresh={refreshAll}
       />
-      {refreshError && (
-        <p className="refresh-error" role="status">{refreshError}</p>
-      )}
 
-      {/* Summary cards */}
-      <div className="cost-cards">
-        <div className="cost-card">
-          <div className="cost-card-label">Current month</div>
-          <div className="cost-card-value">{fmtUsd(currentMonth.total)}</div>
-          <div className="cost-card-sub">{monthLabel(currentMonth.month)}</div>
-        </div>
-        {previousMonth && (
-          <div className="cost-card">
-            <div className="cost-card-label">Previous month</div>
-            <div className="cost-card-value">{fmtUsd(previousMonth.total)}</div>
-            <div className="cost-card-sub">{monthLabel(previousMonth.month)}</div>
-          </div>
-        )}
-        {totalDelta && (
-          <div className="cost-card">
-            <div className="cost-card-label">Month-over-month</div>
-            <div className={`cost-card-value ${totalDelta.className}`}>{totalDelta.text}</div>
-            <div className="cost-card-sub">vs. previous month</div>
-          </div>
-        )}
-      </div>
+      {/* Summary cards + monthly trend + breakdown tables */}
+      {monthsQuery.isPending && !monthsQuery.data ? (
+        <SectionLoading label="monthly costs" />
+      ) : monthsQuery.isError && !monthsQuery.data ? (
+        <SectionError message={queryErrorMessage(monthsQuery.error)} />
+      ) : months.length === 0 ? (
+        <p className="loading">No monthly cost data available.</p>
+      ) : (
+        <>
+          {monthsQuery.isError && monthsQuery.data && (
+            <p className="refresh-error" role="status">
+              Could not refresh monthly costs. Showing last successful load.
+            </p>
+          )}
 
-      {/* Monthly trend */}
-      <section className="cost-section">
-        <h2 className="cost-section-title">Monthly trend</h2>
-        <div className="chart-scroll-wrap chart-scroll-wrap--monthly">
-          <div className="bar-chart">
-            {months.map((m, i) => {
-              const outlier = monthlyScale.isOutlier(i)
-              const barHeight = Math.max((Math.min(m.total, monthlyScale.yMax) / monthlyScale.yMax) * 100, 2)
-              return (
-                <div key={m.month} className={`bar-col${outlier ? ' bar-col--clipped' : ''}`}>
-                  <div className={`bar-value${outlier ? ' bar-value--clipped' : ''}`}>
-                    {outlier ? `↑ ${fmtUsd(m.total)}` : fmtUsd(m.total)}
-                  </div>
-                  <div className="bar-track">
-                    <div className="bar-fill" style={{ height: `${barHeight}%` }} />
-                  </div>
-                  <div className="bar-label">{monthLabel(m.month)}</div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* Daily breakdown - current month */}
-      {daily.length > 0 && (
-        <section className="cost-section">
-          <h2 className="cost-section-title">Daily — {monthLabel(currentMonth.month)}</h2>
-          <div className="chart-scroll-wrap">
-            <div className="daily-chart">
-              {daily.map((d) => {
-                const selected = d.date === selectedDay
-                return (
-                  <button
-                    key={d.date}
-                    type="button"
-                    className={`daily-col${selected ? ' daily-col--selected' : ''}`}
-                    onClick={() => setSelectedDay(d.date)}
-                    aria-pressed={selected}
-                    aria-label={`${dayLabel(d.date)}: ${fmtUsd(d.total)}`}
-                  >
-                    {selected && <div className="bar-value">{fmtUsd(d.total)}</div>}
-                    <div className="daily-track">
-                      <div
-                        className="daily-fill"
-                        style={{ height: `${Math.max((d.total / dailyMax) * 100, 2)}%` }}
-                      />
-                    </div>
-                    <div className="daily-label">{new Date(d.date + 'T00:00:00').getDate()}</div>
-                  </button>
-                )
-              })}
+          <div className="cost-cards">
+            <div className="cost-card">
+              <div className="cost-card-label">Current month</div>
+              <div className="cost-card-value">{fmtUsd(currentMonth!.total)}</div>
+              <div className="cost-card-sub">{monthLabel(currentMonth!.month)}</div>
             </div>
-          </div>
-        </section>
-      )}
-
-      {/* Today (UTC) — hourly + projection */}
-      {todayUtc && (
-        <section className="cost-section cost-section--today">
-          <h2 className="cost-section-title">Today (UTC)</h2>
-
-          <div className="chart-scroll-wrap">
-            <div className="hourly-chart">
-              {todayUtc.hourly.map((h: HourlyCost) => {
-                const selected = h.hour === selectedHour
-                const isFuture = h.status === 'future'
-                const isPartial = h.status === 'partial'
-                const barHeight =
-                  !isFuture && h.total > 0
-                    ? Math.max((h.total / hourlyMax) * 100, 2)
-                    : 0
-                return (
-                  <button
-                    key={h.hour}
-                    type="button"
-                    className={`hourly-col${selected ? ' hourly-col--selected' : ''}${isFuture ? ' hourly-col--future' : ''}${isPartial ? ' hourly-col--partial' : ''}`}
-                    onClick={() => !isFuture && setSelectedHour(h.hour)}
-                    disabled={isFuture}
-                    aria-pressed={selected}
-                    aria-label={
-                      isFuture
-                        ? `${hourLabel(h.hour)}: future`
-                        : `${hourLabel(h.hour)}: ${fmtUsd(h.total)}${isPartial ? ' (in progress)' : ''}`
-                    }
-                  >
-                    {selected && !isFuture && <div className="bar-value">{fmtUsd(h.total)}</div>}
-                    <div className="hourly-track">
-                      {!isFuture && (
-                        <div
-                          className="hourly-fill"
-                          style={{ height: `${barHeight}%` }}
-                        />
-                      )}
-                    </div>
-                    <div className="hourly-label">{h.hour}</div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="today-projection">
-            <div className="today-projection-row">
-              <span className="today-projection-label">Spend so far</span>
-              <span className="today-projection-value">{fmtUsd(todayUtc.spend_so_far)}</span>
-            </div>
-            {todayUtc.projection_available && todayUtc.projected_total != null ? (
-              <div className="today-projection-row">
-                <span className="today-projection-label">Projected total</span>
-                <span className="today-projection-value today-projection-value--estimate">
-                  ~{fmtUsd(todayUtc.projected_total)}
-                </span>
+            {previousMonth && (
+              <div className="cost-card">
+                <div className="cost-card-label">Previous month</div>
+                <div className="cost-card-value">{fmtUsd(previousMonth.total)}</div>
+                <div className="cost-card-sub">{monthLabel(previousMonth.month)}</div>
               </div>
-            ) : (
-              <p className="today-projection-note">
-                Projection available after the first full hour
-              </p>
+            )}
+            {totalDelta && (
+              <div className="cost-card">
+                <div className="cost-card-label">Month-over-month</div>
+                <div className={`cost-card-value ${totalDelta.className}`}>{totalDelta.text}</div>
+                <div className="cost-card-sub">vs. previous month</div>
+              </div>
             )}
           </div>
-        </section>
+
+          <section className="cost-section">
+            <h2 className="cost-section-title">Monthly trend</h2>
+            <div className="chart-scroll-wrap chart-scroll-wrap--monthly">
+              <div className="bar-chart">
+                {months.map((m, i) => {
+                  const outlier = monthlyScale.isOutlier(i)
+                  const barHeight = Math.max(
+                    (Math.min(m.total, monthlyScale.yMax) / monthlyScale.yMax) * 100,
+                    2,
+                  )
+                  return (
+                    <div key={m.month} className={`bar-col${outlier ? ' bar-col--clipped' : ''}`}>
+                      <div className={`bar-value${outlier ? ' bar-value--clipped' : ''}`}>
+                        {outlier ? `↑ ${fmtUsd(m.total)}` : fmtUsd(m.total)}
+                      </div>
+                      <div className="bar-track">
+                        <div className="bar-fill" style={{ height: `${barHeight}%` }} />
+                      </div>
+                      <div className="bar-label">{monthLabel(m.month)}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </section>
+
+          <section className="cost-section">
+            <h2 className="cost-section-title">By category</h2>
+            <div className="table-wrap">
+              <table className="cost-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th className="num-col">{monthLabel(currentMonth!.month)}</th>
+                    {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
+                    {previousMonth && <th className="num-col">Change</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoryRows.map((row) => {
+                    const delta = previousMonth
+                      ? pctChange(row.currentAmount, row.previousAmount)
+                      : null
+                    return (
+                      <tr key={row.category}>
+                        <td className="name">{row.category}</td>
+                        <td className="num-col">{fmtUsd(row.currentAmount)}</td>
+                        {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
+                        {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="cost-section">
+            <h2 className="cost-section-title">By service</h2>
+            <div className="table-wrap">
+              <table className="cost-table">
+                <thead>
+                  <tr>
+                    <th>Service</th>
+                    <th>Category</th>
+                    <th className="num-col">{monthLabel(currentMonth!.month)}</th>
+                    {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
+                    {previousMonth && <th className="num-col">Change</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {serviceRows.map((row) => {
+                    const delta = previousMonth
+                      ? pctChange(row.currentAmount, row.previousAmount)
+                      : null
+                    return (
+                      <tr key={row.name}>
+                        <td className="name">{row.name}</td>
+                        <td className="category-label">{row.category}</td>
+                        <td className="num-col">{fmtUsd(row.currentAmount)}</td>
+                        {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
+                        {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
       )}
 
-      {/* Category breakdown */}
+      {/* Daily breakdown */}
       <section className="cost-section">
-        <h2 className="cost-section-title">By category</h2>
-        <div className="table-wrap">
-          <table className="cost-table">
-            <thead>
-              <tr>
-                <th>Category</th>
-                <th className="num-col">{currentMonth ? monthLabel(currentMonth.month) : 'Current'}</th>
-                {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
-                {previousMonth && <th className="num-col">Change</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {categoryRows.map((row) => {
-                const delta = previousMonth ? pctChange(row.currentAmount, row.previousAmount) : null
-                return (
-                  <tr key={row.category}>
-                    <td className="name">{row.category}</td>
-                    <td className="num-col">{fmtUsd(row.currentAmount)}</td>
-                    {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
-                    {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+        <h2 className="cost-section-title">
+          Daily{currentMonth ? ` — ${monthLabel(currentMonth.month)}` : ''}
+        </h2>
+        {dailyQuery.isPending && !dailyQuery.data ? (
+          <SectionLoading label="daily costs" />
+        ) : dailyQuery.isError && !dailyQuery.data ? (
+          <SectionError message={queryErrorMessage(dailyQuery.error)} />
+        ) : daily.length === 0 ? (
+          <p className="loading">No daily cost data for this month.</p>
+        ) : (
+          <>
+            {dailyQuery.isError && dailyQuery.data && (
+              <p className="refresh-error" role="status">
+                Could not refresh daily costs. Showing last successful load.
+              </p>
+            )}
+            <div className="chart-scroll-wrap">
+              <div className="daily-chart">
+                {daily.map((d) => {
+                  const selected = d.date === selectedDay
+                  return (
+                    <button
+                      key={d.date}
+                      type="button"
+                      className={`daily-col${selected ? ' daily-col--selected' : ''}`}
+                      onClick={() => setSelectedDay(d.date)}
+                      aria-pressed={selected}
+                      aria-label={`${dayLabel(d.date)}: ${fmtUsd(d.total)}`}
+                    >
+                      {selected && <div className="bar-value">{fmtUsd(d.total)}</div>}
+                      <div className="daily-track">
+                        <div
+                          className="daily-fill"
+                          style={{ height: `${Math.max((d.total / dailyMax) * 100, 2)}%` }}
+                        />
+                      </div>
+                      <div className="daily-label">{new Date(d.date + 'T00:00:00').getDate()}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </>
+        )}
       </section>
 
-      {/* Service breakdown */}
-      <section className="cost-section">
-        <h2 className="cost-section-title">By service</h2>
-        <div className="table-wrap">
-          <table className="cost-table">
-            <thead>
-              <tr>
-                <th>Service</th>
-                <th>Category</th>
-                <th className="num-col">{currentMonth ? monthLabel(currentMonth.month) : 'Current'}</th>
-                {previousMonth && <th className="num-col">{monthLabel(previousMonth.month)}</th>}
-                {previousMonth && <th className="num-col">Change</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {serviceRows.map((row) => {
-                const delta = previousMonth ? pctChange(row.currentAmount, row.previousAmount) : null
-                return (
-                  <tr key={row.name}>
-                    <td className="name">{row.name}</td>
-                    <td className="category-label">{row.category}</td>
-                    <td className="num-col">{fmtUsd(row.currentAmount)}</td>
-                    {previousMonth && <td className="num-col">{fmtUsd(row.previousAmount)}</td>}
-                    {delta && <td className={`num-col ${delta.className}`}>{delta.text}</td>}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+      {/* Today (UTC) */}
+      <section className="cost-section cost-section--today">
+        <h2 className="cost-section-title">Today (UTC)</h2>
+        {todayQuery.isPending && !todayQuery.data ? (
+          <SectionLoading label="today's hourly costs" />
+        ) : todayQuery.isError && !todayQuery.data ? (
+          <SectionError message={queryErrorMessage(todayQuery.error)} />
+        ) : todayUtc?.status === 'unavailable' ? (
+          <div className="today-unavailable">
+            <p className="today-unavailable-message">{todayUtc.message}</p>
+            <p className="today-unavailable-hint">
+              Enable hourly granularity in the payer account, then refresh this page.
+            </p>
+            <a
+              className="today-unavailable-link"
+              href={todayUtc.setup_url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open Cost Explorer Settings
+            </a>
+          </div>
+        ) : todayUtc?.status === 'ok' ? (
+          <>
+            {todayQuery.isError && todayQuery.data && (
+              <p className="refresh-error" role="status">
+                Could not refresh today's costs. Showing last successful load.
+              </p>
+            )}
+            <div className="chart-scroll-wrap">
+              <div className="hourly-chart">
+                {todayUtc.hourly.map((h: HourlyCost) => {
+                  const selected = h.hour === selectedHour
+                  const isFuture = h.status === 'future'
+                  const isPartial = h.status === 'partial'
+                  const barHeight =
+                    !isFuture && h.total > 0
+                      ? Math.max((h.total / hourlyMax) * 100, 2)
+                      : 0
+                  return (
+                    <button
+                      key={h.hour}
+                      type="button"
+                      className={`hourly-col${selected ? ' hourly-col--selected' : ''}${isFuture ? ' hourly-col--future' : ''}${isPartial ? ' hourly-col--partial' : ''}`}
+                      onClick={() => !isFuture && setSelectedHour(h.hour)}
+                      disabled={isFuture}
+                      aria-pressed={selected}
+                      aria-label={
+                        isFuture
+                          ? `${hourLabel(h.hour)}: future`
+                          : `${hourLabel(h.hour)}: ${fmtUsd(h.total)}${isPartial ? ' (in progress)' : ''}`
+                      }
+                    >
+                      {selected && !isFuture && <div className="bar-value">{fmtUsd(h.total)}</div>}
+                      <div className="hourly-track">
+                        {!isFuture && (
+                          <div className="hourly-fill" style={{ height: `${barHeight}%` }} />
+                        )}
+                      </div>
+                      <div className="hourly-label">{h.hour}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="today-projection">
+              <div className="today-projection-row">
+                <span className="today-projection-label">Spend so far</span>
+                <span className="today-projection-value">{fmtUsd(todayUtc.spend_so_far)}</span>
+              </div>
+              {todayUtc.projection_available && todayUtc.projected_total != null ? (
+                <div className="today-projection-row">
+                  <span className="today-projection-label">Projected total</span>
+                  <span className="today-projection-value today-projection-value--estimate">
+                    ~{fmtUsd(todayUtc.projected_total)}
+                  </span>
+                </div>
+              ) : (
+                <p className="today-projection-note">
+                  Projection available after the first full hour
+                </p>
+              )}
+            </div>
+          </>
+        ) : null}
       </section>
     </div>
   )
