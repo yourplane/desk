@@ -242,3 +242,30 @@ def test_build_today_utc_detail_no_projection_early_day(mock_dt: MagicMock) -> N
     assert detail.projection_available is False
     assert detail.projected_total is None
     assert detail.hourly[0].status == "partial"
+
+
+@patch("desk.costs.datetime")
+@patch("desk.costs.boto3.Session")
+def test_get_cost_summary_hourly_time_period_format(
+    mock_session: MagicMock, mock_dt: MagicMock
+) -> None:
+    """Hourly Cost Explorer calls require yyyy-MM-ddThh:mm:ssZ TimePeriod bounds."""
+    mock_dt.now.return_value = datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
+    mock_dt.fromisoformat = datetime.fromisoformat
+
+    mock_ce = MagicMock()
+    mock_session.return_value.client.return_value = mock_ce
+    mock_ce.get_cost_and_usage.side_effect = [
+        {"ResultsByTime": []},
+        {"ResultsByTime": []},
+        {"ResultsByTime": []},
+    ]
+
+    get_cost_summary(months=1)
+
+    hourly_call = mock_ce.get_cost_and_usage.call_args_list[2]
+    assert hourly_call.kwargs["Granularity"] == "HOURLY"
+    assert hourly_call.kwargs["TimePeriod"] == {
+        "Start": "2026-07-27T00:00:00Z",
+        "End": "2026-07-28T00:00:00Z",
+    }

@@ -239,8 +239,8 @@ def get_cost_summary(
     daily_list.sort(key=lambda d: d.date)
 
     today_utc = datetime.now(timezone.utc).date()
-    hourly_start = today_utc.isoformat()
-    hourly_end = (today_utc + timedelta(days=1)).isoformat()
+    hourly_start = f"{today_utc.isoformat()}T00:00:00Z"
+    hourly_end = f"{(today_utc + timedelta(days=1)).isoformat()}T00:00:00Z"
 
     log.debug("get_cost_summary hourly range %s to %s", hourly_start, hourly_end)
 
