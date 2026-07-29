@@ -181,21 +181,19 @@ export function WebRoutesTab() {
   const [bannerError, setBannerError] = useState<string | null>(null)
   const [webRoutesBusy, setWebRoutesBusy] = useState<string | null>(null)
   const [portDraftByKey, setPortDraftByKey] = useState<Record<string, string>>({})
-  const webRoutesBusyRef = useRef<string | null>(null)
-  webRoutesBusyRef.current = webRoutesBusy
 
   const instancesQuery = useQuery({
     queryKey: queryKeys.workstations(false),
     queryFn: () => listInstances(),
     staleTime: 5_000,
-    refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
+    refetchInterval: pollIntervalMs,
   })
 
   const webRoutesQuery = useQuery({
     queryKey: queryKeys.webRoutesAll,
     queryFn: fetchWebRoutesSafe,
     staleTime: 5_000,
-    refetchInterval: () => (webRoutesBusyRef.current !== null ? false : pollIntervalMs),
+    refetchInterval: pollIntervalMs,
   })
 
   const instances: Instance[] = instancesQuery.data?.instances ?? []
@@ -235,7 +233,7 @@ export function WebRoutesTab() {
     try {
       await addWebRoute(key, port)
       setPortDraftByKey((prev) => ({ ...prev, [key]: '' }))
-      await queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
     } catch (e) {
       setBannerError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -248,7 +246,7 @@ export function WebRoutesTab() {
     setBannerError(null)
     try {
       await removeWebRoute(key, port)
-      await queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.webRoutesAll })
     } catch (e) {
       setBannerError(e instanceof Error ? e.message : String(e))
     } finally {

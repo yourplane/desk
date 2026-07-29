@@ -9,6 +9,18 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _clear_aws_client_caches() -> None:
+    """Prevent lru_cache on boto clients/sessions from leaking mocks between tests."""
+    from desk import aws as aws_mod
+
+    aws_mod._ec2_client_cached.cache_clear()
+    aws_mod._get_desk_vpc_outputs_impl.cache_clear()
+    yield
+    aws_mod._ec2_client_cached.cache_clear()
+    aws_mod._get_desk_vpc_outputs_impl.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _block_host_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Avoid using the machine's real AWS identity during tests (e.g. EC2 instance role).
 

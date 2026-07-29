@@ -75,12 +75,15 @@ export async function listInstances(options?: { infra?: boolean }): Promise<List
 
 export async function startInstance(
   name: string,
-  options?: { infra?: boolean },
+  options?: { infra?: boolean; instanceId?: string },
 ): Promise<{ instance_id: string; shutdown_at?: string | null }> {
   const q = options?.infra ? '?infra=true' : ''
+  const body: Record<string, string> = {}
+  if (options?.instanceId) body.instance_id = options.instanceId
   const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/start${q}`, {
     method: 'POST',
-    headers: authHeaders(),
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
     const text = await res.text()
@@ -96,11 +99,17 @@ export async function startInstance(
   return res.json()
 }
 
-export async function stopInstance(name: string, options?: { infra?: boolean }): Promise<{ instance_id: string }> {
+export async function stopInstance(
+  name: string,
+  options?: { infra?: boolean; instanceId?: string },
+): Promise<{ instance_id: string }> {
   const q = options?.infra ? '?infra=true' : ''
+  const body: Record<string, string> = {}
+  if (options?.instanceId) body.instance_id = options.instanceId
   const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/stop${q}`, {
     method: 'POST',
-    headers: authHeaders(),
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
     const text = await res.text()
@@ -116,11 +125,17 @@ export async function stopInstance(name: string, options?: { infra?: boolean }):
   return res.json()
 }
 
-export async function killInstance(name: string, options?: { infra?: boolean }): Promise<{ instance_id: string }> {
+export async function killInstance(
+  name: string,
+  options?: { infra?: boolean; instanceId?: string },
+): Promise<{ instance_id: string }> {
   const q = options?.infra ? '?infra=true' : ''
+  const body: Record<string, string> = {}
+  if (options?.instanceId) body.instance_id = options.instanceId
   const res = await fetchWithAuthRetry(`/api/workstations/${encodeURIComponent(name)}/kill${q}`, {
     method: 'POST',
-    headers: authHeaders(),
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
     const text = await res.text()
@@ -467,7 +482,7 @@ export type SetAutoStopResult =
 
 export async function setAutoStop(
   name: string,
-  options: { duration?: string; shutdown_at?: string; clear?: boolean }
+  options: { duration?: string; shutdown_at?: string; clear?: boolean; instanceId?: string },
 ): Promise<SetAutoStopResult> {
   let body: Record<string, unknown>
   if (options.clear) {
@@ -477,6 +492,7 @@ export async function setAutoStop(
   } else {
     body = { duration: options.duration ?? '4h' }
   }
+  if (options.instanceId) body.instance_id = options.instanceId
   const res = await fetchWithAuthRetry(
     `/api/workstations/${encodeURIComponent(name)}/auto-stop`,
     {

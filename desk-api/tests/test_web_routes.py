@@ -46,10 +46,8 @@ def test_get_workstation_not_found(mock_resolve: MagicMock) -> None:
     assert resp.status_code == 404
 
 
-@patch("app.routes.web_routes.resolve_workstation")
 @patch("app.routes.web_routes.add_port")
-def test_add_port(mock_add: MagicMock, mock_resolve: MagicMock) -> None:
-    mock_resolve.return_value = "i-123"
+def test_add_port(mock_add: MagicMock) -> None:
     mock_add.return_value = [80, 443]
 
     resp = client.post("/api/workstations/ws/web-routes", json={"port": 443})
@@ -59,10 +57,8 @@ def test_add_port(mock_add: MagicMock, mock_resolve: MagicMock) -> None:
     mock_add.assert_called_once_with("ws", 443)
 
 
-@patch("app.routes.web_routes.resolve_workstation")
 @patch("app.routes.web_routes.remove_port")
-def test_remove_port(mock_remove: MagicMock, mock_resolve: MagicMock) -> None:
-    mock_resolve.return_value = "i-123"
+def test_remove_port(mock_remove: MagicMock) -> None:
     mock_remove.return_value = [80]
 
     resp = client.delete("/api/workstations/ws/web-routes/443")
@@ -72,10 +68,8 @@ def test_remove_port(mock_remove: MagicMock, mock_resolve: MagicMock) -> None:
     mock_remove.assert_called_once_with("ws", 443)
 
 
-@patch("app.routes.web_routes.resolve_workstation")
 @patch("app.routes.web_routes.remove_port")
-def test_remove_port_not_registered(mock_remove: MagicMock, mock_resolve: MagicMock) -> None:
-    mock_resolve.return_value = "i-123"
+def test_remove_port_not_registered(mock_remove: MagicMock) -> None:
     mock_remove.side_effect = ValueError("Port 9999 is not registered for workstation 'ws'")
 
     resp = client.delete("/api/workstations/ws/web-routes/9999")

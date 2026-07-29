@@ -1,9 +1,10 @@
 """Workstation management routes. All EC2 logic lives in desk-sdk."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel
 
 from desk.aws import (
@@ -95,9 +96,36 @@ class RunCommandBody(BaseModel):
 class AutoStopBody(BaseModel):
     """Request body for POST /workstations/{name}/auto-stop."""
 
+    instance_id: str | None = None
     duration: str | None = None
     shutdown_at: str | None = None
     clear: bool = False
+
+
+class InstanceMutationBody(BaseModel):
+    """Optional body for POST mutations that can skip EC2 resolve."""
+
+    instance_id: str | None = None
+
+
+def _resolve_instance_id(
+    name: str,
+    instance_id: str | None,
+    *,
+    region: str,
+    profile: str,
+    states: list[str] | None = None,
+    infra: bool = False,
+) -> str:
+    if instance_id and instance_id.startswith("i-"):
+        return instance_id
+    return resolve_workstation(
+        name,
+        region=region,
+        profile=profile,
+        states=states,
+        infra=infra,
+    )
 
 
 def _parse_shutdown_at(value: str) -> str:
@@ -122,8 +150,9 @@ def _set_or_clear_auto_stop(name: str, body: AutoStopBody, *, region: str, profi
         )
 
     try:
-        instance_id = resolve_workstation(
+        instance_id = _resolve_instance_id(
             name,
+            body.instance_id,
             region=region,
             profile=profile,
             states=["running", "pending", "stopping", "stopped"],
@@ -201,17 +230,26 @@ def list_workstations_route(infra: bool = False):
     try:
         workstations = list_workstations(region=region, profile=profile, infra=infra)
         image_ids = [w.image_id for w in workstations if w.image_id]
-        ami_lookup = describe_amis_by_id(image_ids, region=region, profile=profile)
         future_router_ami = None
         if infra:
-            try:
-                future_router_ami = get_future_router_ami_info(region=region, profile=profile)
-            except Exception:
-                logger.exception("get_future_router_ami_info failed")
-                future_router_ami = FutureRouterAmiInfo(
-                    status="unavailable",
-                    warnings=["Router AMI info unavailable."],
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                ami_future = executor.submit(
+                    describe_amis_by_id, image_ids, region=region, profile=profile
                 )
+                router_future = executor.submit(
+                    get_future_router_ami_info, region=region, profile=profile
+                )
+                ami_lookup = ami_future.result()
+                try:
+                    future_router_ami = router_future.result()
+                except Exception:
+                    logger.exception("get_future_router_ami_info failed")
+                    future_router_ami = FutureRouterAmiInfo(
+                        status="unavailable",
+                        warnings=["Router AMI info unavailable."],
+                    )
+        else:
+            ami_lookup = describe_amis_by_id(image_ids, region=region, profile=profile)
     except Exception as e:
         logger.exception("list_workstations failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -225,12 +263,21 @@ def list_workstations_route(infra: bool = False):
 
 
 @router.post("/workstations/{name}/start")
-def start_workstation_by_name(name: str, infra: bool = False):
+def start_workstation_by_name(
+    name: str,
+    infra: bool = False,
+    body: InstanceMutationBody = Body(default_factory=InstanceMutationBody),
+):
     """Start a stopped workstation by name or instance ID. Sets auto-stop to 4 hours (ignored for infra)."""
     region, profile = _region_profile()
     try:
-        instance_id = resolve_workstation(
-            name, region=region, profile=profile, states=["stopped"], infra=infra
+        instance_id = _resolve_instance_id(
+            name,
+            body.instance_id,
+            region=region,
+            profile=profile,
+            states=["stopped"],
+            infra=infra,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -241,11 +288,21 @@ def start_workstation_by_name(name: str, infra: bool = False):
 
 
 @router.post("/workstations/{name}/stop")
-def stop_workstation_by_name(name: str, infra: bool = False):
+def stop_workstation_by_name(
+    name: str,
+    infra: bool = False,
+    body: InstanceMutationBody = Body(default_factory=InstanceMutationBody),
+):
     """Stop a running workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
-        instance_id = resolve_workstation(name, region=region, profile=profile, infra=infra)
+        instance_id = _resolve_instance_id(
+            name,
+            body.instance_id,
+            region=region,
+            profile=profile,
+            infra=infra,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     stop_instance(instance_id, region=region, profile=profile)
@@ -253,12 +310,17 @@ def stop_workstation_by_name(name: str, infra: bool = False):
 
 
 @router.post("/workstations/{name}/kill")
-def kill_instance_by_name(name: str, infra: bool = False):
+def kill_instance_by_name(
+    name: str,
+    infra: bool = False,
+    body: InstanceMutationBody = Body(default_factory=InstanceMutationBody),
+):
     """Permanently terminate a workstation or router by name or instance ID."""
     region, profile = _region_profile()
     try:
-        instance_id = resolve_workstation(
+        instance_id = _resolve_instance_id(
             name,
+            body.instance_id,
             region=region,
             profile=profile,
             states=["pending", "running", "stopping", "stopped"],
